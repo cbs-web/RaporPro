@@ -1,0 +1,1434 @@
+# Dosya: RaporPro/motor.py
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+import matplotlib.patches as mpatches
+import textwrap
+
+# --- GEREKLİ MODÜL BAĞLANTILARI ---
+try:
+    from sabitler import (
+        A4_LANDSCAPE_SIZE,
+        A4_PORTRAIT_SIZE,
+        LEJANTLAR,
+        LOG_FIGURE_DPI,
+        LOG_LEGACY_FIGURE_DPI,
+        SECTION_AXES_RECT,
+        SECTION_FIGURE_DPI,
+    )
+    from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
+    from karot_motoru import derinlik_araligi_coz, derinlik_baslangic, derinlik_orta
+    from cizim import GeoEngineDraw
+    from performans import log_exception
+except ImportError:
+    LEJANTLAR = []
+    def safe_float(v): return 0.0
+    def haversine_distance(l1,ln1,l2,ln2): return 0.0
+    def litoloji_cozumle(t): return "tanimsiz"
+    def derinlik_araligi_coz(v): return safe_float(v), safe_float(v)
+    def derinlik_baslangic(v): return safe_float(v)
+    def derinlik_orta(v): return safe_float(v)
+    class GeoEngineDraw:
+        @staticmethod
+        def draw_pattern(ax, p, s, c, bbox=None, density_scale=1): pass
+        @staticmethod
+        def hide_same_unit_seams(ax, polygons, tolerance=0.08): return []
+    def log_exception(name, exc_type=None, exc_value=None, exc_tb=None): return None
+    A4_PORTRAIT_SIZE = (8.27, 11.69)
+    A4_LANDSCAPE_SIZE = (11.69, 8.27)
+    LOG_FIGURE_DPI = 110
+    LOG_LEGACY_FIGURE_DPI = 100
+    SECTION_FIGURE_DPI = 100
+    SECTION_AXES_RECT = [0.08, 0.05, 0.84, 0.90]
+
+
+from motor_hesap import GeoEngineHesapMixin
+from motor_log import GeoEngineLogMixin, log_ornek_derinligi_formatla
+from motor_interaktif import GeoInteractiveTool
+
+# --- ANA MOTOR SINIFI ---
+class GeoEngine(GeoEngineHesapMixin, GeoEngineLogMixin):
+    _warned_units = set()
+
+    @staticmethod
+    def reset_warnings():
+        GeoEngine._warned_units.clear()
+
+    @staticmethod
+    def kesit_ciz_interaktif(sondajlar, log_callback=None, options=None):
+        if not sondajlar: return Figure(), []
+        options = options or {}
+        sondajlar = list(sondajlar)
+        
+        # --- AYARLAR ---
+        def option_bool(name, default=True):
+            value = options.get(name, default)
+            return str(value).lower() not in ("0", "false", "no", "off", "hayir", "hayır")
+
+        TARAMA_SIKLIGI_KESIT = safe_float(options.get("section_pattern_density", 6.0)) or 6.0
+        TARAMA_SIKLIGI_LEJANT = safe_float(options.get("legend_pattern_density", 6.0)) or 6.0
+        MARGIN = safe_float(options.get("plot_margin", 10.0)) or 10.0
+        dx_default = safe_float(options.get("dx_default", 25.0)) or 25.0
+        mode = options.get("mode", "schematic")
+        use_line_projection = mode == "line_projection"
+        use_true_distance = mode == "true_distance"
+        use_distance_axis = use_true_distance or use_line_projection
+        vertical_exaggeration = safe_float(options.get("vertical_exaggeration", 1.0)) or 1.0
+        if vertical_exaggeration <= 0:
+            vertical_exaggeration = 1.0
+        corr_tolerance = safe_float(options.get("corr_tolerance", 0.0))
+        max_offset = safe_float(options.get("max_offset", 10.0))
+        show_consistency_labels = option_bool("show_consistency_labels", True)
+        show_station_offset_labels = option_bool("show_station_offset_labels", True)
+        show_well_elevation_labels = option_bool("show_well_elevation_labels", True)
+        show_layer_depth_labels = option_bool("show_layer_depth_labels", True)
+        show_distance_labels = option_bool("show_distance_labels", True)
+        show_legend = option_bool("show_legend", True)
+        show_yass = option_bool("show_yass", True)
+        show_yass_labels = option_bool("show_yass_labels", True)
+        avoid_label_collisions = option_bool("avoid_label_collisions", True)
+        hide_same_unit_seams = option_bool("hide_same_unit_seams", True)
+        auto_lens = option_bool("auto_lens", True)
+        two_well_lens = option_bool("two_well_lens", True)
+        title_mode = str(options.get("title_mode", "full")).lower()
+        well_width = safe_float(options.get("well_width", 2.0)) or 2.0
+        legend_scale = safe_float(options.get("legend_scale", 1.0)) or 1.0
+        facies_overlap_min = safe_float(options.get("facies_overlap_min", 0.1)) or 0.1
+        zigzag_width_ratio = safe_float(options.get("zigzag_width_ratio", 0.03)) or 0.03
+        lens_max_thickness = safe_float(options.get("lens_max_thickness", 2.0)) or 2.0
+        lens_closure_ratio = safe_float(options.get("lens_closure_ratio", 0.58)) or 0.58
+        lens_closure_ratio = max(0.20, min(0.90, lens_closure_ratio))
+        manual_edits = options.get("manual_edits") or options.get("manual_polygons") or {}
+        if not isinstance(manual_edits, dict):
+            manual_edits = {}
+        label_min_height = safe_float(options.get("consistency_label_min_height", 0.9)) or 0.9
+        consistency_font_max = safe_float(options.get("consistency_label_font_max", 8.4)) or 8.4
+        consistency_font_min = safe_float(options.get("consistency_label_font_min", 5.0)) or 5.0
+        if consistency_font_max < consistency_font_min:
+            consistency_font_max = consistency_font_min
+        spt_label_search_margin = safe_float(options.get("spt_label_search_margin", 1.5)) or 1.5
+        # ---------------
+
+        def pattern_density_for_code(code, base_density, legend=False):
+            code = str(code or "").lower()
+            if not legend:
+                override_key = {
+                    "k": "sand_pattern_density",
+                    "c": "gravel_pattern_density",
+                }.get(code)
+                override = safe_float(options.get(override_key)) if override_key else 0
+                if override > 0:
+                    return override
+            multiplier = 1.0
+            if code == "k":
+                multiplier = 1.45
+            elif code == "c":
+                multiplier = 1.60
+            if legend:
+                multiplier = max(1.0, multiplier * 0.92)
+            return base_density * multiplier
+
+        def set_artist_zorder(artists, zorder):
+            for artist in artists or []:
+                try:
+                    artist.set_zorder(zorder)
+                except Exception:
+                    pass
+
+        def get_zigzag_verts(x, y_top, y_bot, width):
+            pts = []
+            y_high, y_low = (y_top, y_bot) if y_top > y_bot else (y_bot, y_top)
+            dist = abs(y_high - y_low)
+            if dist < 0.1: return [(x, y_high), (x, y_low)]
+            num_teeth = max(2, int(dist / 0.75)) 
+            ys = np.linspace(y_high, y_low, num_teeth * 2 + 1)
+            for i, y in enumerate(ys):
+                if i == 0 or i == len(ys) - 1: pts.append((x, y))
+                elif i % 2 == 1: pts.append((x + width, y))
+                else: pts.append((x - width, y))
+            return pts
+
+        def has_coords(s):
+            y, x = safe_float(s.get("y")), safe_float(s.get("x"))
+            return y != 0 and x != 0
+
+        def parse_yass_depth(s):
+            for key in ("yass_d2", "yass_d1"):
+                raw = str(s.get(key, "") or "").strip()
+                if not raw or raw.lower() in ("-", "yok", "none", "nan", "null"):
+                    continue
+                depth = safe_float(raw)
+                if depth < 0:
+                    continue
+                return depth, key
+            return None, None
+
+        def parse_spt_n30(row):
+            if not row:
+                return None
+
+            depth = safe_float(row[0])
+            vals = [str(v).strip() for v in row[1:5]]
+            vals_lower = [v.lower() for v in vals]
+            refused = any(v == "r" or v == "-" or "refu" in v or "ref" in v or "50/" in v for v in vals_lower)
+            if refused:
+                return {"depth": depth, "n30": None, "refused": True}
+
+            n30_text = vals[3] if len(vals) > 3 else ""
+            n30 = safe_float(n30_text)
+            if n30 > 0 or n30_text.replace(",", ".") in ("0", "0.0"):
+                return {"depth": depth, "n30": n30, "refused": False}
+
+            if len(row) > 3:
+                calculated = safe_float(row[2]) + safe_float(row[3])
+                if calculated > 0:
+                    return {"depth": depth, "n30": calculated, "refused": False}
+            return {"depth": depth, "n30": None, "refused": False}
+
+        def classify_consistency(code, n30=None, refused=False):
+            if code in ("kl", "s"):
+                if refused:
+                    return "Sert"
+                if n30 is None:
+                    return ""
+                if n30 < 2: return "Çok yumuşak"
+                if n30 < 4: return "Yumuşak"
+                if n30 < 8: return "Orta katı"
+                if n30 < 15: return "Katı"
+                if n30 < 30: return "Çok katı"
+                return "Sert"
+
+            if code in ("k", "c"):
+                if refused:
+                    return "Çok sıkı"
+                if n30 is None:
+                    return ""
+                if n30 < 4: return "Çok gevşek"
+                if n30 < 10: return "Gevşek"
+                if n30 < 30: return "Orta sıkı"
+                if n30 < 50: return "Sıkı"
+                return "Çok sıkı"
+
+            return ""
+
+        def consistency_label_for_layer(sondaj, layer):
+            code = layer.get("code")
+            if code not in ("kl", "s", "k", "c"):
+                return ""
+
+            top = safe_float(layer.get("top"))
+            bot = safe_float(layer.get("bot"))
+            mid = (top + bot) / 2
+            thickness = abs(bot - top)
+            n_values = []
+            has_refusal = False
+            parsed_rows = []
+
+            for spt_row in sondaj.get("spt", []):
+                parsed = parse_spt_n30(spt_row)
+                if not parsed:
+                    continue
+                parsed_rows.append(parsed)
+                depth = parsed["depth"]
+                if depth < top - 0.01 or depth > bot + 0.01:
+                    continue
+                if parsed["refused"]:
+                    has_refusal = True
+                elif parsed["n30"] is not None:
+                    n_values.append(parsed["n30"])
+
+            if has_refusal:
+                return classify_consistency(code, refused=True)
+            if n_values:
+                return classify_consistency(code, n30=float(np.median(n_values)))
+
+            parsed_rows = sorted(parsed_rows, key=lambda item: item["depth"])
+            if parsed_rows:
+                last_spt = parsed_rows[-1]
+                if last_spt["refused"] and top >= last_spt["depth"] - 0.01:
+                    return classify_consistency(code, refused=True)
+
+            # Tabakanin icinde SPT yoksa, ayni sondajdaki en yakin SPT'yi kullan.
+            # Bu, ozellikle ince tabakalarda veya SPT derinligi sinira denk geldiginde bos etiket kalmasini azaltir.
+            nearest = None
+            nearest_dist = None
+            max_dist = max(spt_label_search_margin, thickness / 2)
+            for parsed in parsed_rows:
+                dist = abs(parsed["depth"] - mid)
+                if dist <= max_dist and (nearest_dist is None or dist < nearest_dist):
+                    nearest = parsed
+                    nearest_dist = dist
+            if nearest:
+                if nearest["refused"]:
+                    return classify_consistency(code, refused=True)
+                if nearest["n30"] is not None:
+                    return classify_consistency(code, n30=float(nearest["n30"]))
+            return ""
+
+        def consistency_labels_for_layer(sondaj, layer):
+            code = layer.get("code")
+            if code not in ("kl", "s", "k", "c"):
+                return []
+
+            top = safe_float(layer.get("top"))
+            bot = safe_float(layer.get("bot"))
+            mid = (top + bot) / 2
+            parsed_labels = []
+
+            for spt_row in sondaj.get("spt", []):
+                parsed = parse_spt_n30(spt_row)
+                if not parsed:
+                    continue
+                depth = parsed["depth"]
+                if depth < top - 0.01 or depth > bot + 0.01:
+                    continue
+                if parsed["refused"]:
+                    label = classify_consistency(code, refused=True)
+                elif parsed["n30"] is not None:
+                    label = classify_consistency(code, n30=float(parsed["n30"]))
+                else:
+                    label = ""
+                if label:
+                    parsed_labels.append({"label": label, "depth": depth, "source": "spt"})
+
+            parsed_labels.sort(key=lambda item: item["depth"])
+            if parsed_labels:
+                grouped = []
+                current = {"label": parsed_labels[0]["label"], "depths": [parsed_labels[0]["depth"]]}
+                for item in parsed_labels[1:]:
+                    if item["label"] == current["label"]:
+                        current["depths"].append(item["depth"])
+                    else:
+                        grouped.append(current)
+                        current = {"label": item["label"], "depths": [item["depth"]]}
+                grouped.append(current)
+                records = []
+                for group in grouped:
+                    depths = group["depths"]
+                    records.append({
+                        "label": group["label"],
+                        "depth": float(np.median(depths)) if depths else mid,
+                        "source": "spt",
+                    })
+                return records
+
+            fallback = consistency_label_for_layer(sondaj, layer)
+            if fallback:
+                return [{"label": fallback, "depth": mid, "source": "fallback"}]
+            return []
+
+        def consistency_label_positions(records, layer, y_top, y_bot, top_elevation):
+            if not records:
+                return []
+            high_y = max(y_top, y_bot)
+            low_y = min(y_top, y_bot)
+            layer_height = abs(high_y - low_y)
+            if layer_height <= 0:
+                return []
+            pad = min(0.25, layer_height * 0.18)
+            usable_high = high_y - pad
+            usable_low = low_y + pad
+            if usable_high < usable_low:
+                usable_high = high_y
+                usable_low = low_y
+
+            positioned = []
+            for record in sorted(records, key=lambda item: item.get("depth", 0)):
+                y = top_elevation - safe_float(record.get("depth"))
+                y = max(usable_low, min(usable_high, y))
+                positioned.append({"label": record["label"], "y": y, "source": record.get("source", "spt")})
+
+            if len(positioned) <= 1:
+                return positioned
+
+            available = max(0.0, usable_high - usable_low)
+            min_gap = min(0.55, max(0.28, layer_height / max(len(positioned), 1) * 0.55))
+            if available < min_gap * (len(positioned) - 1):
+                ys = np.linspace(usable_high, usable_low, len(positioned))
+                for item, y in zip(positioned, ys):
+                    item["y"] = float(y)
+                return positioned
+
+            last_y = None
+            for item in positioned:
+                if last_y is not None and last_y - item["y"] < min_gap:
+                    item["y"] = last_y - min_gap
+                last_y = item["y"]
+            if positioned[-1]["y"] < usable_low:
+                shift = usable_low - positioned[-1]["y"]
+                for item in positioned:
+                    item["y"] = min(usable_high, item["y"] + shift)
+            return positioned
+
+        def wrap_consistency_label(label):
+            label = str(label).upper()
+            parts = label.split()
+            if len(parts) <= 1:
+                return label
+            return "\n".join(parts)
+
+        def preferred_consistency_font(label, layer_height, label_count):
+            wrapped = wrap_consistency_label(label)
+            line_count = max(1, len(wrapped.splitlines()))
+            fs = consistency_font_max
+            if label_count > 1:
+                fs -= min(1.4, (label_count - 1) * 0.45)
+            if line_count > 1:
+                fs -= 0.25
+            if layer_height < label_min_height:
+                fs = min(fs, 6.6)
+            if layer_height < 0.55:
+                fs = min(fs, 5.6)
+            return max(consistency_font_min, min(consistency_font_max, fs))
+
+        def get_coords(s):
+            y, x = safe_float(s.get("y")), safe_float(s.get("x"))
+            if y == 0 or x == 0:
+                return None
+            return y, x
+
+        def build_line_projector(start_y, start_x, end_y, end_x):
+            lat0_rad = math.radians(start_y)
+            meters_per_lat = 111320.0
+            meters_per_lon = 111320.0 * math.cos(lat0_rad)
+
+            def to_local(y, x):
+                return (x - start_x) * meters_per_lon, (y - start_y) * meters_per_lat
+
+            end_lx, end_ly = to_local(end_y, end_x)
+            line_len = math.hypot(end_lx, end_ly)
+            if line_len <= 0.01:
+                raise ValueError("kesit hatti baslangic ve bitis koordinatlari ayni")
+            ux, uy = end_lx / line_len, end_ly / line_len
+
+            def project(y, x):
+                px, py = to_local(y, x)
+                station = px * ux + py * uy
+                offset = px * (-uy) + py * ux
+                return station, offset
+
+            return line_len, project
+
+        try:
+            if use_line_projection:
+                start_y = safe_float(options.get("line_start_y"))
+                start_x = safe_float(options.get("line_start_x"))
+                end_y = safe_float(options.get("line_end_y"))
+                end_x = safe_float(options.get("line_end_x"))
+
+                if start_y == 0 or start_x == 0 or end_y == 0 or end_x == 0:
+                    first_coords = get_coords(sondajlar[0])
+                    last_coords = get_coords(sondajlar[-1])
+                    if not first_coords or not last_coords:
+                        raise ValueError("kesit hatti icin koordinat bulunamadi")
+                    start_y, start_x = first_coords
+                    end_y, end_x = last_coords
+
+                _, project_to_line = build_line_projector(start_y, start_x, end_y, end_x)
+                projected = []
+
+                for i, s in enumerate(sondajlar):
+                    s["_kot"] = safe_float(s.get("k", 100.0))
+                    coords = get_coords(s)
+                    if coords:
+                        station, offset = project_to_line(coords[0], coords[1])
+                        if max_offset > 0 and abs(offset) > max_offset and log_callback:
+                            log_callback(f"{s.get('no','SK')} kesit hattindan {abs(offset):.1f} m uzakta.", "warning")
+                    else:
+                        station, offset = i * dx_default, 0.0
+                        if log_callback:
+                            log_callback(f"{s.get('no','SK')} koordinati eksik; kesit hattinda varsayilan station kullanildi.", "warning")
+                    s["_station"] = station
+                    s["_offset"] = offset
+                    s["_plot_x"] = station / vertical_exaggeration
+                    projected.append(s)
+
+                sondajlar = sorted(projected, key=lambda item: (item.get("_station", 0.0), item.get("no", "")))
+                for i, s in enumerate(sondajlar):
+                    if i < len(sondajlar) - 1:
+                        s["_true_dist"] = abs(sondajlar[i+1].get("_station", 0.0) - s.get("_station", 0.0))
+                    else:
+                        s["_true_dist"] = 0.0
+            else:
+                cumulative_dist = 0.0
+                for i, s in enumerate(sondajlar):
+                    s["_kot"] = safe_float(s.get("k", 100.0))
+                    if i == 0:
+                        s["_plot_x"] = 0.0
+                    else:
+                        s["_plot_x"] = cumulative_dist / vertical_exaggeration if use_true_distance else i * dx_default
+
+                    if i < len(sondajlar) - 1:
+                        s_next = sondajlar[i+1]
+                        y1, x1 = safe_float(s.get("y")), safe_float(s.get("x"))
+                        y2, x2 = safe_float(s_next.get("y")), safe_float(s_next.get("x"))
+                        if has_coords(s) and has_coords(s_next):
+                            true_dist = haversine_distance(y1, x1, y2, x2)
+                        else:
+                            true_dist = dx_default
+                            if use_true_distance and log_callback:
+                                log_callback(f"{s.get('no','SK')} - {s_next.get('no','SK')} arasinda koordinat eksik; varsayilan mesafe kullanildi.", "warning")
+                        s["_true_dist"] = true_dist
+                        cumulative_dist += true_dist
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"Kesit mesafe hesabi yapilamadi, sematik aralik kullanildi: {exc}", "warning")
+            for i, s in enumerate(sondajlar): 
+                s["_kot"] = safe_float(s.get("k", 100.0))
+                s["_plot_x"] = i * dx_default
+                s["_true_dist"] = dx_default
+        
+        fig = Figure(figsize=A4_LANDSCAPE_SIZE, dpi=SECTION_FIGURE_DPI) 
+        ax = fig.add_axes(SECTION_AXES_RECT) 
+        if use_line_projection:
+            start_no = options.get("line_start_no", "Baslangic")
+            end_no = options.get("line_end_no", "Bitis")
+            mode_label = f"Kesit hatti: {start_no} - {end_no}"
+        elif use_true_distance:
+            mode_label = "Gercek mesafe"
+        else:
+            mode_label = "Sematik"
+        ax._geo_title_simple = "Jeolojik Kesit"
+        ax._geo_title_full = f"Jeolojik Kesit ({mode_label}, D.A. x{vertical_exaggeration:g})"
+        if title_mode == "none":
+            ax.set_title("")
+        elif title_mode == "simple":
+            ax.set_title(ax._geo_title_simple, fontsize=12, fontweight='bold')
+        else:
+            ax.set_title(ax._geo_title_full, fontsize=12, fontweight='bold')
+        
+        if use_distance_axis:
+            ax.tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=True)
+            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x * vertical_exaggeration:g}"))
+            axis_label = "Kesit hatti station (m)" if use_line_projection else "Kesit boyunca gercek mesafe (m)"
+            ax.set_xlabel(axis_label, fontsize=9)
+        else:
+            ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+        ax.yaxis.set_ticks_position('both'); ax.tick_params(axis='y', which='both', labelleft=True, labelright=True)
+        ax.set_ylabel("Kot (m)", fontsize=10)
+        w_well = well_width
+        
+        xs, ys = [s["_plot_x"] for s in sondajlar], [s["_kot"] for s in sondajlar]
+        
+        min_x_plot = xs[0] - MARGIN
+        max_x_plot = xs[-1] + MARGIN
+        
+        try:
+            from scipy.interpolate import make_interp_spline
+            if len(xs) >= 3:
+                xs_arr, ys_arr = np.array(xs), np.array(ys); sort_idx = np.argsort(xs_arr)
+                ux, idx = np.unique(xs_arr[sort_idx], return_index=True); uy = ys_arr[sort_idx][idx]
+                X_ = np.linspace(ux.min(), ux.max(), 100); Y_ = make_interp_spline(ux, uy)(X_)
+                ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
+            else: 
+                ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
+        except Exception as exc:
+            log_exception("motor.section_surface_spline", exc_value=exc)
+            ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
+        
+        yass_points = []
+        if show_yass:
+            for s in sondajlar:
+                yass_depth, yass_key = parse_yass_depth(s)
+                if yass_depth is None:
+                    continue
+                der = safe_float(s.get("der", 15))
+                if der > 0 and yass_depth > der + 0.01:
+                    if log_callback:
+                        log_callback(f"{s.get('no','SK')} YASS derinligi kuyu derinliginden buyuk; kesitte gosterilmedi.", "warning")
+                    continue
+                yass_points.append({
+                    "sondaj": s,
+                    "no": s.get("no", "SK"),
+                    "x": s["_plot_x"],
+                    "depth": yass_depth,
+                    "source": yass_key,
+                    "elevation": s["_kot"] - yass_depth,
+                })
+
+        all_y = [s["_kot"] for s in sondajlar] + [s["_kot"] - safe_float(s.get("der",15)) for s in sondajlar]
+        all_y.extend(point["elevation"] for point in yass_points)
+        
+        min_y_visual = min(all_y) - 1.5 
+        used_codes = set()
+        
+        interactive_polys = []
+        snap_lines = []
+        depth_label_anchors = []
+
+        def tag_live_artist(artist, group):
+            try:
+                artist._geo_live_group = group
+            except Exception:
+                pass
+            return artist
+
+        def label_collides(x, y, x_tol, y_tol):
+            if not avoid_label_collisions:
+                return False
+            for anchor in depth_label_anchors:
+                dx = abs(safe_float(anchor.get("x")) - x)
+                dy = abs(safe_float(anchor.get("y")) - y)
+                if dx <= x_tol and dy <= y_tol:
+                    return True
+            return False
+
+        def place_label_avoiding_anchors(x, preferred_y, x_tol=None, y_tol=0.42, offsets=None):
+            if not avoid_label_collisions:
+                return preferred_y
+            x_tol = x_tol if x_tol is not None else max(3.6, w_well * 2.1)
+            offsets = offsets or [0, 0.36, -0.36, 0.72, -0.72, 1.08, -1.08, 1.48, -1.48]
+            for offset in offsets:
+                candidate = preferred_y + offset
+                if not label_collides(x, candidate, x_tol, y_tol):
+                    return candidate
+            return preferred_y + offsets[-1]
+
+        def register_geo_poly(poly, code, kind="section", edit_id=None):
+            poly._geo_unit_code = code or "tanimsiz"
+            poly._geo_poly_kind = kind
+            poly._geo_edit_id = edit_id
+            try:
+                poly._geo_default_xy = [[float(x), float(y)] for x, y in poly.get_xy()]
+            except Exception:
+                poly._geo_default_xy = []
+            if edit_id and kind != "well":
+                edited = manual_edits.get(edit_id)
+                hidden = False
+                if isinstance(edited, dict):
+                    hidden = bool(edited.get("hidden"))
+                    edited = edited.get("vertices") or edited.get("xy")
+                poly._geo_hidden = hidden
+                if isinstance(edited, list) and len(edited) >= 3:
+                    try:
+                        poly.set_xy([(safe_float(x), safe_float(y)) for x, y in edited])
+                    except Exception:
+                        pass
+            else:
+                poly._geo_hidden = False
+            return poly
+
+        def sync_poly_visibility(poly):
+            visible = not bool(getattr(poly, "_geo_hidden", False))
+            try:
+                poly.set_visible(visible)
+            except Exception:
+                pass
+            for artist in getattr(poly, "_geo_pattern_artists", []) or []:
+                try:
+                    artist.set_visible(visible)
+                except Exception:
+                    pass
+
+        label_renderer_cache = {"renderer": None}
+
+        def get_label_renderer():
+            renderer = label_renderer_cache.get("renderer")
+            if renderer is not None:
+                return renderer
+            try:
+                if not hasattr(fig.canvas, "get_renderer"):
+                    from matplotlib.backends.backend_agg import FigureCanvasAgg
+                    FigureCanvasAgg(fig)
+                fig.canvas.draw()
+                renderer = fig.canvas.get_renderer()
+                label_renderer_cache["renderer"] = renderer
+                return renderer
+            except Exception:
+                return None
+
+        def add_fitted_consistency_label(x, y, label, xl, xr, slot_low, slot_high, layer_height, label_count, clip_poly=None):
+            wrapped = wrap_consistency_label(label)
+            preferred_fs = preferred_consistency_font(label, layer_height, label_count)
+            txt = ax.text(
+                x, y,
+                wrapped,
+                ha='center', va='center',
+                fontsize=preferred_fs,
+                fontweight='bold',
+                color='#111111',
+                zorder=26,
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.82, pad=0.38)
+            )
+            tag_live_artist(txt, "consistency")
+            if clip_poly is not None:
+                try:
+                    txt.set_clip_path(clip_poly)
+                    txt.set_clip_on(True)
+                except Exception:
+                    pass
+
+            renderer = get_label_renderer()
+            if renderer is None:
+                return txt
+
+            x_pad = max((xr - xl) * 0.06, 0.03)
+            y_pad = max(abs(slot_high - slot_low) * 0.06, 0.02)
+            x0, x1 = xl + x_pad, xr - x_pad
+            y0, y1 = slot_low + y_pad, slot_high - y_pad
+            if x1 <= x0:
+                x0, x1 = xl, xr
+            if y1 <= y0:
+                y0, y1 = slot_low, slot_high
+            p0 = ax.transData.transform((x0, y0))
+            p1 = ax.transData.transform((x1, y1))
+            allowed_w = abs(p1[0] - p0[0])
+            allowed_h = abs(p1[1] - p0[1])
+            if allowed_w <= 0 or allowed_h <= 0:
+                return txt
+
+            fs = preferred_fs
+            while fs >= consistency_font_min:
+                txt.set_fontsize(fs)
+                try:
+                    bbox = txt.get_window_extent(renderer=renderer)
+                except Exception:
+                    break
+                if bbox.width <= allowed_w * 0.98 and bbox.height <= allowed_h * 0.98:
+                    return txt
+                fs -= 0.35
+            txt.set_fontsize(consistency_font_min)
+            return txt
+        
+        for idx, s in enumerate(sondajlar):
+            x_cen, top, der = s["_plot_x"], s["_kot"], safe_float(s.get("der", 15))
+            bottom = top - der
+            ax.plot([x_cen, x_cen], [top, top-der], 'k-', lw=1.0, zorder=20)
+            plain_label = f"{s.get('no','SK')}"
+            label = plain_label
+            label_size = 9
+            if use_line_projection and show_station_offset_labels:
+                station = s.get("_station", 0.0)
+                offset = s.get("_offset", 0.0)
+                label = f"{label}\nSta {station:.1f}\nOff {offset:+.1f}"
+                label_size = 7
+            well_label = ax.text(x_cen, top + 0.85, label, ha='center', va='bottom', fontsize=label_size, fontweight='bold')
+            well_label._geo_save_text = plain_label
+            well_label._geo_save_fontsize = 9
+            well_label._geo_full_text = label
+            well_label._geo_full_fontsize = label_size
+            tag_live_artist(well_label, "station")
+            if show_well_elevation_labels:
+                top_label_y = place_label_avoiding_anchors(
+                    x_cen, top + 0.18,
+                    x_tol=max(3.2, w_well * 1.9),
+                    y_tol=0.42,
+                    offsets=[0, 0.40, -0.40, 0.78, -0.78, 1.14, -1.14],
+                )
+                top_elev_text = ax.text(
+                    x_cen, top_label_y,
+                    f"{top:.2f}",
+                    ha='center', va='bottom',
+                    fontsize=7, fontweight='bold', color='#1B2631', zorder=31,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.78, pad=0.4)
+                )
+                tag_live_artist(top_elev_text, "well_elevation")
+                depth_label_anchors.append({"x": x_cen, "y": top_label_y, "kind": "kot"})
+                bottom_label_y = place_label_avoiding_anchors(
+                    x_cen, bottom - 0.35,
+                    x_tol=max(3.2, w_well * 1.9),
+                    y_tol=0.42,
+                    offsets=[0, -0.40, 0.40, -0.78, 0.78, -1.14, 1.14],
+                )
+                bottom_elev_text = ax.text(
+                    x_cen, bottom_label_y,
+                    f"{bottom:.2f}",
+                    ha='center', va='top',
+                    fontsize=7, fontweight='bold', color='#1B2631', zorder=31,
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.78, pad=0.4)
+                )
+                tag_live_artist(bottom_elev_text, "well_elevation")
+                depth_label_anchors.append({"x": x_cen, "y": bottom_label_y, "kind": "kot"})
+            
+            snap_lines.extend([x_cen - w_well/2, x_cen + w_well/2])
+            
+            if idx < len(sondajlar) - 1:
+                plot_next = sondajlar[idx+1]["_plot_x"]
+                true_dist = s.get("_true_dist", dx_default)
+                if show_distance_labels and abs(plot_next - x_cen) > 0.01:
+                    distance_arrow = ax.annotate("", xy=(x_cen, min_y_visual), xytext=(plot_next, min_y_visual), arrowprops=dict(arrowstyle="<->", lw=0.8))
+                    tag_live_artist(distance_arrow, "distance")
+                    dist_x = (x_cen + plot_next) / 2
+                    dist_y = place_label_avoiding_anchors(dist_x, min_y_visual + 0.5, x_tol=5.0, y_tol=0.45)
+                    distance_text = ax.text(dist_x, dist_y, f"{true_dist:.1f} m", ha='center', va='bottom', fontsize=9, backgroundcolor='white')
+                    tag_live_artist(distance_text, "distance")
+                    depth_label_anchors.append({"x": dist_x, "y": dist_y, "kind": "distance"})
+
+            raw_lit, merged = s.get("litoloji", []), []
+            if raw_lit:
+                cur_t, cur_b, cur_r = safe_float(raw_lit[0][0]), safe_float(raw_lit[0][1]), raw_lit[0][2]
+                cur_c = litoloji_cozumle(cur_r)
+                if cur_c: used_codes.add(cur_c)
+                for i in range(1, len(raw_lit)):
+                    nt, nb, nr = safe_float(raw_lit[i][0]), safe_float(raw_lit[i][1]), raw_lit[i][2]
+                    nc = litoloji_cozumle(nr)
+                    if nc: used_codes.add(nc)
+                    if nc == cur_c and abs(cur_b - nt) < 0.1: cur_b = nb
+                    else: merged.append({'top': cur_t, 'bot': cur_b, 'code': cur_c}); cur_t, cur_b, cur_c = nt, nb, nc
+                merged.append({'top': cur_t, 'bot': cur_b, 'code': cur_c})
+            s['merged_layers'] = merged 
+
+            for layer_idx, layer in enumerate(merged):
+                kod = layer['code']; stil = next((item for item in LEJANTLAR if item["kod"] == kod), LEJANTLAR[-1])
+                y_t, y_b, xl, xr = top - layer['top'], top - layer['bot'], x_cen - w_well/2, x_cen + w_well/2
+                verts = [(xl, y_t), (xr, y_t), (xr, y_b), (xl, y_b)]
+                poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='black', zorder=21)
+                register_geo_poly(poly, kod, kind="well", edit_id=f"well:{plain_label}:{layer_idx}:{kod}")
+                ax.add_patch(poly)
+                interactive_polys.append(poly) 
+                if stil:
+                    GeoEngineDraw.draw_pattern(
+                        ax, poly, stil["desen"], stil["sembol"],
+                        density_scale=pattern_density_for_code(kod, TARAMA_SIKLIGI_KESIT)
+                    )
+                if show_layer_depth_labels:
+                    depth_label_x = xl - 0.5 if idx == 0 else xr + 0.5
+                    depth_label_y = place_label_avoiding_anchors(
+                        depth_label_x, y_b,
+                        x_tol=max(3.4, w_well * 1.8),
+                        y_tol=0.34,
+                        offsets=[0, 0.30, -0.30, 0.58, -0.58, 0.88, -0.88, 1.18, -1.18],
+                    )
+                    depth_text = ax.text(depth_label_x, depth_label_y, f"{layer['bot']:.2f}", ha='right' if idx == 0 else 'left', va='center', fontsize=7, fontweight='bold', zorder=25)
+                    tag_live_artist(depth_text, "layer_depth")
+                    depth_label_anchors.append({"x": depth_label_x, "y": depth_label_y, "kind": "layer_depth"})
+                if show_consistency_labels:
+                    layer_height = abs(y_t - y_b)
+                    records = consistency_labels_for_layer(s, layer)
+                    positions = consistency_label_positions(records, layer, y_t, y_b, top)
+                    if positions and layer_height >= min(label_min_height, 0.25):
+                        high_y, low_y = max(y_t, y_b), min(y_t, y_b)
+                        for pos_idx, item in enumerate(positions):
+                            label = item.get("label", "")
+                            if not label:
+                                continue
+                            slot_high = high_y if pos_idx == 0 else (positions[pos_idx - 1]["y"] + item["y"]) / 2
+                            slot_low = low_y if pos_idx == len(positions) - 1 else (item["y"] + positions[pos_idx + 1]["y"]) / 2
+                            add_fitted_consistency_label(
+                                x_cen, item["y"], label,
+                                xl, xr, slot_low, slot_high,
+                                layer_height, len(positions), clip_poly=poly
+                            )
+
+        def layer_elevation_info(sondaj, layer):
+            y_top = sondaj["_kot"] - safe_float(layer.get("top"))
+            y_bot = sondaj["_kot"] - safe_float(layer.get("bot"))
+            high = max(y_top, y_bot)
+            low = min(y_top, y_bot)
+            return {
+                "top": high,
+                "bot": low,
+                "mid": (high + low) / 2,
+                "thickness": abs(high - low),
+            }
+
+        def layer_overlap(info1, info2):
+            return min(info1["top"], info2["top"]) - max(info1["bot"], info2["bot"])
+
+        def match_limit_for_distance(dx_true):
+            if corr_tolerance and corr_tolerance > 0:
+                return corr_tolerance
+            return max(3.0, min(8.0, abs(dx_true) * 0.12))
+
+        def layer_match_cost(s1, s2, l1, l2, idx1, idx2, dx_true):
+            if l1.get("code") != l2.get("code"):
+                return None
+            info1 = layer_elevation_info(s1, l1)
+            info2 = layer_elevation_info(s2, l2)
+            overlap = layer_overlap(info1, info2)
+            mid_dist = abs(info1["mid"] - info2["mid"])
+            top_dist = abs(info1["top"] - info2["top"])
+            bot_dist = abs(info1["bot"] - info2["bot"])
+            boundary_dist = (top_dist + bot_dist) / 2
+            thickness_diff = abs(info1["thickness"] - info2["thickness"])
+            match_limit = match_limit_for_distance(dx_true)
+            small_overlap = max(0.15, min(info1["thickness"], info2["thickness"]) * 0.10)
+            if mid_dist > match_limit and overlap <= small_overlap:
+                return None
+            if boundary_dist > match_limit * 1.8 and overlap <= 0:
+                return None
+
+            cost = mid_dist + boundary_dist * 0.35 + thickness_diff * 0.20
+            if overlap > 0:
+                cost -= min(overlap, info1["thickness"], info2["thickness"]) * 0.45
+            else:
+                cost += abs(overlap) * 0.70
+            cost += abs(idx1 - idx2) * 0.08
+            return cost
+
+        def match_layers_between_wells(s1, s2, layers1, layers2, dx_true):
+            candidates = []
+            for idx1, l1 in enumerate(layers1):
+                for idx2, l2 in enumerate(layers2):
+                    cost = layer_match_cost(s1, s2, l1, l2, idx1, idx2, dx_true)
+                    if cost is not None:
+                        candidates.append((cost, idx1, idx2))
+            candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+
+            selected = []
+            used1, used2 = set(), set()
+            for _, idx1, idx2 in candidates:
+                if idx1 in used1 or idx2 in used2:
+                    continue
+                crosses = any((idx1 - m1) * (idx2 - m2) < 0 for m1, m2 in selected)
+                if crosses:
+                    continue
+                selected.append((idx1, idx2))
+                used1.add(idx1)
+                used2.add(idx2)
+
+            selected.sort(key=lambda item: item[0])
+            matches_s1 = {idx1: idx2 for idx1, idx2 in selected}
+            matches_s2 = {idx2: idx1 for idx1, idx2 in selected}
+            return matches_s1, matches_s2
+
+        def facies_links_between_wells(s1, s2, layers1, layers2, matches_s1, matches_s2):
+            facies_s1, facies_s2 = {}, {}
+            for idx1, l1 in enumerate(layers1):
+                if idx1 in matches_s1:
+                    continue
+                y1t, y1b = s1["_kot"] - l1['top'], s1["_kot"] - l1['bot']
+                best_overlap, best_idx2 = 0, -1
+                for idx2, l2 in enumerate(layers2):
+                    if idx2 in matches_s2 or idx2 in facies_s2:
+                        continue
+                    y2t, y2b = s2["_kot"] - l2['top'], s2["_kot"] - l2['bot']
+                    overlap = min(y1t, y2t) - max(y1b, y2b)
+                    if overlap > facies_overlap_min and overlap > best_overlap:
+                        best_overlap, best_idx2 = overlap, idx2
+                if best_idx2 != -1:
+                    facies_s1[idx1] = best_idx2
+                    facies_s2[best_idx2] = idx1
+            return facies_s1, facies_s2
+
+        pair_links = []
+        for i in range(len(sondajlar) - 1):
+            s1, s2 = sondajlar[i], sondajlar[i+1]
+            layers1, layers2 = s1.get('merged_layers', []), s2.get('merged_layers', [])
+            dx_true = s1.get("_true_dist", dx_default)
+            matches_s1, matches_s2 = match_layers_between_wells(s1, s2, layers1, layers2, dx_true)
+            facies_s1, facies_s2 = facies_links_between_wells(s1, s2, layers1, layers2, matches_s1, matches_s2)
+            pair_links.append({
+                "matches_s1": matches_s1,
+                "matches_s2": matches_s2,
+                "facies_s1": facies_s1,
+                "facies_s2": facies_s2,
+            })
+
+        def is_lens_candidate(layer):
+            code = str(layer.get("code") or "")
+            thickness = abs(safe_float(layer.get("bot")) - safe_float(layer.get("top")))
+            if code in ("", "tanimsiz"):
+                return False
+            if thickness <= 0.05:
+                return False
+            return lens_max_thickness <= 0 or thickness <= lens_max_thickness
+
+        def neighbor_has_same_code_overlap(center_s, neighbor_s, layer):
+            code = layer.get("code")
+            center_info = layer_elevation_info(center_s, layer)
+            min_overlap = max(0.12, center_info["thickness"] * 0.18)
+            for neighbor_layer in neighbor_s.get('merged_layers', []):
+                if neighbor_layer.get("code") != code:
+                    continue
+                overlap = layer_overlap(center_info, layer_elevation_info(neighbor_s, neighbor_layer))
+                if overlap >= min_overlap:
+                    return True
+                mid_dist = abs(center_info["mid"] - layer_elevation_info(neighbor_s, neighbor_layer)["mid"])
+                if mid_dist <= max(0.35, center_info["thickness"] * 0.55):
+                    return True
+            return False
+
+        lens_layer_keys = set()
+        if auto_lens and len(sondajlar) >= 3:
+            for well_idx in range(1, len(sondajlar) - 1):
+                center_s = sondajlar[well_idx]
+                left_s = sondajlar[well_idx - 1]
+                right_s = sondajlar[well_idx + 1]
+                for layer_idx, layer in enumerate(sondajlar[well_idx].get('merged_layers', [])):
+                    if not is_lens_candidate(layer):
+                        continue
+                    has_left_same_unit = neighbor_has_same_code_overlap(center_s, left_s, layer)
+                    has_right_same_unit = neighbor_has_same_code_overlap(center_s, right_s, layer)
+                    if not has_left_same_unit and not has_right_same_unit:
+                        lens_layer_keys.add((well_idx, layer_idx))
+
+        def draw_lens_layer(well_idx, layer_idx):
+            s = sondajlar[well_idx]
+            left_s = sondajlar[well_idx - 1]
+            right_s = sondajlar[well_idx + 1]
+            layer = s.get('merged_layers', [])[layer_idx]
+            code = layer.get('code')
+            stil = next((item for item in LEJANTLAR if item["kod"] == code), LEJANTLAR[-1])
+            x_left = s["_plot_x"] - w_well / 2
+            x_right = s["_plot_x"] + w_well / 2
+            left_limit = left_s["_plot_x"] + w_well / 2
+            right_limit = right_s["_plot_x"] - w_well / 2
+            left_tip = x_left - max(0.05, x_left - left_limit) * lens_closure_ratio
+            right_tip = x_right + max(0.05, right_limit - x_right) * lens_closure_ratio
+            y_top = s["_kot"] - layer['top']
+            y_bot = s["_kot"] - layer['bot']
+            y_mid = (y_top + y_bot) / 2
+            verts = [
+                (left_tip, y_mid),
+                (x_left, y_top),
+                (x_right, y_top),
+                (right_tip, y_mid),
+                (x_right, y_bot),
+                (x_left, y_bot),
+            ]
+            poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=1.0, zorder=10.20)
+            edit_id = (
+                f"lens:{left_s.get('no','SK')}:{s.get('no','SK')}:"
+                f"{right_s.get('no','SK')}:{layer_idx}:{code}"
+            )
+            register_geo_poly(poly, code, edit_id=edit_id)
+            ax.add_patch(poly)
+            interactive_polys.append(poly)
+            pattern_artists = GeoEngineDraw.draw_pattern(
+                ax, poly, stil["desen"], stil["sembol"],
+                density_scale=pattern_density_for_code(code, TARAMA_SIKLIGI_KESIT)
+            )
+            poly._geo_pattern_zorder = 10.35
+            set_artist_zorder(pattern_artists, 10.35)
+
+        half_lens_layer_keys = {}
+        if auto_lens and two_well_lens and len(sondajlar) >= 2:
+            edge_specs = [
+                (0, "right", 1),
+                (len(sondajlar) - 1, "left", len(sondajlar) - 2),
+            ]
+            for well_idx, direction, neighbor_idx in edge_specs:
+                if neighbor_idx < 0 or neighbor_idx >= len(sondajlar):
+                    continue
+                source_s = sondajlar[well_idx]
+                neighbor_s = sondajlar[neighbor_idx]
+                for idx, layer in enumerate(source_s.get('merged_layers', [])):
+                    if not is_lens_candidate(layer):
+                        continue
+                    if not neighbor_has_same_code_overlap(source_s, neighbor_s, layer):
+                        half_lens_layer_keys[(well_idx, idx)] = direction
+
+        def draw_half_lens_layer(well_idx, layer_idx, direction):
+            s = sondajlar[well_idx]
+            neighbor_idx = well_idx + 1 if direction == "right" else well_idx - 1
+            if neighbor_idx < 0 or neighbor_idx >= len(sondajlar):
+                return
+            neighbor = sondajlar[neighbor_idx]
+            layer = s.get('merged_layers', [])[layer_idx]
+            code = layer.get('code')
+            stil = next((item for item in LEJANTLAR if item["kod"] == code), LEJANTLAR[-1])
+            x_left = s["_plot_x"] - w_well / 2
+            x_right = s["_plot_x"] + w_well / 2
+            y_top = s["_kot"] - layer['top']
+            y_bot = s["_kot"] - layer['bot']
+            y_mid = (y_top + y_bot) / 2
+            if direction == "right":
+                neighbor_edge = neighbor["_plot_x"] - w_well / 2
+                tip = x_right + max(0.05, neighbor_edge - x_right) * lens_closure_ratio
+                verts = [(x_left, y_top), (x_right, y_top), (tip, y_mid), (x_right, y_bot), (x_left, y_bot)]
+            else:
+                neighbor_edge = neighbor["_plot_x"] + w_well / 2
+                tip = x_left - max(0.05, x_left - neighbor_edge) * lens_closure_ratio
+                verts = [(tip, y_mid), (x_left, y_top), (x_right, y_top), (x_right, y_bot), (x_left, y_bot)]
+            poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=1.0, zorder=10.20)
+            edit_id = f"half-lens:{s.get('no','SK')}:{neighbor.get('no','SK')}:{direction}:{layer_idx}:{code}"
+            register_geo_poly(poly, code, edit_id=edit_id)
+            ax.add_patch(poly)
+            interactive_polys.append(poly)
+            pattern_artists = GeoEngineDraw.draw_pattern(
+                ax, poly, stil["desen"], stil["sembol"],
+                density_scale=pattern_density_for_code(code, TARAMA_SIKLIGI_KESIT)
+            )
+            poly._geo_pattern_zorder = 10.35
+            set_artist_zorder(pattern_artists, 10.35)
+
+        lens_host_skip_keys = set()
+        lens_host_segments = []
+
+        def lens_host_span(well_idx, layer_idx):
+            layers = sondajlar[well_idx].get('merged_layers', [])
+            if layer_idx <= 0 or layer_idx >= len(layers) - 1:
+                return None
+            upper = layers[layer_idx - 1]
+            lens = layers[layer_idx]
+            lower = layers[layer_idx + 1]
+            host_code = upper.get("code")
+            if not host_code or host_code == "tanimsiz":
+                return None
+            if lower.get("code") != host_code or lens.get("code") == host_code:
+                return None
+            return {
+                "code": host_code,
+                "upper_idx": layer_idx - 1,
+                "lower_idx": layer_idx + 1,
+                "top_depth": safe_float(upper.get("top")),
+                "bot_depth": safe_float(lower.get("bot")),
+            }
+
+        def find_neighbor_host_layer(center_s, neighbor_s, span):
+            target_top = center_s["_kot"] - span["top_depth"]
+            target_bot = center_s["_kot"] - span["bot_depth"]
+            target_info = {
+                "top": max(target_top, target_bot),
+                "bot": min(target_top, target_bot),
+                "mid": (target_top + target_bot) / 2,
+                "thickness": abs(target_top - target_bot),
+            }
+            best_layer = None
+            best_score = None
+            for layer in neighbor_s.get('merged_layers', []):
+                if layer.get("code") != span["code"]:
+                    continue
+                info = layer_elevation_info(neighbor_s, layer)
+                overlap = layer_overlap(target_info, info)
+                mid_dist = abs(target_info["mid"] - info["mid"])
+                if overlap <= max(0.15, min(target_info["thickness"], info["thickness"]) * 0.15) and mid_dist > max(0.5, target_info["thickness"] * 0.55):
+                    continue
+                score = (-max(0.0, overlap), mid_dist)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_layer = layer
+            return best_layer
+
+        def add_lens_host_segment(center_idx, layer_idx, direction):
+            span = lens_host_span(center_idx, layer_idx)
+            if not span:
+                return
+            neighbor_idx = center_idx - 1 if direction == "left" else center_idx + 1
+            if neighbor_idx < 0 or neighbor_idx >= len(sondajlar):
+                return
+            center_s = sondajlar[center_idx]
+            neighbor_s = sondajlar[neighbor_idx]
+            neighbor_layer = find_neighbor_host_layer(center_s, neighbor_s, span)
+            if not neighbor_layer:
+                return
+            lens_host_skip_keys.add((center_idx, span["upper_idx"]))
+            lens_host_skip_keys.add((center_idx, span["lower_idx"]))
+            lens_host_segments.append((center_idx, neighbor_idx, layer_idx, direction, span, neighbor_layer))
+
+        for well_idx, layer_idx in sorted(lens_layer_keys):
+            add_lens_host_segment(well_idx, layer_idx, "left")
+            add_lens_host_segment(well_idx, layer_idx, "right")
+        for (well_idx, layer_idx), direction in sorted(half_lens_layer_keys.items()):
+            add_lens_host_segment(well_idx, layer_idx, direction)
+
+        def draw_lens_host_segment(center_idx, neighbor_idx, layer_idx, direction, span, neighbor_layer):
+            center_s = sondajlar[center_idx]
+            neighbor_s = sondajlar[neighbor_idx]
+            code = span["code"]
+            stil = next((item for item in LEJANTLAR if item["kod"] == code), LEJANTLAR[-1])
+            center_top_y = center_s["_kot"] - span["top_depth"]
+            center_bot_y = center_s["_kot"] - span["bot_depth"]
+            neighbor_top_y = neighbor_s["_kot"] - safe_float(neighbor_layer.get("top"))
+            neighbor_bot_y = neighbor_s["_kot"] - safe_float(neighbor_layer.get("bot"))
+            if direction == "right":
+                center_edge = center_s["_plot_x"] + w_well / 2
+                neighbor_edge = neighbor_s["_plot_x"] - w_well / 2
+                verts = [
+                    (center_edge, center_top_y),
+                    (neighbor_edge, neighbor_top_y),
+                    (neighbor_edge, neighbor_bot_y),
+                    (center_edge, center_bot_y),
+                ]
+            else:
+                center_edge = center_s["_plot_x"] - w_well / 2
+                neighbor_edge = neighbor_s["_plot_x"] + w_well / 2
+                verts = [
+                    (neighbor_edge, neighbor_top_y),
+                    (center_edge, center_top_y),
+                    (center_edge, center_bot_y),
+                    (neighbor_edge, neighbor_bot_y),
+                ]
+            poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.50, zorder=8.55)
+            edit_id = f"lens-host:{center_s.get('no','SK')}:{neighbor_s.get('no','SK')}:{direction}:{layer_idx}:{code}"
+            register_geo_poly(poly, code, edit_id=edit_id)
+            ax.add_patch(poly)
+            interactive_polys.append(poly)
+            pattern_artists = GeoEngineDraw.draw_pattern(
+                ax, poly, stil["desen"], stil["sembol"],
+                density_scale=pattern_density_for_code(code, TARAMA_SIKLIGI_KESIT)
+            )
+            poly._geo_pattern_zorder = 8.70
+            set_artist_zorder(pattern_artists, 8.70)
+
+        for segment in lens_host_segments:
+            draw_lens_host_segment(*segment)
+        for well_idx, layer_idx in sorted(lens_layer_keys):
+            draw_lens_layer(well_idx, layer_idx)
+        for (well_idx, layer_idx), direction in sorted(half_lens_layer_keys.items()):
+            draw_half_lens_layer(well_idx, layer_idx, direction)
+        
+        for i in range(len(sondajlar) - 1):
+            s1, s2 = sondajlar[i], sondajlar[i+1]
+            layers1, layers2 = s1.get('merged_layers', []), s2.get('merged_layers', [])
+            
+            dx_plot = s2["_plot_x"] - s1["_plot_x"] 
+            dx_true = s1.get("_true_dist", dx_default) 
+            
+            mid_x, x1, x2 = s1["_plot_x"] + dx_plot/2, s1["_plot_x"] + w_well/2, s2["_plot_x"] - w_well/2
+            
+            link = pair_links[i]
+            matches_s1, matches_s2 = link["matches_s1"], link["matches_s2"]
+            facies_s1, facies_s2 = link["facies_s1"], link["facies_s2"]
+
+            for idx1, idx2 in matches_s1.items():
+                if (i, idx1) in lens_host_skip_keys or (i + 1, idx2) in lens_host_skip_keys:
+                    continue
+                l1, l2 = layers1[idx1], layers2[idx2]
+                stil = next((item for item in LEJANTLAR if item["kod"] == l1['code']), LEJANTLAR[-1])
+                verts = [(x1, s1["_kot"] - l1['top']), (x2, s2["_kot"] - l2['top']), (x2, s2["_kot"] - l2['bot']), (x1, s1["_kot"] - l1['bot'])]
+                poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.6, zorder=10)
+                edit_id = f"match:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l1['code']}"
+                register_geo_poly(poly, l1['code'], edit_id=edit_id)
+                ax.add_patch(poly)
+                interactive_polys.append(poly)
+                if stil:
+                    GeoEngineDraw.draw_pattern(
+                        ax, poly, stil["desen"], stil["sembol"],
+                        density_scale=pattern_density_for_code(l1['code'], TARAMA_SIKLIGI_KESIT)
+                    )
+
+            zzw = max(0.5, dx_plot * zigzag_width_ratio) 
+            for idx1, idx2 in facies_s1.items():
+                if (i, idx1) in lens_layer_keys or (i + 1, idx2) in lens_layer_keys:
+                    continue
+                if (i, idx1) in lens_host_skip_keys or (i + 1, idx2) in lens_host_skip_keys:
+                    continue
+                l1, l2 = layers1[idx1], layers2[idx2]
+                stil1 = next((item for item in LEJANTLAR if item["kod"] == l1['code']), LEJANTLAR[-1])
+                stil2 = next((item for item in LEJANTLAR if item["kod"] == l2['code']), LEJANTLAR[-1])
+                
+                y1t, y1b = s1["_kot"] - l1['top'], s1["_kot"] - l1['bot']
+                y2t, y2b = s2["_kot"] - l2['top'], s2["_kot"] - l2['bot']
+                myt, myb = (y1t + y2t) / 2, (y1b + y2b) / 2
+                
+                zz_pts = get_zigzag_verts(mid_x, myt, myb, zzw)
+                
+                verts1 = [(x1, y1t)] + zz_pts + [(x1, y1b)]
+                poly1 = mpatches.Polygon(verts1, closed=True, facecolor=stil1["zemin"], edgecolor='gray', alpha=0.45, zorder=9)
+                edit_id1 = f"facies-left:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l1['code']}"
+                register_geo_poly(poly1, l1['code'], edit_id=edit_id1)
+                ax.add_patch(poly1); interactive_polys.append(poly1); GeoEngineDraw.draw_pattern(
+                    ax, poly1, stil1["desen"], stil1["sembol"],
+                    density_scale=pattern_density_for_code(l1['code'], TARAMA_SIKLIGI_KESIT)
+                )
+                
+                verts2 = [(x2, y2t)] + zz_pts + [(x2, y2b)]
+                poly2 = mpatches.Polygon(verts2, closed=True, facecolor=stil2["zemin"], edgecolor='gray', alpha=0.45, zorder=9)
+                edit_id2 = f"facies-right:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l2['code']}"
+                register_geo_poly(poly2, l2['code'], edit_id=edit_id2)
+                ax.add_patch(poly2); interactive_polys.append(poly2); GeoEngineDraw.draw_pattern(
+                    ax, poly2, stil2["desen"], stil2["sembol"],
+                    density_scale=pattern_density_for_code(l2['code'], TARAMA_SIKLIGI_KESIT)
+                )
+
+            for idx1, l1 in enumerate(layers1):
+                if (i, idx1) in lens_layer_keys or (i, idx1) in half_lens_layer_keys or (i, idx1) in lens_host_skip_keys:
+                    continue
+                if idx1 not in matches_s1 and idx1 not in facies_s1:
+                    stil = next((item for item in LEJANTLAR if item["kod"] == l1['code']), LEJANTLAR[-1])
+                    y1t, y1b = s1["_kot"] - l1['top'], s1["_kot"] - l1['bot']
+                    verts = [(x1, y1t), (x2, (y1t+y1b)/2), (x1, y1b)]
+                    poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.45, zorder=8)
+                    edit_id = f"pinch-left:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{l1['code']}"
+                    register_geo_poly(poly, l1['code'], edit_id=edit_id)
+                    ax.add_patch(poly); interactive_polys.append(poly); GeoEngineDraw.draw_pattern(
+                        ax, poly, stil["desen"], stil["sembol"],
+                        density_scale=pattern_density_for_code(l1['code'], TARAMA_SIKLIGI_KESIT)
+                    )
+                    
+            for idx2, l2 in enumerate(layers2):
+                if (i + 1, idx2) in lens_layer_keys or (i + 1, idx2) in half_lens_layer_keys or (i + 1, idx2) in lens_host_skip_keys:
+                    continue
+                if idx2 not in matches_s2 and idx2 not in facies_s2:
+                    stil = next((item for item in LEJANTLAR if item["kod"] == l2['code']), LEJANTLAR[-1])
+                    y2t, y2b = s2["_kot"] - l2['top'], s2["_kot"] - l2['bot']
+                    verts = [(x2, y2t), (x1, (y2t+y2b)/2), (x2, y2b)]
+                    poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.45, zorder=8)
+                    edit_id = f"pinch-right:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx2}:{l2['code']}"
+                    register_geo_poly(poly, l2['code'], edit_id=edit_id)
+                    ax.add_patch(poly); interactive_polys.append(poly); GeoEngineDraw.draw_pattern(
+                        ax, poly, stil["desen"], stil["sembol"],
+                        density_scale=pattern_density_for_code(l2['code'], TARAMA_SIKLIGI_KESIT)
+                    )
+
+        for poly in interactive_polys:
+            sync_poly_visibility(poly)
+
+        if hide_same_unit_seams:
+            GeoEngineDraw.hide_same_unit_seams(ax, interactive_polys)
+
+        if show_yass and yass_points:
+            yass_sorted = sorted(yass_points, key=lambda item: item["x"])
+            water_color = "#0077B6"
+
+            def yass_label_position(x_base, y_base):
+                return place_label_avoiding_anchors(
+                    x_base, y_base + 0.12,
+                    x_tol=max(4.2, w_well * 2.0),
+                    y_tol=0.46,
+                    offsets=[0, 0.60, -0.84, 1.00, -1.24, 1.43, -1.67, 1.88, -2.12],
+                )
+
+            if len(yass_sorted) >= 2:
+                yass_line, = ax.plot(
+                    [item["x"] for item in yass_sorted],
+                    [item["elevation"] for item in yass_sorted],
+                    color=water_color,
+                    lw=1.7,
+                    linestyle=(0, (6, 4)),
+                    alpha=0.95,
+                    zorder=23.5,
+                )
+                tag_live_artist(yass_line, "yass")
+            for item in yass_sorted:
+                x_cen = item["x"]
+                y = item["elevation"]
+                yass_well_line, = ax.plot(
+                    [x_cen - w_well / 2, x_cen + w_well / 2],
+                    [y, y],
+                    color=water_color,
+                    lw=2.2,
+                    solid_capstyle="round",
+                    zorder=24,
+                )
+                tag_live_artist(yass_well_line, "yass")
+                yass_marker = ax.scatter([x_cen], [y], marker="v", s=34, color=water_color, edgecolor="white", linewidth=0.45, zorder=24.5)
+                tag_live_artist(yass_marker, "yass")
+                if show_yass_labels:
+                    label_x = x_cen + w_well / 2 + 0.35
+                    label_y = yass_label_position(label_x, y)
+                    yass_text = ax.text(
+                        label_x,
+                        label_y,
+                        f"YASS {item['depth']:.2f} m",
+                        ha="left",
+                        va="bottom",
+                        fontsize=7,
+                        color=water_color,
+                        fontweight="bold",
+                        zorder=46,
+                        bbox=dict(facecolor="white", edgecolor="none", alpha=0.78, pad=0.35),
+                    )
+                    tag_live_artist(yass_text, "yass_label")
+                    depth_label_anchors.append({"x": label_x, "y": label_y, "kind": "yass"})
+
+        box_bottom = min_y_visual - 1.5 
+        plot_top = max(all_y) + 2.0
+        
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+            
+        ax.plot([min_x_plot, max_x_plot], [plot_top, plot_top], 'k-', lw=1.0, zorder=50) 
+        ax.plot([min_x_plot, max_x_plot], [box_bottom, box_bottom], 'k-', lw=1.0, zorder=50) 
+        ax.plot([min_x_plot, min_x_plot], [box_bottom, plot_top], 'k-', lw=1.0, zorder=50) 
+        ax.plot([max_x_plot, max_x_plot], [box_bottom, plot_top], 'k-', lw=1.0, zorder=50) 
+        
+        ticks = np.arange(math.floor(box_bottom), math.ceil(plot_top)+1, 5)
+        ax.set_yticks(ticks)
+
+        def legend_label_width(items):
+            max_len = max((len(str(item.get("ad", ""))) for item in items), default=8)
+            return max(8.2, min(14.0, 4.2 + max_len * 0.38))
+
+        def legend_text_for_label(label):
+            label = str(label or "")
+            if len(label) <= 12:
+                return label
+            wrapped = textwrap.wrap(label, width=12, break_long_words=False, break_on_hyphens=False)
+            return "\n".join(wrapped[:2]) if wrapped else label
+
+        def legend_layout_for_items(items, plot_span, requested_cols, requested_scale):
+            n_items = len(items)
+            plot_span = max(1.0, abs(plot_span))
+            target_width = plot_span * 0.92
+            base_scale = max(0.55, min(1.25, requested_scale))
+            min_scale = 0.55
+            base_item_width = legend_label_width(items)
+
+            if requested_cols > 0:
+                cols = max(1, min(n_items, requested_cols))
+                while cols > 1 and cols * base_item_width * min_scale > target_width:
+                    cols -= 1
+                scale = min(base_scale, target_width / max(cols * base_item_width, 0.01))
+                return cols, max(min_scale, scale), base_item_width
+
+            max_cols = min(n_items, 8)
+            candidates = []
+            for cols in range(1, max_cols + 1):
+                scale = min(base_scale, target_width / max(cols * base_item_width, 0.01))
+                scale = max(min_scale, scale)
+                width = cols * base_item_width * scale
+                rows = math.ceil(n_items / cols)
+                overflow = max(0.0, width - target_width)
+                scale_penalty = max(0.0, base_scale - scale)
+                score = rows * 10.0 + overflow * 4.0 + scale_penalty * 2.5 - cols * 0.12
+                candidates.append((score, rows, -scale, cols, scale))
+
+            _, _, _, cols, scale = min(candidates, key=lambda item: item[0])
+            return cols, scale, base_item_width
+
+        items = [l for l in LEJANTLAR if l["kod"] in used_codes]
+        if items and show_legend:
+            n_items = len(items)
+            plot_span = max_x_plot - min_x_plot
+            requested_cols = int(safe_float(options.get("legend_columns", 0)) or 0)
+            n_cols, legend_scale_auto, base_item_width = legend_layout_for_items(items, plot_span, requested_cols, legend_scale)
+            n_rows = math.ceil(n_items / n_cols)
+            
+            box_w = 1.7 * legend_scale_auto
+            box_h = 1.05 * legend_scale_auto
+            item_width = base_item_width * legend_scale_auto
+            y_spc = 2.25 * legend_scale_auto
+            
+            leg_w = n_cols * item_width
+            x_center = (max_x_plot + min_x_plot) / 2
+            start_x = x_center - (leg_w / 2)
+            
+            start_y = box_bottom - (1.45 * legend_scale_auto)
+            
+            legend_title = ax.text(x_center, start_y + (0.75 * legend_scale_auto), "LEJANT", ha='center', fontsize=max(7, 11 * legend_scale_auto), fontweight='bold', zorder=41)
+            legend_title._geo_export_group = "legend"
+            
+            for i, l in enumerate(items):
+                r = i // n_cols
+                c = i % n_cols
+                
+                y_t = start_y - r * y_spc
+                y_b = y_t - box_h
+                xl = start_x + c * item_width
+                xr = xl + box_w
+                
+                verts = [(xl, y_t), (xr, y_t), (xr, y_b), (xl, y_b)]
+                poly = mpatches.Polygon(verts, closed=True, facecolor=l['zemin'], edgecolor='black', zorder=21) 
+                poly._geo_export_group = "legend"
+                ax.add_patch(poly)
+                
+                if l:
+                    for artist in GeoEngineDraw.draw_pattern(
+                        ax, poly, l["desen"], l["sembol"],
+                        density_scale=pattern_density_for_code(l.get("kod"), TARAMA_SIKLIGI_LEJANT, legend=True)
+                    ):
+                        artist._geo_export_group = "legend"
+                legend_text = ax.text(
+                    xr + (0.25 * legend_scale_auto), (y_t + y_b)/2,
+                    legend_text_for_label(l['ad']),
+                    va='center', ha='left',
+                    fontsize=max(5.8, 8.5 * legend_scale_auto),
+                    linespacing=0.92,
+                    zorder=46
+                )
+                legend_text._geo_export_group = "legend"
+            
+            ax.set_xlim(min_x_plot, max_x_plot)
+            ax.set_ylim(start_y - (n_rows * y_spc) - 1.0, plot_top + 1.0)
+        else:
+            ax.set_xlim(min_x_plot, max_x_plot)
+            ax.set_ylim(box_bottom - 1.0, plot_top + 1.0)
+
+        fig._geo_hide_same_unit_seams = hide_same_unit_seams
+        fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
+
+        return fig, (ax, interactive_polys, None)

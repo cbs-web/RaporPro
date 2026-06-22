@@ -1,0 +1,71 @@
+# Dosya: RaporPro/sabitler.py
+import os
+
+# --- YOL TANIMLARI ---
+# Programın çalıştığı klasörü otomatik bulur ve JSON'ı oraya kaydeder
+PROJE_KLASORU = os.path.dirname(os.path.abspath(__file__))
+JSON_DOSYA = os.path.join(PROJE_KLASORU, "zemin_proje_data.json")
+
+# --- RENKLER ---
+COLOR_BG = "#F4F6F9"
+COLOR_PRIMARY = "#2C3E50"
+COLOR_ACCENT = "#3498DB"
+COLOR_SUCCESS = "#27AE60"
+COLOR_WARNING = "#E67E22"
+COLOR_DANGER = "#C0392B"
+COLOR_LOG_BG = "#1E1E1E" 
+COLOR_LOG_TEXT = "#00FF41" 
+COLOR_LOG_TIME = "#FFFF00" 
+
+# --- FONTLAR ---
+FONT_MAIN = ("Segoe UI", 9)
+FONT_BOLD = ("Segoe UI", 9, "bold")
+FONT_HEADER = ("Segoe UI", 11, "bold")
+FONT_LOG = ("Consolas", 9)
+
+# --- ÇIKTI / SAYFA YERLEŞİMİ ---
+A4_PORTRAIT_SIZE = (8.27, 11.69)
+A4_LANDSCAPE_SIZE = (11.69, 8.27)
+DEFAULT_EXPORT_DPI = 300
+LOG_FIGURE_DPI = 110
+LOG_LEGACY_FIGURE_DPI = 100
+SECTION_FIGURE_DPI = 100
+SECTION_AXES_RECT = [0.08, 0.05, 0.84, 0.90]
+
+HARITA_PAFTA_LAYOUT = {
+    "figure_size": A4_PORTRAIT_SIZE,
+    "map_axes": [0.05, 0.30, 0.90, 0.65],
+    "coord_axes": [0.05, 0.05, 0.48, 0.34],
+    "legend_axes": [0.55, 0.05, 0.40, 0.34],
+    "border_width": 1.5,
+    "title_fontsize": 14,
+    "title_pad": 10,
+    "panel_title_fontsize": 9,
+    "coord_fontsize": 8,
+    "legend_fontsize": 8,
+    "legend_symbol_fontsize": 9,
+}
+
+# --- VERİTABANI ---
+LEJANTLAR = [
+    {"kod": "bt", "ad": "Bitkisel Toprak", "zemin": "#F2F3F4", "sembol": "#000000", "desen": "ot"},
+    {"kod": "kl", "ad": "Kil", "zemin": "#FFFFFF", "sembol": "#BDBDBD", "desen": "kesikli"},
+    {"kod": "s", "ad": "Silt", "zemin": "#E5E7E9", "sembol": "#808080", "desen": "noktali_kesikli"},
+    {"kod": "kit", "ad": "Kiltaşı", "zemin": "#D7DBDD", "sembol": "#505050", "desen": "kesikli"}, 
+    {"kod": "k", "ad": "Kum", "zemin": "#FFFFFF", "sembol": "#FFD700", "desen": "nokta"},
+    {"kod": "c", "ad": "Çakıl", "zemin": "#FFFFFF", "sembol": "#FFC300", "desen": "cakil_daire"},
+    {"kod": "mlz", "ad": "Moloz", "zemin": "#F7F7F7", "sembol": "#555555", "desen": "moloz_parca"},
+    {"kod": "kt", "ad": "Kumtaşı", "zemin": "#F5CBA7", "sembol": "#D2691E", "desen": "kumtasi_yatay"},
+    {"kod": "ct", "ad": "Çakıltaşı", "zemin": "#EDBB99", "sembol": "#A04000", "desen": "cakil_oval_cizgili"},
+    {"kod": "tanimsiz", "ad": "Tanımsız Birim", "zemin": "#FFFFFF", "sembol": "#000000", "desen": ""} 
+]
+
+KELIME_HARITASI = {
+    "toprak": "bt", "topragi": "bt", "nebati": "bt", "bitkisel": "bt",
+    "kil": "kl", "killi": "kl", "silt": "s", "siltli": "s",
+    "kiltasi": "kit", "kum": "k", "kumlu": "k",
+    "cakil": "c", "cakilli": "c",
+    "moloz": "mlz", "molozlu": "mlz",
+    "kumtasi": "kt",
+    "cakiltasi": "ct", "konglomera": "ct", "bres": "ct"
+}

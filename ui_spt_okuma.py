@@ -1,0 +1,1793 @@
+import datetime
+import os
+import threading
+import tkinter as tk
+from tkinter import Toplevel, filedialog, messagebox, ttk
+
+from sabitler import *
+from spt_okuma_motoru import (
+    SPTImportSonucu,
+    SPTKaydi,
+    SPT_AYARLAR_PATH,
+    excelden_spt_oku,
+    fotograflardan_spt_oku,
+    kayit_normalize_et,
+    n30_hesapla,
+    spt_gecmis_kaydet,
+    spt_gecmisi_oku,
+    spt_kaynak_raporu_kaydet,
+    spt_kirp_kaydet,
+    spt_ogrenme_kaydet,
+    spt_ayarlarini_kaydet,
+    spt_ayarlarini_yukle,
+    normalize_sondaj_no,
+    yapay_zeka_ile_spt_oku,
+)
+from workbook_motoru import yeni_sondaj_sablonu
+from yardimcilar import safe_float
+
+
+class SPTOkumaMixin:
+    def spt_excel_iceri_al(self):
+        self.spt_okuma_merkezi_ac(baslat="excel")
+
+    def spt_fotograf_oku(self):
+        self.spt_okuma_merkezi_ac(baslat="foto")
+
+    def spt_aktarma_onizleme_ac(self, path, sonuc):
+        self.spt_okuma_merkezi_ac(initial_source=path, initial_sonuc=sonuc)
+
+    def _spt_default_sondaj_no(self):
+        sondajlar = self.veri.get("sondaj", [])
+        return next((s.get("no") for s in sondajlar if s.get("no")), "SK-1")
+
+    def _spt_initial_dir(self):
+        spt_klasor = r"C:\Users\Bugra Senel\Desktop\SPT Okuma"
+        return spt_klasor if os.path.isdir(spt_klasor) else os.getcwd()
+
+    def spt_okuma_merkezi_ac(self, baslat=None, initial_source=None, initial_sonuc=None):
+        self.sondaj_verilerini_kaydet(silent=True)
+        try:
+            from tkinterdnd2 import TkinterDnD
+            win = TkinterDnD.Toplevel(self.root)
+        except Exception:
+            win = Toplevel(self.root)
+        self.pencere_hazirla(win, "SPT Okuma Merkezi", "1360x840", (1080, 700), modal=False)
+
+        records = []
+        tree_items = {}
+        selected_item = {"id": None}
+        preview_image = {"ref": None}
+        import_warnings = []
+        image_exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+        main_queue_paths = []
+        main_queue_recursive_var = tk.BooleanVar(value=True)
+        main_queue_status_var = tk.StringVar(value="Kuyruk boş. Fotoğraf veya klasörü bu ekrana sürükleyebilirsiniz.")
+        main_dnd_status_var = tk.StringVar(value="")
+        main_queue_buttons = {"start": None, "stop": None}
+        main_read_state = {
+            "active": False,
+            "stop_event": None,
+            "total": 0,
+            "done": 0,
+            "added": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        sondaj_nolari = [s.get("no") for s in self.veri.get("sondaj", []) if s.get("no")]
+        if not sondaj_nolari:
+            sondaj_nolari = ["SK-1"]
+        valid_sondaj_nolari = {normalize_sondaj_no(no) for no in sondaj_nolari}
+        target_var = tk.StringVar(value=self._spt_default_sondaj_no())
+        filter_var = tk.StringVar(value="Tümü")
+        status_var = tk.StringVar(value="SPT Okuma Merkezi hazır.")
+        update_same_var = tk.BooleanVar(value=True)
+        clear_target_var = tk.BooleanVar(value=False)
+        project_settings = self.veri.setdefault("ayarlar", {})
+        auto_pro_var = tk.BooleanVar(value=str(project_settings.get("spt_auto_pro", "1")) != "0")
+
+        def project_spt_settings():
+            ayarlar = self.veri.setdefault("ayarlar", {})
+            return {
+                "guven_esigi": safe_float(ayarlar.get("spt_guven_esigi", "90")) or 90,
+                "auto_pro": bool(auto_pro_var.get()),
+            }
+
+        def save_auto_pro_setting():
+            self.veri.setdefault("ayarlar", {})["spt_auto_pro"] = "1" if auto_pro_var.get() else "0"
+            status_var.set("Otomatik Pro açık." if auto_pro_var.get() else "Otomatik Pro kapalı.")
+
+        header = tk.Frame(win, bg="#FFFFFF", padx=12, pady=10)
+        header.pack(fill="x")
+        tk.Label(header, text="SPT Okuma Merkezi", bg="#FFFFFF", fg=COLOR_PRIMARY, font=("Segoe UI", 15, "bold")).pack(side="left")
+        tk.Label(header, textvariable=status_var, bg="#FFFFFF", fg="#555555", font=("Segoe UI", 9)).pack(side="left", padx=14)
+
+        toolbar = ttk.Frame(win, padding=(8, 8))
+        toolbar.pack(fill="x")
+        source_group = ttk.LabelFrame(toolbar, text="Kaynak", padding=(5, 3))
+        target_group = ttk.LabelFrame(toolbar, text="Aktarım", padding=(5, 3))
+        filter_group = ttk.LabelFrame(toolbar, text="Görünüm", padding=(5, 3))
+        pro_group = ttk.LabelFrame(toolbar, text="Pro", padding=(5, 3))
+        source_group.pack(side="left", padx=3)
+        target_group.pack(side="left", padx=3)
+        filter_group.pack(side="left", padx=3)
+        pro_group.pack(side="left", padx=3)
+
+        queue_bar = ttk.Frame(win, padding=(8, 0, 8, 6))
+        queue_bar.pack(fill="x")
+
+        bottom = ttk.Frame(win, padding=8)
+        bottom.pack(side="bottom", fill="x")
+
+        main = ttk.Panedwindow(win, orient="horizontal")
+        main.pack(side="top", fill="both", expand=True, padx=8, pady=(0, 8))
+        left = ttk.Frame(main)
+        right = ttk.Frame(main)
+        main.add(left, weight=5)
+        main.add(right, weight=4)
+
+        table_frame = ttk.Frame(left)
+        table_frame.pack(fill="both", expand=True)
+        columns = ("al", "sondaj", "der", "v15", "v30", "v45", "n30", "guven", "durum", "kaynak")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse", height=20)
+        tree_scroll_y = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+        tree_scroll_x = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+        tree_scroll_y.pack(side="right", fill="y")
+        tree_scroll_x.pack(side="bottom", fill="x")
+        tree.pack(side="left", fill="both", expand=True)
+
+        headings = [
+            ("al", "Al", 42), ("sondaj", "Sondaj", 90), ("der", "Derinlik", 78),
+            ("v15", "15", 55), ("v30", "30", 55), ("v45", "45", 55),
+            ("n30", "N30", 60), ("guven", "Güven", 65), ("durum", "Durum", 210),
+            ("kaynak", "Kaynak", 220),
+        ]
+        for key, label, width in headings:
+            tree.heading(key, text=label)
+            tree.column(key, width=width, minwidth=42, stretch=key in ("durum", "kaynak"))
+        tree.tag_configure("ok", background="#EAFAF1")
+        tree.tag_configure("warning", background="#FCF3CF")
+        tree.tag_configure("error", background="#FADBD8")
+        tree.tag_configure("disabled", foreground="#888888")
+        tree.tag_configure("queued", background="#EBF5FB")
+        tree.tag_configure("reading", background="#D6EAF8")
+
+        summary = ttk.LabelFrame(right, text="Kalite Özeti", padding=8)
+        summary.pack(fill="x", pady=(0, 8))
+        summary_var = tk.StringVar(value="Henüz veri yok.")
+        ttk.Label(summary, textvariable=summary_var, justify="left", wraplength=360).pack(anchor="w", fill="x")
+
+        detail = ttk.LabelFrame(right, text="Seçili Satır", padding=8)
+        detail.pack(fill="x", pady=(0, 8))
+        detail_entries = {}
+        detail_specs = [
+            ("Sondaj", "sondaj_no", 0, 0), ("Derinlik", "derinlik", 0, 2),
+            ("15", "v15", 1, 0), ("30", "v30", 1, 2), ("45", "v45", 2, 0),
+            ("N30", "n30", 2, 2),
+        ]
+        for label, key, row, col in detail_specs:
+            ttk.Label(detail, text=label).grid(row=row, column=col, sticky="w", padx=(0, 4), pady=3)
+            ent = ttk.Entry(detail, width=14)
+            ent.grid(row=row, column=col + 1, sticky="ew", padx=(0, 8), pady=3)
+            detail_entries[key] = ent
+        detail.columnconfigure(1, weight=1)
+        detail.columnconfigure(3, weight=1)
+        preview = ttk.LabelFrame(right, text="Kaynak Önizleme", padding=8)
+        preview.pack(fill="both", expand=True, pady=(0, 8))
+        preview_canvas = tk.Canvas(preview, bg="#FFFFFF", highlightthickness=1, highlightbackground="#D5DBDB", width=560, height=390)
+        preview_canvas.pack(fill="both", expand=True)
+        preview_state = {"path": "", "message": "Satır seçildiğinde kaynak burada görünür.", "photo": None, "after_id": None}
+
+        issues = ttk.LabelFrame(right, text="Uyarılar", padding=8)
+        issues.pack(fill="x")
+        issue_list = tk.Listbox(issues, height=5)
+        issue_list.pack(fill="x")
+
+        def current_sondaj_depth(no):
+            for sondaj in self.veri.get("sondaj", []):
+                if sondaj.get("no") == no:
+                    return safe_float(sondaj.get("der"))
+            return 0
+
+        def n30_numeric(kayit):
+            if str(kayit.n30).strip().upper() == "R":
+                return None
+            value = safe_float(kayit.n30)
+            return value if value > 0 else None
+
+        def is_refu(kayit):
+            return str(kayit.n30).strip().upper() == "R" or any("50/" in str(v) or str(v).strip().upper() == "R" for v in (kayit.v15, kayit.v30, kayit.v45))
+
+        def context_issues():
+            issues = {}
+            by_no = {}
+            for order, record in enumerate(records):
+                if record.get("record_type") == "queue" or not record.get("include", True):
+                    continue
+                kayit = record["kayit"]
+                if not kayit.sondaj_no:
+                    continue
+                by_no.setdefault(kayit.sondaj_no, []).append((order, record))
+
+            for no, items in by_no.items():
+                last_depth = None
+                for order, record in items:
+                    depth = safe_float(record["kayit"].derinlik)
+                    if last_depth is not None and depth > 0 and depth < last_depth - 0.01:
+                        issues.setdefault(id(record), []).append("derinlik sırası bozuk")
+                    if depth > 0:
+                        last_depth = depth
+
+                sorted_items = sorted(items, key=lambda item: safe_float(item[1]["kayit"].derinlik))
+                prev_n30 = None
+                refu_seen = False
+                for order, record in sorted_items:
+                    kayit = record["kayit"]
+                    n30_val = n30_numeric(kayit)
+                    if is_refu(kayit):
+                        refu_seen = True
+                    elif refu_seen and n30_val is not None and n30_val < 50:
+                        issues.setdefault(id(record), []).append("refü sonrası düşük N30")
+                    if n30_val is not None:
+                        if n30_val > 80:
+                            issues.setdefault(id(record), []).append("N30 çok yüksek")
+                        elif n30_val < 2:
+                            issues.setdefault(id(record), []).append("N30 çok düşük")
+                        if prev_n30 is not None and abs(n30_val - prev_n30) >= 25:
+                            issues.setdefault(id(record), []).append("N30 ani sıçrama yapıyor")
+                        prev_n30 = n30_val
+            return issues
+
+        def record_quality(record, duplicate=False, context_messages=None):
+            if record.get("record_type") == "queue":
+                status = record.get("queue_status", "ready")
+                message = record.get("queue_message") or "Okumaya hazır"
+                if status == "reading":
+                    return {"level": "reading", "message": message or "Okunuyor"}
+                if status == "error":
+                    return {"level": "error", "message": message or "Okunamadı"}
+                if status == "skipped":
+                    return {"level": "warning", "message": message or "Tekrar olduğu için atlandı"}
+                return {"level": "queued", "message": message}
+            kayit = record["kayit"]
+            settings = project_spt_settings()
+            guven = safe_float(kayit.guven)
+            messages = list(context_messages or [])
+            level = "warning" if messages else "ok"
+            if not record.get("include", True):
+                return {"level": "disabled", "message": "Aktarım dışı"}
+            if not kayit.sondaj_no:
+                messages.append("sondaj no eksik")
+                level = "error"
+            elif valid_sondaj_nolari and normalize_sondaj_no(kayit.sondaj_no) not in valid_sondaj_nolari:
+                messages.append("sondaj no projede yok")
+                if level != "error":
+                    level = "warning"
+            if not kayit.derinlik:
+                messages.append("derinlik eksik")
+                level = "error"
+            if not (kayit.v15 or kayit.v30 or kayit.v45 or kayit.n30):
+                messages.append("SPT değeri eksik")
+                level = "error"
+            if duplicate:
+                messages.append("aynı derinlik tekrar ediyor")
+                if level != "error":
+                    level = "warning"
+            max_depth = current_sondaj_depth(kayit.sondaj_no)
+            if max_depth and safe_float(kayit.derinlik) > max_depth + 0.01:
+                messages.append("sondaj derinliğini geçiyor")
+                if level != "error":
+                    level = "warning"
+            if guven and guven < settings["guven_esigi"]:
+                messages.append(f"düşük güven %{int(guven)}")
+                if level != "error":
+                    level = "warning"
+            if not kayit.n30:
+                messages.append("N30 boş")
+                if level != "error":
+                    level = "warning"
+            if kayit.uyari:
+                messages.append(kayit.uyari)
+                if "okunamadı" in kayit.uyari or "eksik" in kayit.uyari:
+                    level = "error"
+                elif level != "error":
+                    level = "warning"
+            return {"level": level, "message": ", ".join(dict.fromkeys(messages)) or "Hazır"}
+
+        def duplicate_keys():
+            counts = {}
+            for record in records:
+                kayit = record["kayit"]
+                if record.get("record_type") == "queue" or not record.get("include", True):
+                    continue
+                key = (kayit.sondaj_no.strip(), round(safe_float(kayit.derinlik), 2))
+                if key[0] and key[1] > 0:
+                    counts[key] = counts.get(key, 0) + 1
+            return {key for key, count in counts.items() if count > 1}
+
+        def visible_by_filter(record):
+            mode = filter_var.get()
+            quality = record.get("quality", {})
+            if mode == "Tümü":
+                return True
+            if mode == "Aktarılacak":
+                return record.get("include", True)
+            if mode == "Hatalı":
+                return quality.get("level") == "error"
+            if mode == "Uyarılı":
+                return quality.get("level") == "warning"
+            if mode == "Düşük Güven":
+                if record.get("record_type") == "queue":
+                    return False
+                return safe_float(record["kayit"].guven) and safe_float(record["kayit"].guven) < project_spt_settings()["guven_esigi"]
+            return True
+
+        def refresh_tree(keep_selection=True):
+            previous = selected_item["id"] if keep_selection else None
+            previous_record = tree_items.get(previous) if previous else None
+            tree.delete(*tree.get_children())
+            tree_items.clear()
+            duplicates = duplicate_keys()
+            ok = warn = err = included = queue_count = spt_count = 0
+            issue_list.delete(0, tk.END)
+            context_map = context_issues()
+            for idx, record in enumerate(records):
+                kayit = record["kayit"]
+                key = (kayit.sondaj_no.strip(), round(safe_float(kayit.derinlik), 2))
+                record["quality"] = record_quality(record, duplicate=key in duplicates, context_messages=context_map.get(id(record), []))
+                quality = record["quality"]
+                is_queue = record.get("record_type") == "queue"
+                if is_queue:
+                    queue_count += 1
+                else:
+                    spt_count += 1
+                if record.get("include", True) and not is_queue:
+                    included += 1
+                if quality["level"] == "error":
+                    err += 1
+                elif quality["level"] == "warning":
+                    warn += 1
+                elif quality["level"] == "ok":
+                    ok += 1
+                if quality["level"] in ("error", "warning"):
+                    issue_label = kayit.kaynak if is_queue else f"{kayit.sondaj_no or '-'} {kayit.derinlik or '-'}"
+                    issue_list.insert(tk.END, f"{issue_label}: {quality['message']}")
+                if not visible_by_filter(record):
+                    continue
+                tag = quality["level"]
+                if is_queue:
+                    row_values = (
+                        "",
+                        "Dosya",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        quality["message"],
+                        kayit.kaynak,
+                    )
+                else:
+                    row_values = (
+                        "✓" if record.get("include", True) else "",
+                        kayit.sondaj_no,
+                        kayit.derinlik,
+                        kayit.v15,
+                        kayit.v30,
+                        kayit.v45,
+                        kayit.n30,
+                        kayit.guven,
+                        quality["message"],
+                        kayit.kaynak,
+                    )
+                item_id = tree.insert(
+                    "",
+                    "end",
+                    values=row_values,
+                    tags=(tag,),
+                )
+                tree_items[item_id] = record
+                record["item_id"] = item_id
+                if previous_record is record:
+                    tree.selection_set(item_id)
+            for msg in import_warnings[-10:]:
+                issue_list.insert(tk.END, msg)
+            summary_var.set(f"SPT: {spt_count} | Kuyruk: {queue_count} | Aktarılacak: {included} | Hazır: {ok} | Uyarı: {warn} | Hata: {err}")
+            status_var.set(f"{spt_count} SPT satırı yüklendi. {included} satır aktarım için seçili.")
+
+        def load_detail(record):
+            kayit = record["kayit"] if record else None
+            for ent in detail_entries.values():
+                ent.delete(0, tk.END)
+            if not kayit:
+                draw_preview_message("Satır seçildiğinde kaynak burada görünür.")
+                return
+            values = {
+                "sondaj_no": kayit.sondaj_no,
+                "derinlik": kayit.derinlik,
+                "v15": kayit.v15,
+                "v30": kayit.v30,
+                "v45": kayit.v45,
+                "n30": kayit.n30,
+            }
+            for key, value in values.items():
+                detail_entries[key].insert(0, value)
+            show_preview(kayit)
+
+        def draw_preview_message(text):
+            preview_state["path"] = ""
+            preview_state["message"] = text
+            preview_state["photo"] = None
+            preview_image["ref"] = None
+            preview_canvas.delete("all")
+            w = max(240, preview_canvas.winfo_width())
+            h = max(180, preview_canvas.winfo_height())
+            preview_canvas.create_text(
+                w / 2,
+                h / 2,
+                text=text,
+                fill="#555555",
+                width=max(220, w - 40),
+                justify="center",
+                font=("Segoe UI", 10),
+            )
+
+        def draw_preview_image(path, fallback_text="Kaynak dosya bilgisi yok."):
+            preview_state["path"] = path or ""
+            preview_state["message"] = fallback_text
+            preview_state["photo"] = None
+            preview_image["ref"] = None
+            if not path or not os.path.exists(path):
+                draw_preview_message(fallback_text)
+                return
+            if os.path.splitext(path)[1].lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+                draw_preview_message(f"Kaynak dosya:\n{path}")
+                return
+            try:
+                from PIL import Image, ImageOps, ImageTk
+                image = Image.open(path)
+                try:
+                    image = ImageOps.exif_transpose(image)
+                except Exception:
+                    pass
+                image = image.convert("RGB")
+                preview_canvas.update_idletasks()
+                canvas_w = max(360, preview_canvas.winfo_width())
+                canvas_h = max(260, preview_canvas.winfo_height())
+                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+                image.thumbnail((canvas_w - 18, canvas_h - 18), resample)
+                tk_image = ImageTk.PhotoImage(image)
+                preview_state["photo"] = tk_image
+                preview_image["ref"] = tk_image
+                preview_canvas.delete("all")
+                preview_canvas.create_image(canvas_w / 2, canvas_h / 2, image=tk_image, anchor="center")
+            except Exception as exc:
+                draw_preview_message(f"Önizleme açılamadı:\n{exc}")
+
+        def schedule_preview_redraw(event=None):
+            if not preview_state.get("path"):
+                return
+            if preview_state.get("after_id"):
+                try:
+                    win.after_cancel(preview_state["after_id"])
+                except Exception:
+                    pass
+            preview_state["after_id"] = win.after(120, lambda: draw_preview_image(preview_state["path"], preview_state["message"]))
+
+        def show_preview(kayit):
+            path = kayit.kaynak_yolu
+            draw_preview_image(path, kayit.kaynak or "Kaynak dosya bilgisi yok.")
+
+        preview_canvas.bind("<Configure>", schedule_preview_redraw)
+        draw_preview_message("Satır seçildiğinde kaynak burada görünür.")
+
+        def selected_record():
+            selection = tree.selection()
+            if not selection:
+                return None
+            selected_item["id"] = selection[0]
+            return tree_items.get(selection[0])
+
+        def select_tree_record(record):
+            if not record:
+                return
+            item_id = record.get("item_id")
+            if not item_id or item_id not in tree_items:
+                refresh_tree(keep_selection=False)
+                item_id = record.get("item_id")
+            if item_id:
+                selected_item["id"] = item_id
+                tree.selection_set(item_id)
+                tree.focus(item_id)
+                tree.see(item_id)
+                load_detail(record)
+
+        def on_select(event=None):
+            load_detail(selected_record())
+
+        def toggle_selected(event=None):
+            record = selected_record()
+            if not record:
+                return "break"
+            if record.get("record_type") == "queue":
+                return "break"
+            record["include"] = not record.get("include", True)
+            refresh_tree()
+            load_detail(record)
+            return "break"
+
+        def update_selected_from_form(silent=False):
+            record = selected_record()
+            if not record:
+                if not silent:
+                    messagebox.showwarning("SPT Merkezi", "Önce bir satır seçin.")
+                return None
+            if record.get("record_type") == "queue":
+                return None
+            old = record["kayit"]
+            kayit = kayit_normalize_et({
+                "sondaj_no": detail_entries["sondaj_no"].get(),
+                "derinlik": detail_entries["derinlik"].get(),
+                "v15": detail_entries["v15"].get(),
+                "v30": detail_entries["v30"].get(),
+                "v45": detail_entries["v45"].get(),
+                "n30": detail_entries["n30"].get(),
+                "guven": old.guven,
+                "kaynak": old.kaynak,
+                "kaynak_yolu": old.kaynak_yolu,
+            }, target_var.get())
+            kayit.sondaj_no = normalize_sondaj_no(kayit.sondaj_no, target_var.get())
+            record["kayit"] = kayit
+            record["include"] = True
+            spt_gecmis_kaydet("duzeltildi", kayit, {"onceki": old.to_dict()})
+            refresh_tree()
+            load_detail(record)
+            return kayit
+
+        def n30_selected():
+            record = selected_record()
+            if not record:
+                return
+            if record.get("record_type") == "queue":
+                return
+            entries = detail_entries
+            calculated = n30_hesapla(entries["v30"].get(), entries["v45"].get(), "")
+            if calculated:
+                entries["n30"].delete(0, tk.END)
+                entries["n30"].insert(0, calculated)
+                update_selected_from_form(silent=True)
+
+        def n30_all():
+            for record in records:
+                if record.get("record_type") == "queue":
+                    continue
+                kayit = record["kayit"]
+                calculated = n30_hesapla(kayit.v30, kayit.v45, kayit.n30 if kayit.n30 == "R" else "")
+                if calculated:
+                    kayit.n30 = calculated
+            refresh_tree()
+            load_detail(selected_record())
+
+        def delete_selected_record(event=None):
+            record = selected_record()
+            if not record:
+                return "break"
+            kayit = record["kayit"]
+            if record in records:
+                records.remove(record)
+                if record.get("record_type") == "queue":
+                    remove_from_main_queue(record.get("queue_path", kayit.kaynak_yolu))
+                else:
+                    spt_gecmis_kaydet("silindi", kayit, {"kaynak": kayit.kaynak})
+            selected_item["id"] = None
+            refresh_tree(keep_selection=False)
+            load_detail(None)
+            status_var.set("Seçili SPT okuması listeden silindi.")
+            return "break"
+
+        def reread_selected_with_pro():
+            kayit = update_selected_from_form(silent=True)
+            record = selected_record()
+            if not record or not kayit:
+                messagebox.showwarning("Gemini Pro Tekrar Oku", "Önce tekrar okutulacak satırı seçin.")
+                return
+            source_path = kayit.kaynak_yolu
+            if not source_path or not os.path.exists(source_path):
+                messagebox.showwarning("Gemini Pro Tekrar Oku", "Bu satırda tekrar okutulacak kaynak fotoğraf yok.")
+                return
+            if os.path.splitext(source_path)[1].lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+                messagebox.showwarning("Gemini Pro Tekrar Oku", "Tekrar okuma için kaynak bir fotoğraf olmalı.")
+                return
+            ayarlar = spt_ayarlarini_yukle()
+            if not ayarlar.get("gemini_api_key"):
+                messagebox.showwarning("Gemini Pro Tekrar Oku", "Gemini API anahtarı bulunamadı. SPT Merkezi > Ayarlar kısmını kontrol edin.")
+                return
+            progress_win = Toplevel(win)
+            self.pencere_hazirla(progress_win, "Gemini Pro Tekrar Oku", "460x150", (420, 130), modal=False)
+            ttk.Label(progress_win, text="Seçili satır Gemini Pro ile tekrar okunuyor...", padding=12).pack(fill="x")
+            progress = ttk.Progressbar(progress_win, mode="indeterminate")
+            progress.pack(fill="x", padx=12, pady=8)
+            progress.start(12)
+
+            def finish(raw_items=None, hata=None):
+                if progress_win.winfo_exists():
+                    progress_win.destroy()
+                if hata:
+                    messagebox.showerror("Gemini Pro Tekrar Oku", f"Tekrar okuma tamamlanamadı:\n{hata}")
+                    return
+                normalized = []
+                for item in raw_items or []:
+                    item = dict(item)
+                    item["kaynak"] = kayit.kaynak or os.path.basename(source_path)
+                    item["kaynak_yolu"] = source_path
+                    normalized.append(kayit_normalize_et(item, kayit.sondaj_no or target_var.get()))
+                if not normalized:
+                    messagebox.showwarning("Gemini Pro Tekrar Oku", "Gemini Pro bu fotoğraftan SPT satırı okuyamadı.")
+                    return
+                old_depth = safe_float(kayit.derinlik)
+                if old_depth > 0:
+                    chosen = min(normalized, key=lambda item: abs(safe_float(item.derinlik) - old_depth) if safe_float(item.derinlik) > 0 else 9999)
+                else:
+                    chosen = normalized[0]
+                chosen.sondaj_no = chosen.sondaj_no or kayit.sondaj_no or target_var.get()
+                chosen.sondaj_no = normalize_sondaj_no(chosen.sondaj_no, target_var.get())
+                chosen.kaynak = kayit.kaynak or chosen.kaynak
+                chosen.kaynak_yolu = source_path
+                previous = kayit.to_dict()
+                record["kayit"] = chosen
+                record["include"] = True
+                spt_gecmis_kaydet("gemini_pro_tekrar_okundu", chosen, {"onceki": previous})
+                refresh_tree()
+                load_detail(record)
+                status_var.set("Seçili satır Gemini Pro ile tekrar okundu.")
+
+            def worker():
+                try:
+                    raw_items = yapay_zeka_ile_spt_oku(source_path, ayarlar=ayarlar, motor_zorla="gemini_pro", timeout=60)
+                    self.root.after(0, lambda: finish(raw_items=raw_items))
+                except Exception as exc:
+                    self.root.after(0, lambda: finish(hata=exc))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def fill_target_for_selected():
+            hedef = target_var.get().strip()
+            if not hedef:
+                return
+            for record in records:
+                if record.get("record_type") != "queue" and record.get("include", True):
+                    record["kayit"].sondaj_no = normalize_sondaj_no(hedef, hedef)
+            refresh_tree()
+            load_detail(selected_record())
+
+        def teach_selected():
+            record = selected_record()
+            if not record:
+                messagebox.showwarning("Doğrusunu Öğret", "Önce düzeltilmiş bir satır seçin.")
+                return
+            kayit = update_selected_from_form(silent=True)
+            if not kayit:
+                return
+            corrected = {
+                "sondaj_no": kayit.sondaj_no,
+                "derinlik": kayit.derinlik,
+                "spt": "-".join([v for v in (kayit.v15, kayit.v30, kayit.v45) if v]),
+                "n30": kayit.n30,
+            }
+            try:
+                spt_ogrenme_kaydet(kayit, corrected, "RaporPro SPT Merkezi")
+                self.set_status("SPT doğrusu öğrenme havuzuna kaydedildi.", level="success")
+                status_var.set("Doğrusu öğrenme havuzuna kaydedildi.")
+            except Exception as exc:
+                messagebox.showerror("Doğrusunu Öğret", f"Öğrenme kaydı oluşturulamadı:\n{exc}")
+
+        def show_history():
+            history = spt_gecmisi_oku(limit=500)
+            popup = Toplevel(win)
+            self.pencere_hazirla(popup, "SPT Okuma Geçmişi", "960x520", (780, 420), modal=False)
+            cols = ("tarih", "islem", "sondaj", "der", "spt", "n30", "guven", "kaynak")
+            hist_tree = ttk.Treeview(popup, columns=cols, show="headings")
+            scroll = ttk.Scrollbar(popup, orient="vertical", command=hist_tree.yview)
+            hist_tree.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+            hist_tree.pack(fill="both", expand=True, padx=8, pady=8)
+            for key, label, width in [
+                ("tarih", "Tarih", 145), ("islem", "İşlem", 95), ("sondaj", "Sondaj", 85),
+                ("der", "Derinlik", 80), ("spt", "SPT", 105), ("n30", "N30", 70),
+                ("guven", "Güven", 70), ("kaynak", "Kaynak", 260),
+            ]:
+                hist_tree.heading(key, text=label)
+                hist_tree.column(key, width=width, stretch=key == "kaynak")
+            for item in reversed(history):
+                kayit = item.get("kayit", {}) or {}
+                hist_tree.insert("", "end", values=(
+                    item.get("tarih", ""),
+                    item.get("islem", ""),
+                    kayit.get("sondaj_no", ""),
+                    kayit.get("derinlik", ""),
+                    "-".join([str(kayit.get(k, "")) for k in ("v15", "v30", "v45") if str(kayit.get(k, "")).strip()]),
+                    kayit.get("n30", ""),
+                    kayit.get("guven", ""),
+                    kayit.get("kaynak", ""),
+                ))
+
+        def export_source_report():
+            kayitlar = [record["kayit"] for record in records if record.get("record_type") != "queue" and record.get("include", True)]
+            if not kayitlar:
+                messagebox.showwarning("SPT Kaynak Raporu", "Rapora eklenecek seçili SPT satırı yok.")
+                return
+            path = filedialog.asksaveasfilename(
+                title="SPT Kaynak Raporu Kaydet",
+                defaultextension=".xlsx",
+                filetypes=[("Excel", "*.xlsx")],
+                initialfile="SPT_Kaynak_Raporu.xlsx",
+            )
+            if not path:
+                return
+            try:
+                spt_kaynak_raporu_kaydet(kayitlar, path)
+                self.set_status(f"SPT kaynak raporu kaydedildi: {os.path.basename(path)}", level="success")
+            except Exception as exc:
+                messagebox.showerror("SPT Kaynak Raporu", f"Rapor kaydedilemedi:\n{exc}")
+
+        def source_unique_key(value):
+            raw = str(value or "").strip()
+            if not raw:
+                return ""
+            try:
+                if os.path.exists(raw):
+                    return os.path.normcase(os.path.realpath(os.path.abspath(raw)))
+            except Exception:
+                pass
+            return os.path.normcase(raw)
+
+        def queue_record_for_path(path):
+            key = source_unique_key(path)
+            for record in records:
+                if record.get("record_type") == "queue" and source_unique_key(record.get("queue_path", "")) == key:
+                    return record
+            return None
+
+        def ensure_queue_record(path, status="ready", message=None):
+            record = queue_record_for_path(path)
+            if record is None:
+                name = os.path.basename(path)
+                record = {
+                    "include": False,
+                    "kayit": SPTKaydi(kaynak=name, kaynak_yolu=path),
+                    "source": name,
+                    "record_type": "queue",
+                    "queue_path": path,
+                    "queue_status": status,
+                    "queue_message": message or "Okumaya hazır",
+                }
+                records.append(record)
+            else:
+                record["queue_status"] = status
+                record["queue_message"] = message or record.get("queue_message") or "Okumaya hazır"
+            return record
+
+        def set_queue_record_status(path, status, message=None, refresh=True):
+            record = ensure_queue_record(path, status=status, message=message)
+            record["queue_status"] = status
+            if message:
+                record["queue_message"] = message
+            if refresh:
+                refresh_tree()
+            return record
+
+        def remove_queue_record(path, refresh=False):
+            record = queue_record_for_path(path)
+            if record in records:
+                records.remove(record)
+                if selected_item.get("id") and tree_items.get(selected_item["id"]) is record:
+                    selected_item["id"] = None
+            if refresh:
+                refresh_tree(keep_selection=False)
+
+        def clear_queue_records():
+            records[:] = [record for record in records if record.get("record_type") != "queue"]
+            selected_item["id"] = None
+            refresh_tree(keep_selection=False)
+
+        def collect_image_paths(sources, recursive=True):
+            found_paths = []
+            for source in sources or []:
+                if not source:
+                    continue
+                source = os.path.abspath(str(source))
+                if os.path.isdir(source):
+                    if recursive:
+                        for root_dir, _, files in os.walk(source):
+                            for name in files:
+                                path = os.path.join(root_dir, name)
+                                if os.path.splitext(path)[1].lower() in image_exts:
+                                    found_paths.append(path)
+                    else:
+                        try:
+                            names = os.listdir(source)
+                        except Exception:
+                            names = []
+                        for name in names:
+                            path = os.path.join(source, name)
+                            if os.path.isfile(path) and os.path.splitext(path)[1].lower() in image_exts:
+                                found_paths.append(path)
+                elif os.path.isfile(source) and os.path.splitext(source)[1].lower() in image_exts:
+                    found_paths.append(source)
+            return sorted(found_paths, key=lambda item: item.lower())
+
+        def refresh_main_queue_status(extra=None):
+            if main_read_state["active"]:
+                text = (
+                    f"Okunuyor: {main_read_state['done']}/{main_read_state['total']} dosya | "
+                    f"Eklenen satır: {main_read_state['added']} | "
+                    f"Tekrar: {main_read_state['skipped']} | "
+                    f"Okunamayan: {main_read_state['failed']}"
+                )
+            else:
+                text = f"Kuyruk: {len(main_queue_paths)} fotoğraf"
+                if not main_queue_paths:
+                    text += " | Fotoğraf veya klasörü bu ekrana sürükleyebilirsiniz."
+            if extra:
+                text += f" | {extra}"
+            main_queue_status_var.set(text)
+            start_btn = main_queue_buttons.get("start")
+            if start_btn:
+                start_btn.configure(state=("disabled" if main_read_state["active"] or not main_queue_paths else "normal"))
+            stop_btn = main_queue_buttons.get("stop")
+            if stop_btn:
+                stop_btn.configure(state=("normal" if main_read_state["active"] else "disabled"))
+
+        def remove_from_main_queue(path):
+            key = source_unique_key(path)
+            main_queue_paths[:] = [item for item in main_queue_paths if source_unique_key(item) != key]
+
+        def add_to_main_photo_queue(sources):
+            found_paths = collect_image_paths(sources, recursive=main_queue_recursive_var.get())
+            existing = {source_unique_key(path) for path in main_queue_paths}
+            existing.update(
+                source_unique_key(record.get("queue_path", ""))
+                for record in records
+                if record.get("record_type") == "queue"
+            )
+            added = 0
+            skipped_duplicate = 0
+            for path in found_paths:
+                key = source_unique_key(path)
+                if key in existing:
+                    skipped_duplicate += 1
+                    continue
+                main_queue_paths.append(os.path.abspath(path))
+                ensure_queue_record(os.path.abspath(path), status="ready", message="Okumaya hazır")
+                existing.add(key)
+                added += 1
+            main_queue_paths.sort(key=lambda item: item.lower())
+            if added:
+                refresh_tree()
+            if added:
+                status_var.set(f"SPT kuyruğuna {added} fotoğraf eklendi.")
+                refresh_main_queue_status(f"{added} yeni fotoğraf")
+            elif skipped_duplicate:
+                status_var.set("SPT kuyruğunda tekrar dosyalar atlandı.")
+                refresh_main_queue_status("tekrar dosyalar atlandı")
+            else:
+                status_var.set("Geçerli fotoğraf bulunamadı.")
+                refresh_main_queue_status("JPG, PNG, BMP veya WEBP ekleyin")
+            return added, skipped_duplicate, len(found_paths)
+
+        def add_main_photos():
+            paths = filedialog.askopenfilenames(
+                title="SPT Fotoğraflarını Kuyruğa Ekle",
+                initialdir=self._spt_initial_dir(),
+                filetypes=[("Resimler", "*.jpg *.jpeg *.png *.bmp *.webp *.JPG *.JPEG *.PNG"), ("Tüm Dosyalar", "*.*")],
+                parent=win,
+            )
+            if paths:
+                add_to_main_photo_queue(paths)
+
+        def add_main_folder():
+            folder = filedialog.askdirectory(title="SPT Fotoğraf Klasörü Seç", initialdir=self._spt_initial_dir(), parent=win)
+            if folder:
+                add_to_main_photo_queue([folder])
+
+        def clear_main_photo_queue():
+            if main_read_state["active"]:
+                messagebox.showwarning("SPT Fotoğraf", "Okuma devam ederken kuyruk temizlenemez.", parent=win)
+                return
+            main_queue_paths.clear()
+            clear_queue_records()
+            refresh_main_queue_status("kuyruk temizlendi")
+
+        def spt_unique_key(kayit, fallback_source=""):
+            source = getattr(kayit, "kaynak_yolu", "") or getattr(kayit, "kaynak", "") or fallback_source
+            return (
+                source_unique_key(source),
+                normalize_sondaj_no(getattr(kayit, "sondaj_no", ""), target_var.get()),
+                round(safe_float(getattr(kayit, "derinlik", "")), 2),
+                str(getattr(kayit, "v15", "") or "").strip(),
+                str(getattr(kayit, "v30", "") or "").strip(),
+                str(getattr(kayit, "v45", "") or "").strip(),
+                str(getattr(kayit, "n30", "") or "").strip(),
+            )
+
+        def spt_location_key(kayit, fallback_source=""):
+            return (
+                normalize_sondaj_no(getattr(kayit, "sondaj_no", ""), target_var.get()),
+                round(safe_float(getattr(kayit, "derinlik", "")), 2),
+            )
+
+        def add_result(sonuc, source_label, append=True):
+            if not append:
+                records.clear()
+                import_warnings.clear()
+            import_warnings.extend(sonuc.uyarilar or [])
+            existing_keys = {
+                spt_unique_key(record["kayit"], record.get("source", ""))
+                for record in records
+                if record.get("record_type") != "queue"
+            }
+            existing_locations = {
+                spt_location_key(record["kayit"], record.get("source", ""))
+                for record in records
+                if record.get("record_type") != "queue"
+            }
+            skipped_duplicates = 0
+            added_count = 0
+            for kayit in sonuc.kayitlar:
+                kayit.sondaj_no = normalize_sondaj_no(kayit.sondaj_no, target_var.get())
+                if not kayit.sondaj_no:
+                    kayit.sondaj_no = target_var.get().strip()
+                key = spt_unique_key(kayit, source_label)
+                loc_key = spt_location_key(kayit, source_label)
+                loc_is_valid = bool(loc_key[0] and loc_key[1] > 0)
+                if key in existing_keys or (loc_is_valid and loc_key in existing_locations):
+                    skipped_duplicates += 1
+                    continue
+                existing_keys.add(key)
+                if loc_is_valid:
+                    existing_locations.add(loc_key)
+                records.append({
+                    "include": bool(kayit.derinlik and (kayit.v15 or kayit.v30 or kayit.v45 or kayit.n30)),
+                    "kayit": kayit,
+                    "source": source_label,
+                })
+                added_count += 1
+                spt_gecmis_kaydet("okundu", kayit, {"kaynak": source_label, "aktarildi": False})
+            if skipped_duplicates:
+                import_warnings.append(f"{skipped_duplicates} tekrar SPT satırı aynı kuyu/derinlik olduğu için atlandı.")
+            refresh_tree(keep_selection=False)
+            if records:
+                first = next(iter(tree.get_children()), None)
+                if first:
+                    tree.selection_set(first)
+                    on_select()
+            return added_count, skipped_duplicates
+
+        def start_main_photo_queue():
+            if main_read_state["active"]:
+                messagebox.showinfo("SPT Fotoğraf", "Fotoğraf okuma zaten devam ediyor.", parent=win)
+                return
+            paths = []
+            seen = set()
+            for path in main_queue_paths:
+                key = source_unique_key(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                paths.append(path)
+            if len(paths) != len(main_queue_paths):
+                main_queue_paths[:] = paths
+                status_var.set("SPT fotoğraf kuyruğundaki tekrar dosyalar temizlendi.")
+            if not paths:
+                messagebox.showwarning("SPT Fotoğraf", "Başlatmak için önce fotoğraf ekleyin.", parent=win)
+                refresh_main_queue_status()
+                return
+
+            ayarlar = spt_ayarlarini_yukle()
+            settings = project_spt_settings()
+            target_no = target_var.get()
+            stop_event = threading.Event()
+            main_read_state.update({
+                "active": True,
+                "stop_event": stop_event,
+                "total": len(paths),
+                "done": 0,
+                "added": 0,
+                "skipped": 0,
+                "failed": 0,
+            })
+            for path in paths:
+                set_queue_record_status(path, "ready", "Okumaya hazır", refresh=False)
+            refresh_tree()
+            refresh_main_queue_status("başladı")
+            status_var.set(f"SPT fotoğraf okuma başladı: {len(paths)} dosya.")
+
+            def mark_current_file(path, index):
+                if not win.winfo_exists():
+                    return
+                record = set_queue_record_status(path, "reading", f"Okunuyor ({index}/{len(paths)})", refresh=True)
+                select_tree_record(record)
+                refresh_main_queue_status(f"{os.path.basename(path)} okunuyor")
+
+            def finish_file(path, sonuc=None, hata=None):
+                if not win.winfo_exists():
+                    return
+                name = os.path.basename(path)
+                main_read_state["done"] += 1
+                if hata:
+                    main_read_state["failed"] += 1
+                    import_warnings.append(f"{name}: okunamadı ({hata})")
+                    record = set_queue_record_status(path, "error", f"Okunamadı: {hata}", refresh=True)
+                    select_tree_record(record)
+                    refresh_main_queue_status(f"{name} okunamadı")
+                    status_var.set(f"SPT okuma: {main_read_state['done']}/{main_read_state['total']} dosya.")
+                    return
+
+                if not sonuc or not sonuc.kayitlar:
+                    main_read_state["failed"] += 1
+                    reason = "SPT verisi bulunamadı"
+                    if sonuc and sonuc.uyarilar:
+                        reason = str(sonuc.uyarilar[0])
+                    import_warnings.append(f"{name}: {reason}")
+                    record = set_queue_record_status(path, "error", reason, refresh=True)
+                    select_tree_record(record)
+                    refresh_main_queue_status(f"{name} okunamadı")
+                    status_var.set(f"SPT okuma: {main_read_state['done']}/{main_read_state['total']} dosya.")
+                    return
+
+                added_count, skipped_duplicates = add_result(sonuc, name, append=True)
+                if added_count:
+                    main_read_state["added"] += added_count
+                    remove_from_main_queue(path)
+                    remove_queue_record(path, refresh=True)
+                elif skipped_duplicates:
+                    main_read_state["skipped"] += skipped_duplicates
+                    remove_from_main_queue(path)
+                    import_warnings.append(f"{name}: okundu, aynı kuyu/derinlik zaten listede olduğu için yeni satır eklenmedi.")
+                    record = set_queue_record_status(path, "skipped", "Okundu, aynı kuyu/derinlik zaten listede", refresh=True)
+                    select_tree_record(record)
+                else:
+                    main_read_state["failed"] += 1
+                    import_warnings.append(f"{name}: okundu ancak aktarılacak SPT satırı oluşmadı.")
+                    record = set_queue_record_status(path, "error", "Okundu ancak aktarılacak SPT satırı oluşmadı", refresh=True)
+                    select_tree_record(record)
+                refresh_main_queue_status(f"{name} tamamlandı")
+                status_var.set(f"SPT okuma: {main_read_state['done']}/{main_read_state['total']} dosya.")
+
+            def finish_all(cancelled=False):
+                if not win.winfo_exists():
+                    return
+                main_read_state["active"] = False
+                main_read_state["stop_event"] = None
+                if cancelled:
+                    refresh_main_queue_status("durduruldu")
+                    status_var.set("SPT fotoğraf okuma durduruldu.")
+                    return
+                if main_read_state["failed"]:
+                    refresh_main_queue_status(f"{main_read_state['failed']} dosya kuyrukta kaldı")
+                    status_var.set(
+                        f"SPT okuma tamamlandı. {main_read_state['failed']} dosyada sonuç bulunamadı; kuyrukta kaldı."
+                    )
+                    messagebox.showwarning(
+                        "SPT Fotoğraf",
+                        f"Okuma tamamlandı; {main_read_state['failed']} dosyada SPT satırı bulunamadı veya okunamadı.\n"
+                        "Bu dosyalar kuyrukta bırakıldı, isterseniz Pro ile tekrar deneyebilirsiniz.",
+                        parent=win,
+                    )
+                else:
+                    refresh_main_queue_status("okuma tamamlandı")
+                    status_var.set("SPT fotoğraf okuma tamamlandı.")
+
+            def make_progress_callback(file_index):
+                def progress_callback(done, total, name, state):
+                    def update():
+                        if not win.winfo_exists():
+                            return
+                        status_var.set(f"SPT okuma: {file_index}/{len(paths)} | {name} | {state}")
+                    self.root.after(0, update)
+                return progress_callback
+
+            def worker():
+                cancelled = False
+                for idx, path in enumerate(paths, start=1):
+                    if stop_event.is_set():
+                        cancelled = True
+                        break
+                    self.root.after(0, lambda path=path, idx=idx: mark_current_file(path, idx))
+                    try:
+                        sonuc = fotograflardan_spt_oku(
+                            [path],
+                            default_sondaj_no=target_no,
+                            ayarlar=ayarlar,
+                            progress_callback=make_progress_callback(idx),
+                            stop_event=stop_event,
+                            auto_pro=settings["auto_pro"],
+                        )
+                    except Exception as exc:
+                        self.root.after(0, lambda path=path, exc=exc: finish_file(path, hata=exc))
+                        continue
+                    if stop_event.is_set() and not sonuc.kayitlar:
+                        cancelled = True
+                        break
+                    self.root.after(0, lambda path=path, sonuc=sonuc: finish_file(path, sonuc=sonuc))
+                self.root.after(0, lambda cancelled=cancelled or stop_event.is_set(): finish_all(cancelled))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def stop_main_photo_queue():
+            stop_event = main_read_state.get("stop_event")
+            if stop_event:
+                stop_event.set()
+                refresh_main_queue_status("durduruluyor")
+                status_var.set("SPT fotoğraf okuma durduruluyor...")
+
+        def parse_main_drop_paths(data):
+            try:
+                return [item for item in win.tk.splitlist(data) if item]
+            except Exception:
+                return [item for item in str(data or "").split() if item]
+
+        def on_main_drop(event):
+            added, skipped_duplicate, found = add_to_main_photo_queue(parse_main_drop_paths(getattr(event, "data", "")))
+            if added:
+                status_var.set(f"Sürükle-bırak ile {added} fotoğraf eklendi.")
+            elif skipped_duplicate:
+                status_var.set("Sürükle-bırak: tekrar dosyalar atlandı.")
+            elif not found:
+                status_var.set("Sürükle-bırak: geçerli fotoğraf bulunamadı.")
+            return "break"
+
+        def enable_main_drag_drop():
+            try:
+                from tkinterdnd2 import DND_FILES
+            except Exception:
+                main_dnd_status_var.set("Sürükle-bırak için tkinterdnd2 paketi gerekir.")
+                return False
+            enabled = False
+            for target in (win, queue_bar, left, table_frame, tree):
+                try:
+                    target.drop_target_register(DND_FILES)
+                    target.dnd_bind("<<Drop>>", on_main_drop)
+                    enabled = True
+                except Exception:
+                    continue
+            if enabled:
+                main_dnd_status_var.set("Dosyaları buraya bırakabilirsiniz.")
+            else:
+                main_dnd_status_var.set("Sürükle-bırak bu pencerede etkinleşmedi.")
+            return enabled
+
+        def import_excel():
+            path = filedialog.askopenfilename(
+                title="SPT Okuma Excel Sonucunu Al",
+                initialdir=self._spt_initial_dir(),
+                filetypes=[("Excel", "*.xlsx *.xlsm"), ("Tüm Dosyalar", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                sonuc = excelden_spt_oku(path, default_sondaj_no=target_var.get())
+            except Exception as exc:
+                messagebox.showerror("SPT Excel", f"Excel dosyası okunamadı:\n{exc}")
+                return
+            if not sonuc.kayitlar:
+                messagebox.showwarning("SPT Excel", "Dosyada aktarılacak SPT satırı bulunamadı.")
+                return
+            add_result(sonuc, os.path.basename(path), append=True)
+
+        def start_photo_reading(paths):
+            paths = list(paths or [])
+            unique_paths = []
+            seen_paths = set()
+            for path in paths:
+                key = source_unique_key(path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                unique_paths.append(path)
+            if len(unique_paths) != len(paths):
+                status_var.set(f"SPT okuma öncesi {len(paths) - len(unique_paths)} tekrar fotoğraf yolu temizlendi.")
+            paths = unique_paths
+            if not paths:
+                messagebox.showwarning("SPT Fotoğraf", "Okunacak fotoğraf seçilmedi.")
+                return
+            ayarlar = spt_ayarlarini_yukle()
+            stop_event = threading.Event()
+            progress_win = Toplevel(win)
+            self.pencere_hazirla(progress_win, "SPT Fotoğraf Okuma", "500x170", (460, 150), modal=False)
+            progress_text = tk.StringVar(value=f"{len(paths)} fotoğraf sıraya alındı. Motor: {ayarlar.get('aktif_motor', '-')}")
+            ttk.Label(progress_win, text="Fotoğraflar okunuyor...", font=FONT_BOLD).pack(anchor="w", padx=12, pady=(12, 4))
+            ttk.Label(progress_win, textvariable=progress_text, wraplength=460).pack(anchor="w", padx=12, fill="x")
+            progress = ttk.Progressbar(progress_win, mode="determinate", maximum=len(paths))
+            progress.pack(fill="x", padx=12, pady=8)
+            tk.Button(progress_win, text="İptal", command=stop_event.set, bg=COLOR_DANGER, fg="white", font=FONT_BOLD).pack(side="right", padx=12, pady=8)
+
+            def progress_callback(done, total, name, state):
+                def update():
+                    if not progress_win.winfo_exists():
+                        return
+                    progress["maximum"] = max(1, total)
+                    progress["value"] = done
+                    progress_text.set(f"{done}/{total} | {name} | {state}")
+                    status_var.set(progress_text.get())
+                self.root.after(0, update)
+
+            def finish(sonuc=None, hata=None):
+                if progress_win.winfo_exists():
+                    progress_win.destroy()
+                if hata:
+                    messagebox.showerror("SPT Fotoğraf", f"Fotoğraf okuma tamamlanamadı:\n{hata}")
+                    return
+                if not sonuc or not sonuc.kayitlar:
+                    msg = "Fotoğraflardan aktarılacak SPT satırı bulunamadı."
+                    if sonuc and sonuc.uyarilar:
+                        msg += "\n\n" + "\n".join(sonuc.uyarilar[:10])
+                    messagebox.showwarning("SPT Fotoğraf", msg)
+                    return
+                add_result(sonuc, "Fotoğraf Okuma", append=True)
+
+            def worker():
+                try:
+                    settings = project_spt_settings()
+                    sonuc = fotograflardan_spt_oku(
+                        paths,
+                        default_sondaj_no=target_var.get(),
+                        ayarlar=ayarlar,
+                        progress_callback=progress_callback,
+                        stop_event=stop_event,
+                        auto_pro=settings["auto_pro"],
+                    )
+                    self.root.after(0, lambda: finish(sonuc=sonuc))
+                except Exception as exc:
+                    self.root.after(0, lambda: finish(hata=exc))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def import_photos():
+            image_exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+            queued_paths = []
+            try:
+                from tkinterdnd2 import TkinterDnD
+                queue_win = TkinterDnD.Toplevel(win)
+            except Exception:
+                queue_win = Toplevel(win)
+            self.pencere_hazirla(queue_win, "SPT Fotoğraf Kuyruğu", "820x560", (700, 460), modal=False)
+
+            info_var = tk.StringVar(value="Fotoğraf veya klasör ekleyin. Okuma Başlat düğmesine basınca başlayacak.")
+            recursive_var = tk.BooleanVar(value=True)
+            dnd_var = tk.StringVar(value="")
+
+            top = ttk.Frame(queue_win, padding=8)
+            top.pack(fill="x")
+            ttk.Label(top, text="SPT Fotoğraf Kuyruğu", font=FONT_BOLD).pack(side="left", padx=(0, 12))
+            ttk.Label(top, textvariable=info_var, foreground="#555555").pack(side="left", fill="x", expand=True)
+
+            body = ttk.Frame(queue_win, padding=(8, 0, 8, 8))
+            body.pack(fill="both", expand=True)
+            drop_hint = ttk.Label(body, textvariable=dnd_var, foreground="#2874A6")
+            drop_hint.pack(anchor="w", pady=(0, 4))
+            list_frame = ttk.Frame(body)
+            list_frame.pack(fill="both", expand=True)
+            listbox = tk.Listbox(list_frame, selectmode="extended")
+            scroll_y = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
+            scroll_x = ttk.Scrollbar(list_frame, orient="horizontal", command=listbox.xview)
+            listbox.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+            scroll_y.pack(side="right", fill="y")
+            scroll_x.pack(side="bottom", fill="x")
+            listbox.pack(side="left", fill="both", expand=True)
+
+            def refresh_queue():
+                listbox.delete(0, tk.END)
+                for idx, path in enumerate(queued_paths, start=1):
+                    listbox.insert(tk.END, f"{idx}. {path}")
+                info_var.set(f"{len(queued_paths)} fotoğraf kuyrukta. Başlatılana kadar okuma yapılmayacak.")
+
+            def queue_key(path):
+                try:
+                    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+                except Exception:
+                    return os.path.normcase(os.path.abspath(str(path)))
+
+            def collect_images(source):
+                if not source:
+                    return []
+                source = os.path.abspath(str(source))
+                found = []
+                if os.path.isdir(source):
+                    if recursive_var.get():
+                        for root_dir, _, files in os.walk(source):
+                            for name in files:
+                                path = os.path.join(root_dir, name)
+                                if os.path.splitext(path)[1].lower() in image_exts:
+                                    found.append(path)
+                    else:
+                        for name in os.listdir(source):
+                            path = os.path.join(source, name)
+                            if os.path.isfile(path) and os.path.splitext(path)[1].lower() in image_exts:
+                                found.append(path)
+                elif os.path.isfile(source) and os.path.splitext(source)[1].lower() in image_exts:
+                    found.append(source)
+                return sorted(found, key=lambda item: item.lower())
+
+            def add_paths(paths):
+                existing = {queue_key(path) for path in queued_paths}
+                added = 0
+                skipped_duplicate = 0
+                skipped_invalid = 0
+                for source in paths:
+                    found = collect_images(source)
+                    if not found:
+                        skipped_invalid += 1
+                    for abs_path in found:
+                        key = queue_key(abs_path)
+                        if key in existing:
+                            skipped_duplicate += 1
+                            continue
+                        queued_paths.append(os.path.abspath(abs_path))
+                        existing.add(key)
+                        added += 1
+                queued_paths.sort(key=lambda item: item.lower())
+                # Son güvenlik: farklı ekleme yollarıyla aynı dosya geldiyse kuyruğu tekilleştir.
+                unique_paths = []
+                seen = set()
+                for path in queued_paths:
+                    key = queue_key(path)
+                    if key in seen:
+                        skipped_duplicate += 1
+                        continue
+                    unique_paths.append(path)
+                    existing.add(key)
+                    seen.add(key)
+                queued_paths[:] = unique_paths
+                refresh_queue()
+                if added:
+                    status_var.set(f"SPT kuyruğuna {added} fotoğraf eklendi.")
+                if skipped_duplicate:
+                    info_var.set(f"{len(queued_paths)} fotoğraf kuyrukta. {skipped_duplicate} tekrar dosya atlandı.")
+                elif skipped_invalid and not added:
+                    info_var.set("Geçerli fotoğraf bulunamadı. JPG, PNG, BMP veya WEBP dosyası/klasörü bırakın.")
+                return added, skipped_duplicate, skipped_invalid
+
+            def add_photos():
+                paths = filedialog.askopenfilenames(
+                    title="SPT Fotoğraflarını Kuyruğa Ekle",
+                    initialdir=self._spt_initial_dir(),
+                    filetypes=[("Resimler", "*.jpg *.jpeg *.png *.bmp *.webp *.JPG *.JPEG *.PNG"), ("Tüm Dosyalar", "*.*")],
+                    parent=queue_win,
+                )
+                add_paths(paths)
+
+            def add_folder():
+                folder = filedialog.askdirectory(title="SPT Fotoğraf Klasörü Seç", initialdir=self._spt_initial_dir(), parent=queue_win)
+                if not folder:
+                    return
+                add_paths([folder])
+
+            def remove_selected():
+                selected = list(listbox.curselection())
+                if not selected:
+                    return
+                for idx in reversed(selected):
+                    if 0 <= idx < len(queued_paths):
+                        del queued_paths[idx]
+                refresh_queue()
+
+            def clear_queue():
+                queued_paths.clear()
+                refresh_queue()
+
+            def start_queue():
+                if not queued_paths:
+                    messagebox.showwarning("SPT Fotoğraf Kuyruğu", "Başlatmak için önce fotoğraf ekleyin.", parent=queue_win)
+                    return
+                paths = []
+                seen = set()
+                for path in queued_paths:
+                    key = queue_key(path)
+                    if key in seen:
+                        continue
+                    paths.append(path)
+                    seen.add(key)
+                if len(paths) != len(queued_paths):
+                    queued_paths[:] = paths
+                    refresh_queue()
+                    status_var.set("SPT fotoğraf kuyruğundaki tekrar dosyalar temizlendi.")
+                queue_win.destroy()
+                add_to_main_photo_queue(paths)
+                start_main_photo_queue()
+
+            def parse_drop_paths(data):
+                try:
+                    return [item for item in queue_win.tk.splitlist(data) if item]
+                except Exception:
+                    return [item for item in str(data or "").split() if item]
+
+            def on_drop(event):
+                sources = parse_drop_paths(getattr(event, "data", ""))
+                added, skipped_duplicate, skipped_invalid = add_paths(sources)
+                if added:
+                    status_var.set(f"Sürükle-bırak ile {added} fotoğraf eklendi.")
+                elif skipped_duplicate:
+                    status_var.set("Sürükle-bırak: tekrar dosyalar atlandı.")
+                elif skipped_invalid:
+                    status_var.set("Sürükle-bırak: geçerli fotoğraf bulunamadı.")
+                return "break"
+
+            def enable_drag_drop():
+                try:
+                    from tkinterdnd2 import DND_FILES
+                    enabled = False
+                    targets = [queue_win, listbox]
+                    for target in targets:
+                        try:
+                            target.drop_target_register(DND_FILES)
+                            target.dnd_bind("<<Drop>>", on_drop)
+                            enabled = True
+                        except Exception:
+                            continue
+                    if enabled:
+                        dnd_var.set("Fotoğraf veya klasörü bu pencereye sürükleyip bırakabilirsiniz.")
+                        return True
+                except Exception:
+                    pass
+                dnd_var.set("Sürükle-bırak için tkinterdnd2 paketi gerekir. RaporPro_Baslat.bat ile paket kontrolünden kurabilirsiniz.")
+                return False
+
+            buttons = ttk.Frame(queue_win, padding=8)
+            buttons.pack(fill="x")
+            tk.Button(buttons, text="Fotoğraf Ekle", command=add_photos, bg="#2E86C1", fg="white", font=FONT_BOLD).pack(side="left", padx=3)
+            tk.Button(buttons, text="Klasör Ekle", command=add_folder, bg="#117864", fg="white", font=FONT_BOLD).pack(side="left", padx=3)
+            ttk.Checkbutton(buttons, text="Alt klasörleri tara", variable=recursive_var).pack(side="left", padx=8)
+            tk.Button(buttons, text="Seçileni Sil", command=remove_selected, bg=COLOR_DANGER, fg="white", font=FONT_BOLD).pack(side="left", padx=3)
+            tk.Button(buttons, text="Temizle", command=clear_queue, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="left", padx=3)
+            tk.Button(buttons, text="Başlat", command=start_queue, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=3)
+            tk.Button(buttons, text="Kapat", command=queue_win.destroy, bg="#ECF0F1", fg="#111", font=FONT_BOLD).pack(side="right", padx=3)
+            listbox.bind("<Delete>", lambda event: (remove_selected() or "break"))
+            enable_drag_drop()
+            refresh_queue()
+
+        def import_cropped_photo():
+            source_path = filedialog.askopenfilename(
+                title="Kırpılacak SPT Fotoğrafını Seç",
+                initialdir=self._spt_initial_dir(),
+                filetypes=[("Resimler", "*.jpg *.jpeg *.png *.JPG *.JPEG *.PNG"), ("Tüm Dosyalar", "*.*")],
+            )
+            if not source_path:
+                return
+            try:
+                from PIL import Image, ImageOps, ImageTk
+                image = Image.open(source_path)
+                try:
+                    image = ImageOps.exif_transpose(image)
+                except Exception:
+                    pass
+            except Exception as exc:
+                messagebox.showerror("Fotoğraf Kırp", f"Fotoğraf açılamadı:\n{exc}")
+                return
+
+            crop_win = Toplevel(win)
+            self.pencere_hazirla(crop_win, "SPT Fotoğraf Bölgesi Seç", "980x720", (820, 560), modal=True)
+            top_note = ttk.Label(crop_win, text="SPT tabelasının olduğu alanı fare ile çerçeveleyin, sonra Oku düğmesine basın.", padding=8)
+            top_note.pack(fill="x")
+            canvas_frame = ttk.Frame(crop_win)
+            canvas_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+            canvas = tk.Canvas(canvas_frame, bg="#222222", highlightthickness=0)
+            canvas.pack(fill="both", expand=True)
+            max_w, max_h = 920, 560
+            scale = min(max_w / image.width, max_h / image.height, 1.0)
+            display_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
+            display_image = image.resize(display_size)
+            tk_image = ImageTk.PhotoImage(display_image)
+            canvas.image = tk_image
+            image_id = canvas.create_image(10, 10, image=tk_image, anchor="nw")
+            rect_state = {"start": None, "rect": None}
+
+            def clamp_canvas(x, y):
+                return (
+                    max(10, min(x, 10 + display_size[0])),
+                    max(10, min(y, 10 + display_size[1])),
+                )
+
+            def on_press(event):
+                x, y = clamp_canvas(event.x, event.y)
+                rect_state["start"] = (x, y)
+                if rect_state["rect"]:
+                    canvas.delete(rect_state["rect"])
+                rect_state["rect"] = canvas.create_rectangle(x, y, x, y, outline="#F1C40F", width=3)
+
+            def on_drag(event):
+                if not rect_state["start"] or not rect_state["rect"]:
+                    return
+                x, y = clamp_canvas(event.x, event.y)
+                x0, y0 = rect_state["start"]
+                canvas.coords(rect_state["rect"], x0, y0, x, y)
+
+            canvas.bind("<ButtonPress-1>", on_press)
+            canvas.bind("<B1-Motion>", on_drag)
+
+            def read_crop():
+                if not rect_state["rect"]:
+                    messagebox.showwarning("Fotoğraf Kırp", "Önce bir alan seçin.")
+                    return
+                x1, y1, x2, y2 = canvas.coords(rect_state["rect"])
+                left, right = sorted([x1 - 10, x2 - 10])
+                top, bottom = sorted([y1 - 10, y2 - 10])
+                if right - left < 20 or bottom - top < 20:
+                    messagebox.showwarning("Fotoğraf Kırp", "Seçilen alan çok küçük.")
+                    return
+                crop_box = (left / scale, top / scale, right / scale, bottom / scale)
+                try:
+                    cropped_path = spt_kirp_kaydet(source_path, crop_box)
+                except Exception as exc:
+                    messagebox.showerror("Fotoğraf Kırp", f"Kırpma kaydedilemedi:\n{exc}")
+                    return
+                crop_win.destroy()
+                ayarlar = spt_ayarlarini_yukle()
+                progress_win = Toplevel(win)
+                self.pencere_hazirla(progress_win, "Kırpılmış SPT Okuma", "460x150", (420, 130), modal=False)
+                progress_text = tk.StringVar(value=f"Kırpılmış alan okunuyor. Motor: {ayarlar.get('aktif_motor', '-')}")
+                ttk.Label(progress_win, textvariable=progress_text, padding=12).pack(fill="x")
+                progress = ttk.Progressbar(progress_win, mode="indeterminate")
+                progress.pack(fill="x", padx=12, pady=8)
+                progress.start(12)
+
+                def finish(sonuc=None, hata=None):
+                    if progress_win.winfo_exists():
+                        progress_win.destroy()
+                    if hata:
+                        messagebox.showerror("Kırpılmış SPT Okuma", f"Okuma tamamlanamadı:\n{hata}")
+                        return
+                    if not sonuc or not sonuc.kayitlar:
+                        messagebox.showwarning("Kırpılmış SPT Okuma", "Kırpılmış alandan SPT satırı okunamadı.")
+                        return
+                    add_result(sonuc, "Kırpılmış Fotoğraf", append=True)
+
+                def worker():
+                    try:
+                        sonuc = fotograflardan_spt_oku(
+                            [cropped_path],
+                            default_sondaj_no=target_var.get(),
+                            ayarlar=ayarlar,
+                            auto_pro=project_spt_settings()["auto_pro"],
+                        )
+                        self.root.after(0, lambda: finish(sonuc=sonuc))
+                    except Exception as exc:
+                        self.root.after(0, lambda: finish(hata=exc))
+
+                threading.Thread(target=worker, daemon=True).start()
+
+            btns = ttk.Frame(crop_win, padding=8)
+            btns.pack(fill="x")
+            tk.Button(btns, text="Oku", command=read_crop, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
+            tk.Button(btns, text="Kapat", command=crop_win.destroy, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="right", padx=4)
+
+        def apply_import(close=False):
+            update_selected_from_form(silent=True)
+            aktarilacak_records = [
+                record for record in records
+                if record.get("record_type") != "queue" and record.get("include", True)
+            ]
+            kayitlar = [record["kayit"] for record in aktarilacak_records]
+            if not kayitlar:
+                messagebox.showwarning("SPT Merkezi", "Aktarılacak seçili SPT satırı yok.")
+                return
+            if any(record.get("quality", {}).get("level") == "error" and record.get("include", True) for record in aktarilacak_records):
+                if not messagebox.askyesno("SPT Merkezi", "Hatalı görünen satırlar var. Yine de aktaralım mı?"):
+                    return
+
+            by_no = {s.get("no"): s for s in self.veri.setdefault("sondaj", []) if s.get("no")}
+            created = added = updated = skipped = 0
+
+            def get_or_create_sondaj(no):
+                nonlocal created
+                if no in by_no:
+                    return by_no[no]
+                sondaj = yeni_sondaj_sablonu(len(self.veri["sondaj"]))
+                sondaj["no"] = no
+                self.veri["sondaj"].append(sondaj)
+                by_no[no] = sondaj
+                created += 1
+                return sondaj
+
+            if clear_target_var.get():
+                for no in sorted({k.sondaj_no for k in kayitlar if k.sondaj_no}):
+                    get_or_create_sondaj(no)["spt"] = []
+
+            for kayit in kayitlar:
+                if not kayit.sondaj_no or not kayit.derinlik:
+                    skipped += 1
+                    continue
+                sondaj = get_or_create_sondaj(kayit.sondaj_no)
+                spt_list = sondaj.setdefault("spt", [])
+                target_depth = safe_float(kayit.derinlik)
+                existing_idx = None
+                for idx, existing in enumerate(spt_list):
+                    if existing and abs(safe_float(existing[0]) - target_depth) <= 0.01:
+                        existing_idx = idx
+                        break
+                if existing_idx is not None:
+                    if update_same_var.get():
+                        spt_list[existing_idx] = kayit.spt_satiri()
+                        updated += 1
+                    else:
+                        skipped += 1
+                        continue
+                else:
+                    spt_list.append(kayit.spt_satiri())
+                    added += 1
+                spt_list.sort(key=lambda item: safe_float(item[0]) if item else 9999)
+
+                kaynaklar = sondaj.setdefault("spt_kaynaklari", [])
+                kaynaklar[:] = [item for item in kaynaklar if safe_float(item.get("derinlik")) != target_depth]
+                kaynaklar.append({
+                    "derinlik": kayit.derinlik,
+                    "kaynak": kayit.kaynak,
+                    "kaynak_yolu": kayit.kaynak_yolu,
+                    "guven": kayit.guven,
+                    "aktarim_tarihi": datetime.datetime.now().strftime("%d.%m.%Y %H:%M"),
+                })
+                spt_gecmis_kaydet("aktarildi", kayit, {"sondaj": kayit.sondaj_no})
+
+            self.sondaj_tablosunu_ciz()
+            self.ozet_yenile(collect=False)
+            status = f"SPT aktarıldı: {added} yeni, {updated} güncel"
+            if skipped:
+                status += f", {skipped} atlandı"
+            if created:
+                status += f", {created} sondaj oluşturuldu"
+            self.set_status(status + ".", level="success")
+            status_var.set(status + ".")
+            if close:
+                win.destroy()
+
+        def settings_dialog():
+            ayarlar = spt_ayarlarini_yukle()
+            project = self.veri.setdefault("ayarlar", {})
+            popup = Toplevel(win)
+            self.pencere_hazirla(popup, "SPT Okuma Ayarları", "520x430", (480, 390), modal=True)
+            body = ttk.Frame(popup, padding=12)
+            body.pack(fill="both", expand=True)
+            ttk.Label(body, text="Aktif Motor", font=FONT_BOLD).grid(row=0, column=0, sticky="w", pady=5)
+            motor_var = tk.StringVar(value=ayarlar.get("aktif_motor", "openai"))
+            ttk.Combobox(body, textvariable=motor_var, values=["openai", "gemini", "gemini_pro", "groq"], state="readonly", width=22).grid(row=0, column=1, sticky="ew", pady=5)
+            key_entries = {}
+            for row, (label, key) in enumerate([
+                ("OpenAI API Key", "openai_api_key"),
+                ("Gemini API Key", "gemini_api_key"),
+                ("Groq API Key", "groq_api_key"),
+            ], start=1):
+                ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=5)
+                ent = ttk.Entry(body, show="*")
+                ent.insert(0, ayarlar.get(key, ""))
+                ent.grid(row=row, column=1, sticky="ew", pady=5)
+                key_entries[key] = ent
+            ttk.Label(body, text="Düşük Güven Eşiği").grid(row=4, column=0, sticky="w", pady=5)
+            guven_entry = ttk.Entry(body, width=10)
+            guven_entry.insert(0, project.get("spt_guven_esigi", "90"))
+            guven_entry.grid(row=4, column=1, sticky="w", pady=5)
+            popup_auto_pro_var = tk.BooleanVar(value=bool(auto_pro_var.get()))
+            ttk.Checkbutton(body, text="Düşük güvende Gemini Pro ile tekrar oku", variable=popup_auto_pro_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=8)
+            path_text = f"Ayar dosyası: {SPT_AYARLAR_PATH}"
+            ttk.Label(body, text=path_text, foreground="#555555", wraplength=460).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 2))
+            state_text = "Anahtar durumu: " + ", ".join(
+                f"{name} {'var' if ayarlar.get(key) else 'yok'}"
+                for name, key in [("OpenAI", "openai_api_key"), ("Gemini", "gemini_api_key"), ("Groq", "groq_api_key")]
+            )
+            ttk.Label(body, text=state_text, foreground="#1F618D", wraplength=460).grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 8))
+            body.columnconfigure(1, weight=1)
+
+            def save_settings():
+                new_settings = {
+                    "aktif_motor": motor_var.get().strip(),
+                    "openai_api_key": key_entries["openai_api_key"].get().strip(),
+                    "gemini_api_key": key_entries["gemini_api_key"].get().strip(),
+                    "groq_api_key": key_entries["groq_api_key"].get().strip(),
+                }
+                try:
+                    spt_ayarlarini_kaydet(new_settings)
+                except Exception as exc:
+                    messagebox.showerror("SPT Ayarları", f"Ayarlar kaydedilemedi:\n{exc}")
+                    return
+                project["spt_guven_esigi"] = guven_entry.get().strip() or "90"
+                auto_pro_var.set(bool(popup_auto_pro_var.get()))
+                project["spt_auto_pro"] = "1" if auto_pro_var.get() else "0"
+                refresh_tree()
+                status_var.set("SPT ayarları güncellendi.")
+                self.set_status("SPT okuma ayarları güncellendi.", level="success")
+                popup.destroy()
+
+            def check_settings():
+                motor = motor_var.get().strip() or "openai"
+                key_by_motor = {
+                    "openai": ("OpenAI", key_entries["openai_api_key"].get().strip()),
+                    "gemini": ("Gemini", key_entries["gemini_api_key"].get().strip()),
+                    "gemini_pro": ("Gemini", key_entries["gemini_api_key"].get().strip()),
+                    "groq": ("Groq", key_entries["groq_api_key"].get().strip()),
+                }
+                name, api_key = key_by_motor.get(motor, ("Motor", ""))
+                problems = []
+                if not api_key:
+                    problems.append(f"{name} API anahtarı boş.")
+                try:
+                    import requests  # noqa: F401
+                except Exception as exc:
+                    problems.append(f"requests paketi yüklenemedi: {exc}")
+                try:
+                    SPT_AYARLAR_PATH.parent.mkdir(parents=True, exist_ok=True)
+                except Exception as exc:
+                    problems.append(f"Ayar klasörüne erişilemiyor: {exc}")
+                if problems:
+                    messagebox.showwarning("SPT Ayar Kontrolü", "\n".join(problems), parent=popup)
+                else:
+                    messagebox.showinfo(
+                        "SPT Ayar Kontrolü",
+                        f"{motor} için temel ayarlar hazır.\nCanlı okuma testi için SPT Merkezi > Foto Ekle + Başlat veya Kırp/Oku kullanın.",
+                        parent=popup,
+                    )
+
+            btns = ttk.Frame(body)
+            btns.grid(row=8, column=0, columnspan=2, sticky="e", pady=(16, 0))
+            tk.Button(btns, text="Kaydet", command=save_settings, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
+            tk.Button(btns, text="Ayar Kontrolü", command=check_settings, bg="#D6EAF8", fg="#111", font=FONT_BOLD).pack(side="right", padx=4)
+            tk.Button(btns, text="Kapat", command=popup.destroy, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="right", padx=4)
+
+        tree.bind("<<TreeviewSelect>>", on_select)
+        tree.bind("<space>", toggle_selected)
+        tree.bind("<Double-1>", toggle_selected)
+        tree.bind("<Delete>", delete_selected_record)
+        filter_var.trace_add("write", lambda *_: refresh_tree())
+
+        self.modern_button(source_group, text="Excel'den Al", command=import_excel, role="primary").pack(side="left", padx=2)
+        self.modern_button(source_group, text="Foto Ekle", command=add_main_photos, role="success").pack(side="left", padx=2)
+        main_queue_buttons["start"] = self.modern_button(source_group, text="Başlat", command=start_main_photo_queue, role="success")
+        main_queue_buttons["start"].pack(side="left", padx=2)
+        self.modern_button(source_group, text="Kırp/Oku", command=import_cropped_photo, role="success").pack(side="left", padx=2)
+        self.modern_button(source_group, text="Geçmiş", command=show_history, role="neutral", outline=True).pack(side="left", padx=2)
+        self.modern_button(source_group, text="Ayarlar", command=settings_dialog, role="warning").pack(side="left", padx=2)
+
+        ttk.Label(queue_bar, textvariable=main_queue_status_var, foreground="#2874A6").pack(side="left", fill="x", expand=True)
+        self.modern_button(queue_bar, text="Klasör Ekle", command=add_main_folder, role="success", outline=True).pack(side="left", padx=3)
+        self.modern_button(queue_bar, text="Kuyruğu Temizle", command=clear_main_photo_queue, role="neutral", outline=True).pack(side="left", padx=3)
+        main_queue_buttons["stop"] = self.modern_button(queue_bar, text="Durdur", command=stop_main_photo_queue, role="danger", state="disabled")
+        main_queue_buttons["stop"].pack(side="left", padx=3)
+        ttk.Checkbutton(queue_bar, text="Alt klasörleri tara", variable=main_queue_recursive_var).pack(side="left", padx=6)
+        ttk.Label(queue_bar, textvariable=main_dnd_status_var, foreground="#555555").pack(side="right", padx=(8, 0))
+
+        ttk.Checkbutton(pro_group, text="Otomatik Pro", variable=auto_pro_var, command=save_auto_pro_setting).pack(side="left", padx=3)
+        self.modern_button(pro_group, text="Seçiliyi Pro ile Oku", command=reread_selected_with_pro, role="accent", outline=True).pack(side="left", padx=2)
+
+        ttk.Label(target_group, text="Hedef").pack(side="left", padx=(0, 3))
+        ttk.Combobox(target_group, textvariable=target_var, values=sondaj_nolari, width=12).pack(side="left", padx=3)
+        self.modern_button(target_group, text="Seçiliye Doldur", command=fill_target_for_selected, role="accent", outline=True).pack(side="left", padx=2)
+        ttk.Checkbutton(target_group, text="Aynı derinliği güncelle", variable=update_same_var).pack(side="left", padx=5)
+        ttk.Checkbutton(target_group, text="Önce temizle", variable=clear_target_var).pack(side="left", padx=5)
+
+        ttk.Combobox(filter_group, textvariable=filter_var, values=["Tümü", "Aktarılacak", "Hatalı", "Uyarılı", "Düşük Güven"], state="readonly", width=13).pack(side="left", padx=3)
+        self.modern_button(filter_group, text="N30 Tümü", command=n30_all, role="warning", outline=True).pack(side="left", padx=2)
+        self.modern_button(filter_group, text="Kaynak Raporu", command=export_source_report, role="success", outline=True).pack(side="left", padx=2)
+
+        detail_btns = ttk.Frame(detail)
+        detail_btns.grid(row=3, column=0, columnspan=4, sticky="e", pady=(8, 0))
+        self.modern_button(detail_btns, text="N30 Hesapla", command=n30_selected, role="warning", outline=True).pack(side="left", padx=2)
+        self.modern_button(detail_btns, text="Satırı Güncelle", command=update_selected_from_form, role="accent", outline=True).pack(side="left", padx=2)
+        self.modern_button(detail_btns, text="Pro ile Oku", command=reread_selected_with_pro, role="accent", outline=True).pack(side="left", padx=2)
+        self.modern_button(detail_btns, text="Doğrusunu Öğret", command=teach_selected, role="success", outline=True).pack(side="left", padx=2)
+        self.modern_button(detail_btns, text="Al / Alma", command=toggle_selected, role="neutral", outline=True).pack(side="left", padx=2)
+        self.modern_button(detail_btns, text="Sil", command=delete_selected_record, role="danger").pack(side="left", padx=2)
+
+        self.modern_button(bottom, text="Aktar", command=lambda: apply_import(False), role="success").pack(side="right", padx=3)
+        self.modern_button(bottom, text="Aktar ve Kapat", command=lambda: apply_import(True), role="primary").pack(side="right", padx=3)
+        self.modern_button(bottom, text="Kapat", command=win.destroy, role="secondary").pack(side="right", padx=3)
+
+        enable_main_drag_drop()
+        refresh_main_queue_status()
+
+        if initial_sonuc:
+            add_result(initial_sonuc, str(initial_source or "SPT"), append=True)
+        if baslat == "excel":
+            win.after(150, import_excel)
+        elif baslat == "foto":
+            win.after(150, add_main_photos)

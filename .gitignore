@@ -1,0 +1,36 @@
+# Dosya: RaporPro/.gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.venv/
+venv/
+env/
+
+build/
+dist/
+
+.codex_tools/
+
+logs/
+autosave/
+_log_analiz/
+harita_ciktilari/
+
+*.zip
+~$*
+
+/1.docx
+/DENEME SON.docx
+/SONDAJ_LOGU.jpg
+
+recent_projects.json
+Zemin_Etud_Projesi.json
+zemin_proje_data.json
+
+# Gecici log uyumluluk koprusu icin gerekli sabit cache dosyasi.
+!motor_log_cache.cpython-311.pyc
