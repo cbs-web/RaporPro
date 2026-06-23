@@ -1,14 +1,11 @@
 import os
 import tkinter as tk
-from tkinter import Frame, Listbox, Toplevel, filedialog, messagebox, ttk
-
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from tkinter import Listbox, Toplevel, filedialog, messagebox, ttk
 
 from harita_referans import kml_koordinatlari_oku
 from kesit_kalite import build_section_quality_report, format_section_quality_report
 from ui_kesit_yardimci import kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kesit_onizleme import KesitOnizlemeMixin
-from motor import GeoEngine
 from performans import perf_tracked
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
 from yardimcilar import safe_float
@@ -598,4 +595,3 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         tk.Button(btns, text="Ayarı Kaydet", command=ayari_kaydet, bg="#D6EAF8", fg="#111", font=FONT_BOLD).pack(side="left", fill="x", expand=True, padx=(0, 4))
         tk.Button(btns, text="Kontrol Et", command=kalite_kontrol, bg="#FAD7A0", fg="#111", font=FONT_BOLD).pack(side="left", fill="x", expand=True, padx=4)
         tk.Button(btns, text="Çiz", command=ciz, bg="#5D4037", fg="white", font=FONT_BOLD).pack(side="left", fill="x", expand=True, padx=(4, 0))
-
