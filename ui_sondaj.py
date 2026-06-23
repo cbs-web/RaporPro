@@ -116,7 +116,16 @@ class SondajMixin:
                 row_entries[key] = e
             
             row_entries['bit_tar'].bind('<FocusOut>', lambda e, r_ents=row_entries: self.oto_yass_tarih(r_ents))
-            row_entries['bit_tar'].bind('<Return>', lambda e, r_ents=row_entries: self.oto_yass_tarih(r_ents))
+            for key, ent in row_entries.items():
+                ent.bind("<Return>", lambda event, r=idx, k=key: self.sondaj_tablo_hucre_git(r + 1, k))
+                ent.bind("<Down>", lambda event, r=idx, k=key: self.sondaj_tablo_hucre_git(r + 1, k))
+                ent.bind("<Up>", lambda event, r=idx, k=key: self.sondaj_tablo_hucre_git(r - 1, k))
+
+            def bit_tar_enter(event, r_ents=row_entries, r=idx, k="bit_tar"):
+                self.oto_yass_tarih(r_ents)
+                return self.sondaj_tablo_hucre_git(r + 1, k)
+
+            row_entries['bit_tar'].bind('<Return>', bit_tar_enter)
             for key, ent in row_entries.items():
                 ent.bind("<KeyRelease>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
                 ent.bind("<FocusOut>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
@@ -150,6 +159,15 @@ class SondajMixin:
                 self.tooltip_ekle(btn, tip)
             self.modern_button(btn_f, text="SİL", role="danger", font=("Arial", 8, "bold"), command=lambda i=idx: self.sondaj_sil(i), padx=6, pady=3).pack(side="left", padx=5)
             self.sondaj_ui_rows.append(row_entries)
+
+    def sondaj_tablo_hucre_git(self, row_idx, key):
+        """Sondaj tablosunda belirtilen satır ve sütuna (key) odaklan."""
+        if 0 <= row_idx < len(self.sondaj_ui_rows):
+            entry = self.sondaj_ui_rows[row_idx].get(key)
+            if entry:
+                entry.focus_set()
+                entry.selection_range(0, tk.END)
+        return "break"
 
     def sondaj_satirini_canli_dogrula(self, row_entries):
         row_has_data = any(str(ent.get()).strip() for ent in row_entries.values())
