@@ -25,6 +25,10 @@ from workbook_motoru import (
 )
 
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+RECENT_PROJECTS_PATH = os.path.join(APP_DIR, "recent_projects.json")
+
+
 class ArayuzProjeMixin:
     def recent_projects_yukle(self):
         try:
@@ -749,4 +753,3 @@ class ArayuzProjeMixin:
             txt.config(state="disabled")
 
         tk.Button(win, text="Kapat", command=win.destroy, bg=COLOR_PRIMARY, fg="white").pack(pady=(0, 10))
-
