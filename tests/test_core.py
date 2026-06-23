@@ -883,6 +883,7 @@ class EklerTestleri(unittest.TestCase):
 class TutanakTestleri(unittest.TestCase):
     def test_tutanaklar_program_verisinden_uretilir(self):
         from docx import Document
+        from docx.oxml.ns import qn
         from PIL import Image
 
         veri = {
@@ -925,6 +926,10 @@ class TutanakTestleri(unittest.TestCase):
             self.assertEqual(doc.tables[0].rows[15].cells[2].text, "1")
             self.assertEqual(doc.tables[-1].rows[3].cells[1].text, "03.06.2026")
             self.assertEqual(len(doc.inline_shapes), 1)
+            self.assertLessEqual(doc.sections[0].bottom_margin.cm, 0.8)
+            self.assertIsNotNone(doc.tables[0].rows[0]._tr.trPr.find(qn("w:cantSplit")))
+            self.assertTrue(doc.tables[0].rows[0].cells[0].paragraphs[0].paragraph_format.keep_with_next)
+            self.assertFalse(bool(doc.tables[2].rows[0].cells[0].paragraphs[0].paragraph_format.keep_with_next))
 
 
 if __name__ == "__main__":

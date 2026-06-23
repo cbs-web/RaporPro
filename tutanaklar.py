@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
-from docx.shared import Cm
+from docx.shared import Cm, Pt
 from docx.table import Table
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -103,10 +103,42 @@ def _append_table_clone(doc, source_table):
 
 def _add_page_break(doc):
     paragraph = doc.add_paragraph()
+    _format_tutanak_paragraph(paragraph)
     run = paragraph.add_run()
     br = OxmlElement("w:br")
     br.set(qn("w:type"), "page")
     run._r.append(br)
+
+
+def _format_tutanak_paragraph(paragraph, keep_next=False):
+    fmt = paragraph.paragraph_format
+    fmt.space_before = Pt(0)
+    fmt.space_after = Pt(0)
+    fmt.line_spacing = 1
+    fmt.keep_together = True
+    fmt.keep_with_next = bool(keep_next)
+
+
+def _format_tutanak_table(table, keep_with_next=False):
+    for row in table.rows:
+        tr_pr = row._tr.get_or_add_trPr()
+        if tr_pr.find(qn("w:cantSplit")) is None:
+            tr_pr.append(OxmlElement("w:cantSplit"))
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                _format_tutanak_paragraph(paragraph, keep_next=keep_with_next)
+
+
+def _compact_output_page_layout(doc):
+    for section in doc.sections:
+        if section.top_margin is None or section.top_margin.cm > 0.8:
+            section.top_margin = Cm(0.75)
+        if section.bottom_margin is None or section.bottom_margin.cm > 0.8:
+            section.bottom_margin = Cm(0.75)
+        if section.left_margin is None or section.left_margin.cm > 1.8:
+            section.left_margin = Cm(1.6)
+        if section.right_margin is None or section.right_margin.cm > 1.8:
+            section.right_margin = Cm(1.6)
 
 
 def _count_nonempty_rows(rows):
@@ -305,6 +337,7 @@ def tutanaklari_olustur(veri, output_path, lokasyon_haritasi=None):
 
     out_doc = Document(template_path)
     _clear_body(out_doc)
+    _compact_output_page_layout(out_doc)
     sondajlar = list((veri or {}).get("sondaj", []) or [])
     ss_list = list(((veri or {}).get("jeofizik", {}) or {}).get("ss_list", []) or [])
 
@@ -315,10 +348,14 @@ def tutanaklari_olustur(veri, output_path, lokasyon_haritasi=None):
         first_block = False
         sondaj_table = _append_table_clone(out_doc, template.tables[0])
         _fill_sondaj_table(sondaj_table, veri, sondaj)
-        out_doc.add_paragraph(_sondaj_statement(veri, sondaj))
+        _format_tutanak_table(sondaj_table, keep_with_next=True)
+        statement = out_doc.add_paragraph(_sondaj_statement(veri, sondaj))
+        _format_tutanak_paragraph(statement, keep_next=True)
         location_table = _append_table_clone(out_doc, template.tables[1])
         _replace_location_image(location_table, lokasyon_haritasi)
-        _append_table_clone(out_doc, template.tables[2])
+        _format_tutanak_table(location_table, keep_with_next=True)
+        signature_table = _append_table_clone(out_doc, template.tables[2])
+        _format_tutanak_table(signature_table, keep_with_next=False)
 
     for idx, ss in enumerate(ss_list, start=1):
         if not first_block:
@@ -326,6 +363,7 @@ def tutanaklari_olustur(veri, output_path, lokasyon_haritasi=None):
         first_block = False
         jeofizik_table = _append_table_clone(out_doc, template.tables[3])
         _fill_jeofizik_table(jeofizik_table, veri, ss, idx)
+        _format_tutanak_table(jeofizik_table, keep_with_next=False)
 
     if first_block:
         out_doc.add_paragraph("Tutanak oluşturulacak sondaj veya jeofizik verisi bulunamadı.")
