@@ -17,341 +17,35 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from yardimcilar import temizle_baslik, zemin_sinifi_cevir, safe_float
 from motor import GeoEngine
 from performans import log_exception
-
-IRI_DANELILER = ['Killi Kum', 'Kum', 'Kumlu', 'Siltli Killi Çakıl', 'Siltli Kum', 'Çakıllı Killi Kum', 'Çakıllı Kum', 'Çakıllı Siltli Kum', 'Kumlu Siltli Killi Çakıl', 'Çakıl']
-INCE_DANELILER = ['Kil', 'Kumlu Kil', 'Çakıllı Kil', 'Siltli Kil', 'Kumlu Silt', 'Silt']
-
-TABLE_HEADER_FILL = "D9E2F3"
-TABLE_LABEL_FILL = "F2F5F9"
-TABLE_ALT_FILL = "FAFBFC"
-TABLE_BORDER_COLOR = "B7C1CC"
-TABLE_TEXT_COLOR = "1F2937"
-
-LITOLOJI_DAGILIM_BIRIMLERI = [
-    "Çakıl",
-    "Siltli Çakıl",
-    "Killi Çakıl",
-    "Çakıllı Kum",
-    "Çakıllı Killi Kum",
-    "Çakıllı Siltli Kum",
-    "Siltli Kum",
-    "Kum",
-    "Killi Kum",
-    "Kil",
-    "Kumlu Kil",
-    "Çakıllı Kil",
-    "Kumlu Silt",
-    "Kumlu Siltli Killi Çakıl",
-]
-
-
+from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
+from raporlama_litoloji import (
+    INCE_DANELILER,
+    IRI_DANELILER,
+    LITOLOJI_DAGILIM_BIRIMLERI,
+    litoloji_dagilim_birimi,
+    litoloji_dagilim_paragraflari,
+)
+from raporlama_tablo import (
+    TABLE_ALT_FILL,
+    TABLE_BORDER_COLOR,
+    TABLE_HEADER_FILL,
+    TABLE_LABEL_FILL,
+    TABLE_TEXT_COLOR,
+    apply_report_table_style,
+    create_word_table,
+    repeat_table_header,
+    set_cell_border,
+    set_cell_margins,
+    set_cell_shading,
+    set_cell_text_clean,
+    set_cell_width,
+    set_table_fit_to_window,
+    set_vertical_cell_alignment,
+    style_cell_text,
+    style_report_table_row,
+)
 def _log_silent(name, exc):
     log_exception(f"raporlama.{name}", exc_value=exc)
-
-def _normalize_litoloji_text(text):
-    value = "" if text is None else str(text).strip()
-    if not value:
-        return ""
-    lowered = value.casefold()
-    if any(marker in lowered for marker in ("ã", "ä", "å")):
-        try:
-            fixed = lowered.encode("latin1").decode("utf-8").casefold()
-            if fixed:
-                lowered = fixed
-        except Exception:
-            pass
-    replacements = {
-        "ı": "i", "İ": "i", "ç": "c", "ğ": "g",
-        "ö": "o", "ş": "s", "ü": "u",
-    }
-    for old, new in replacements.items():
-        lowered = lowered.replace(old, new)
-    lowered = unicodedata.normalize("NFKD", lowered)
-    lowered = "".join(ch for ch in lowered if not unicodedata.combining(ch))
-    return re.sub(r"[^a-z0-9]+", " ", lowered).strip()
-
-def litoloji_dagilim_birimi(tanim):
-    normalized = _normalize_litoloji_text(tanim)
-    tokens = re.findall(r"[a-z0-9]+", normalized)
-    if not tokens:
-        return None
-
-    base_tokens = {"cakil", "kum", "kil", "silt"}
-    last_base_idx = -1
-    last_base = ""
-    for idx, token in enumerate(tokens):
-        if token in base_tokens:
-            last_base_idx = idx
-            last_base = token
-    if last_base_idx < 0:
-        return None
-
-    modifiers = set(tokens[:last_base_idx])
-    has_cakilli = "cakilli" in modifiers or "cakil" in modifiers
-    has_kumlu = "kumlu" in modifiers or "kum" in modifiers
-    has_killi = "killi" in modifiers or "kil" in modifiers
-    has_siltli = "siltli" in modifiers or "silt" in modifiers
-
-    if last_base == "cakil":
-        if has_kumlu and has_siltli and has_killi:
-            return "Kumlu Siltli Killi Çakıl"
-        if has_killi:
-            return "Killi Çakıl"
-        if has_siltli:
-            return "Siltli Çakıl"
-        return "Çakıl"
-
-    if last_base == "kum":
-        if has_cakilli and has_killi:
-            return "Çakıllı Killi Kum"
-        if has_cakilli and has_siltli:
-            return "Çakıllı Siltli Kum"
-        if has_cakilli:
-            return "Çakıllı Kum"
-        if has_killi:
-            return "Killi Kum"
-        if has_siltli:
-            return "Siltli Kum"
-        return "Kum"
-
-    if last_base == "kil":
-        if has_cakilli:
-            return "Çakıllı Kil"
-        if has_kumlu:
-            return "Kumlu Kil"
-        return "Kil"
-
-    if last_base == "silt" and has_kumlu:
-        return "Kumlu Silt"
-
-    return None
-
-def _fmt_litoloji_derinlik(value):
-    number = safe_float(value)
-    if abs(number - round(number)) < 0.001:
-        return str(int(round(number)))
-    return f"{number:.2f}".rstrip("0").rstrip(".")
-
-def litoloji_dagilim_paragraflari(sondajlar):
-    groups = {unit: {} for unit in LITOLOJI_DAGILIM_BIRIMLERI}
-    for sondaj in sondajlar or []:
-        kuyu_no = clean_val(sondaj.get("no", ""))
-        merged_layers = []
-        for lit in sondaj.get("litoloji", []) or []:
-            if len(lit) < 3:
-                continue
-            unit_name = litoloji_dagilim_birimi(lit[2])
-            if not unit_name:
-                continue
-            top_val = safe_float(lit[0])
-            bot_val = safe_float(lit[1])
-            if bot_val < top_val:
-                top_val, bot_val = bot_val, top_val
-            if merged_layers and merged_layers[-1]["name"] == unit_name and abs(merged_layers[-1]["bot"] - top_val) < 0.05:
-                merged_layers[-1]["bot"] = bot_val
-            else:
-                merged_layers.append({"name": unit_name, "top": top_val, "bot": bot_val})
-        for layer in merged_layers:
-            groups[layer["name"]].setdefault(kuyu_no, []).append(
-                f"{_fmt_litoloji_derinlik(layer['top'])}-{_fmt_litoloji_derinlik(layer['bot'])}"
-            )
-
-    paragraphs = []
-    for unit_name in LITOLOJI_DAGILIM_BIRIMLERI:
-        kuyu_dict = groups.get(unit_name, {})
-        parts = []
-        for kuyu_no, ranges in kuyu_dict.items():
-            parts.append(f"{kuyu_no}'de {', '.join(ranges)}m")
-        if parts:
-            paragraphs.append(f"{unit_name} birimleri " + ", ".join(parts) + " derinlikleri arasında gözlenmiştir.")
-    return paragraphs
-
-def set_vertical_cell_alignment(cell, align="center"):
-    try: tc = cell._tc; tcPr = tc.get_or_add_tcPr(); tcValign = OxmlElement('w:vAlign'); tcValign.set(qn('w:val'), align); tcPr.append(tcValign)
-    except Exception as exc: _log_silent("set_vertical_cell_alignment", exc)
-
-def _xml_child(parent, tag):
-    child = parent.find(qn(tag))
-    if child is None:
-        child = OxmlElement(tag)
-        parent.append(child)
-    return child
-
-def _rgb_from_hex(value):
-    value = str(value or "").strip().lstrip("#")
-    if len(value) != 6:
-        return None
-    try:
-        return RGBColor(int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
-    except ValueError:
-        return None
-
-def set_cell_shading(cell, fill):
-    try:
-        tc_pr = cell._tc.get_or_add_tcPr()
-        shd = _xml_child(tc_pr, "w:shd")
-        shd.set(qn("w:fill"), fill)
-    except Exception as exc:
-        _log_silent("set_cell_shading", exc)
-
-def set_cell_margins(cell, top=70, left=80, bottom=70, right=80):
-    try:
-        tc_pr = cell._tc.get_or_add_tcPr()
-        tc_mar = _xml_child(tc_pr, "w:tcMar")
-        for key, value in {"top": top, "left": left, "bottom": bottom, "right": right}.items():
-            node = _xml_child(tc_mar, f"w:{key}")
-            node.set(qn("w:w"), str(value))
-            node.set(qn("w:type"), "dxa")
-    except Exception as exc:
-        _log_silent("set_cell_margins", exc)
-
-def set_cell_border(cell, color=TABLE_BORDER_COLOR, size="6"):
-    try:
-        tc_pr = cell._tc.get_or_add_tcPr()
-        borders = _xml_child(tc_pr, "w:tcBorders")
-        for edge in ("top", "left", "bottom", "right"):
-            node = _xml_child(borders, f"w:{edge}")
-            node.set(qn("w:val"), "single")
-            node.set(qn("w:sz"), size)
-            node.set(qn("w:space"), "0")
-            node.set(qn("w:color"), color)
-    except Exception as exc:
-        _log_silent("set_cell_border", exc)
-
-def set_cell_width(cell, width_cm):
-    try:
-        if not width_cm:
-            return
-        tc_pr = cell._tc.get_or_add_tcPr()
-        tc_w = _xml_child(tc_pr, "w:tcW")
-        tc_w.set(qn("w:w"), str(int(float(width_cm) * 567)))
-        tc_w.set(qn("w:type"), "dxa")
-    except Exception as exc:
-        _log_silent("set_cell_width", exc)
-
-def repeat_table_header(row):
-    try:
-        tr_pr = row._tr.get_or_add_trPr()
-        if tr_pr.find(qn("w:tblHeader")) is None:
-            tr_pr.append(OxmlElement("w:tblHeader"))
-    except Exception as exc:
-        _log_silent("repeat_table_header", exc)
-
-def set_table_fit_to_window(table):
-    try:
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    except Exception as exc:
-        _log_silent("set_table_fit_to_window.alignment", exc)
-    try:
-        table.autofit = True
-    except Exception as exc:
-        _log_silent("set_table_fit_to_window.autofit", exc)
-    try:
-        tbl = table._tbl
-        tbl_pr = tbl.tblPr
-        if tbl_pr is None:
-            tbl_pr = OxmlElement("w:tblPr")
-            tbl.insert(0, tbl_pr)
-        tbl_w = _xml_child(tbl_pr, "w:tblW")
-        tbl_w.set(qn("w:w"), "5000")
-        tbl_w.set(qn("w:type"), "pct")
-        layout = _xml_child(tbl_pr, "w:tblLayout")
-        layout.set(qn("w:type"), "autofit")
-    except Exception as exc:
-        _log_silent("set_table_fit_to_window.tblpr", exc)
-
-def style_cell_text(cell, bold=None, font_size=None, font_color=None, alignment=None):
-    rgb = _rgb_from_hex(font_color)
-    for paragraph in cell.paragraphs:
-        if alignment is not None:
-            paragraph.alignment = alignment
-        paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.paragraph_format.line_spacing = 1
-        for run in paragraph.runs:
-            run.font.name = "Times New Roman"
-            if bold is not None:
-                run.font.bold = bold
-            if font_size is not None:
-                run.font.size = Pt(font_size)
-            if rgb is not None:
-                run.font.color.rgb = rgb
-
-def style_report_table_row(row, fill=TABLE_HEADER_FILL, bold=True, font_size=10):
-    for cell in row.cells:
-        set_cell_shading(cell, fill)
-        set_vertical_cell_alignment(cell, "center")
-        set_cell_margins(cell)
-        set_cell_border(cell)
-        style_cell_text(cell, bold=bold, font_size=font_size, font_color=TABLE_TEXT_COLOR, alignment=WD_ALIGN_PARAGRAPH.CENTER)
-
-def apply_report_table_style(table, header_rows=1, label_cols=None, text_cols=None, widths_cm=None):
-    label_cols = set(label_cols or [])
-    text_cols = set(text_cols or [])
-    set_table_fit_to_window(table)
-    for row_idx, row in enumerate(table.rows):
-        is_header = row_idx < header_rows
-        if is_header:
-            repeat_table_header(row)
-        for col_idx, cell in enumerate(row.cells):
-            set_cell_margins(cell)
-            set_cell_border(cell)
-            set_vertical_cell_alignment(cell, "center")
-            if widths_cm and col_idx < len(widths_cm):
-                set_cell_width(cell, widths_cm[col_idx])
-            alignment = WD_ALIGN_PARAGRAPH.LEFT if (not is_header and col_idx in text_cols) else WD_ALIGN_PARAGRAPH.CENTER
-            style_cell_text(cell, bold=None, font_size=10, font_color=TABLE_TEXT_COLOR, alignment=alignment)
-            if is_header:
-                set_cell_shading(cell, TABLE_HEADER_FILL)
-                style_cell_text(cell, bold=True, font_size=10, font_color=TABLE_TEXT_COLOR, alignment=WD_ALIGN_PARAGRAPH.CENTER)
-            elif col_idx in label_cols:
-                set_cell_shading(cell, TABLE_LABEL_FILL)
-                style_cell_text(cell, bold=True, font_size=10, font_color=TABLE_TEXT_COLOR, alignment=alignment)
-            elif row_idx % 2 == 0:
-                set_cell_shading(cell, TABLE_ALT_FILL)
-
-def clean_val(val):
-    if val is None: return "-"
-    s = str(val).strip().replace('\n', '').replace('\r', '').replace('\x0b', '').replace('\v', '')
-    return s if s else "-"
-
-def fmt_jeo(val):
-    if val is None or val == "-" or str(val).strip() == "" or pd.isna(val): return "-"
-    try:
-        f = float(str(val).replace(",", "."))
-        if f == int(f): return str(int(f)) 
-        return "{:.2f}".format(f).replace(".", ",") 
-    except Exception as exc:
-        _log_silent("fmt_jeo", exc)
-        return str(val).replace(".", ",")
-
-def jeofizik_vp_layers_sadelestir(layers):
-    sade_layers = []
-    onceki_vp = None
-    for layer in layers or []:
-        vp_key = fmt_jeo(layer.get("vp", "-"))
-        if vp_key != "-" and vp_key == onceki_vp:
-            continue
-        sade_layers.append(layer)
-        onceki_vp = vp_key if vp_key != "-" else None
-    return sade_layers
-
-def read_table_file(path, header=None):
-    if str(path).lower().endswith(".csv"):
-        return pd.read_csv(path, header=header)
-    return pd.read_excel(path, header=header)
-
-def set_cell_text_clean(cell, text, font_name="Times New Roman", font_size=10, bold=False, italic=False, alignment=WD_ALIGN_PARAGRAPH.CENTER):
-    if len(cell.paragraphs) > 1:
-        for i in range(len(cell.paragraphs) - 1, 0, -1): p_element = cell.paragraphs[i]._element; p_element.getparent().remove(p_element)
-    p = cell.paragraphs[0]; p.clear(); p.alignment = alignment
-    p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(0); p.paragraph_format.line_spacing = 1
-    set_cell_margins(cell); set_cell_border(cell)
-    run = p.add_run(clean_val(text)); run.font.name = font_name; run.font.size = Pt(font_size); run.font.bold = bold; run.font.italic = italic
-    rgb = _rgb_from_hex(TABLE_TEXT_COLOR)
-    if rgb is not None:
-        run.font.color.rgb = rgb
-    return run
 
 def clean_word_tags(doc):
     for p in iter_all_paragraphs(doc):
@@ -375,16 +69,6 @@ def iter_all_paragraphs(doc):
                     for row in table.rows:
                         for cell in row.cells:
                             for p in cell.paragraphs: yield p
-
-def create_word_table(doc, headers, data, text_cols=None, widths_cm=None):
-    table = doc.add_table(rows=1, cols=len(headers)); table.style = 'Table Grid'
-    hdr_cells = table.rows[0].cells
-    for i, h in enumerate(headers): set_cell_text_clean(hdr_cells[i], h, font_size=11, bold=True); set_vertical_cell_alignment(hdr_cells[i], "center")
-    for row_data in data:
-        row_cells = table.add_row().cells
-        for i, val in enumerate(row_data): set_cell_text_clean(row_cells[i], val, font_size=10, bold=False); set_vertical_cell_alignment(row_cells[i], "center")
-    apply_report_table_style(table, header_rows=1, text_cols=text_cols, widths_cm=widths_cm)
-    return table
 
 BINA_FIELDS_MAP = [
     ("Bina Kullanım Amacı", "kul"),
