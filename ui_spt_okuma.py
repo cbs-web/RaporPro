@@ -25,7 +25,15 @@ from spt_okuma_motoru import (
 )
 from workbook_motoru import yeni_sondaj_sablonu
 from yardimcilar import safe_float
-
+from ui_spt_okuma_yardimci import (
+    collect_image_paths,
+    context_issues as spt_context_issues,
+    duplicate_keys as spt_duplicate_keys,
+    record_quality as spt_record_quality,
+    source_unique_key,
+    spt_location_key as build_spt_location_key,
+    spt_unique_key as build_spt_unique_key,
+)
 
 class SPTOkumaMixin:
     def spt_excel_iceri_al(self):
@@ -59,7 +67,6 @@ class SPTOkumaMixin:
         selected_item = {"id": None}
         preview_image = {"ref": None}
         import_warnings = []
-        image_exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
         main_queue_paths = []
         main_queue_recursive_var = tk.BooleanVar(value=True)
         main_queue_status_var = tk.StringVar(value="Kuyruk boş. Fotoğraf veya klasörü bu ekrana sürükleyebilirsiniz.")
@@ -191,121 +198,21 @@ class SPTOkumaMixin:
                     return safe_float(sondaj.get("der"))
             return 0
 
-        def n30_numeric(kayit):
-            if str(kayit.n30).strip().upper() == "R":
-                return None
-            value = safe_float(kayit.n30)
-            return value if value > 0 else None
-
-        def is_refu(kayit):
-            return str(kayit.n30).strip().upper() == "R" or any("50/" in str(v) or str(v).strip().upper() == "R" for v in (kayit.v15, kayit.v30, kayit.v45))
-
         def context_issues():
-            issues = {}
-            by_no = {}
-            for order, record in enumerate(records):
-                if record.get("record_type") == "queue" or not record.get("include", True):
-                    continue
-                kayit = record["kayit"]
-                if not kayit.sondaj_no:
-                    continue
-                by_no.setdefault(kayit.sondaj_no, []).append((order, record))
-
-            for no, items in by_no.items():
-                last_depth = None
-                for order, record in items:
-                    depth = safe_float(record["kayit"].derinlik)
-                    if last_depth is not None and depth > 0 and depth < last_depth - 0.01:
-                        issues.setdefault(id(record), []).append("derinlik sırası bozuk")
-                    if depth > 0:
-                        last_depth = depth
-
-                sorted_items = sorted(items, key=lambda item: safe_float(item[1]["kayit"].derinlik))
-                prev_n30 = None
-                refu_seen = False
-                for order, record in sorted_items:
-                    kayit = record["kayit"]
-                    n30_val = n30_numeric(kayit)
-                    if is_refu(kayit):
-                        refu_seen = True
-                    elif refu_seen and n30_val is not None and n30_val < 50:
-                        issues.setdefault(id(record), []).append("refü sonrası düşük N30")
-                    if n30_val is not None:
-                        if n30_val > 80:
-                            issues.setdefault(id(record), []).append("N30 çok yüksek")
-                        elif n30_val < 2:
-                            issues.setdefault(id(record), []).append("N30 çok düşük")
-                        if prev_n30 is not None and abs(n30_val - prev_n30) >= 25:
-                            issues.setdefault(id(record), []).append("N30 ani sıçrama yapıyor")
-                        prev_n30 = n30_val
-            return issues
+            return spt_context_issues(records)
 
         def record_quality(record, duplicate=False, context_messages=None):
-            if record.get("record_type") == "queue":
-                status = record.get("queue_status", "ready")
-                message = record.get("queue_message") or "Okumaya hazır"
-                if status == "reading":
-                    return {"level": "reading", "message": message or "Okunuyor"}
-                if status == "error":
-                    return {"level": "error", "message": message or "Okunamadı"}
-                if status == "skipped":
-                    return {"level": "warning", "message": message or "Tekrar olduğu için atlandı"}
-                return {"level": "queued", "message": message}
-            kayit = record["kayit"]
-            settings = project_spt_settings()
-            guven = safe_float(kayit.guven)
-            messages = list(context_messages or [])
-            level = "warning" if messages else "ok"
-            if not record.get("include", True):
-                return {"level": "disabled", "message": "Aktarım dışı"}
-            if not kayit.sondaj_no:
-                messages.append("sondaj no eksik")
-                level = "error"
-            elif valid_sondaj_nolari and normalize_sondaj_no(kayit.sondaj_no) not in valid_sondaj_nolari:
-                messages.append("sondaj no projede yok")
-                if level != "error":
-                    level = "warning"
-            if not kayit.derinlik:
-                messages.append("derinlik eksik")
-                level = "error"
-            if not (kayit.v15 or kayit.v30 or kayit.v45 or kayit.n30):
-                messages.append("SPT değeri eksik")
-                level = "error"
-            if duplicate:
-                messages.append("aynı derinlik tekrar ediyor")
-                if level != "error":
-                    level = "warning"
-            max_depth = current_sondaj_depth(kayit.sondaj_no)
-            if max_depth and safe_float(kayit.derinlik) > max_depth + 0.01:
-                messages.append("sondaj derinliğini geçiyor")
-                if level != "error":
-                    level = "warning"
-            if guven and guven < settings["guven_esigi"]:
-                messages.append(f"düşük güven %{int(guven)}")
-                if level != "error":
-                    level = "warning"
-            if not kayit.n30:
-                messages.append("N30 boş")
-                if level != "error":
-                    level = "warning"
-            if kayit.uyari:
-                messages.append(kayit.uyari)
-                if "okunamadı" in kayit.uyari or "eksik" in kayit.uyari:
-                    level = "error"
-                elif level != "error":
-                    level = "warning"
-            return {"level": level, "message": ", ".join(dict.fromkeys(messages)) or "Hazır"}
+            return spt_record_quality(
+                record,
+                duplicate=duplicate,
+                context_messages=context_messages,
+                current_sondaj_depth=current_sondaj_depth,
+                valid_sondaj_nolari=valid_sondaj_nolari,
+                settings=project_spt_settings(),
+            )
 
         def duplicate_keys():
-            counts = {}
-            for record in records:
-                kayit = record["kayit"]
-                if record.get("record_type") == "queue" or not record.get("include", True):
-                    continue
-                key = (kayit.sondaj_no.strip(), round(safe_float(kayit.derinlik), 2))
-                if key[0] and key[1] > 0:
-                    counts[key] = counts.get(key, 0) + 1
-            return {key for key, count in counts.items() if count > 1}
+            return spt_duplicate_keys(records)
 
         def visible_by_filter(record):
             mode = filter_var.get()
@@ -733,17 +640,6 @@ class SPTOkumaMixin:
             except Exception as exc:
                 messagebox.showerror("SPT Kaynak Raporu", f"Rapor kaydedilemedi:\n{exc}")
 
-        def source_unique_key(value):
-            raw = str(value or "").strip()
-            if not raw:
-                return ""
-            try:
-                if os.path.exists(raw):
-                    return os.path.normcase(os.path.realpath(os.path.abspath(raw)))
-            except Exception:
-                pass
-            return os.path.normcase(raw)
-
         def queue_record_for_path(path):
             key = source_unique_key(path)
             for record in records:
@@ -792,32 +688,6 @@ class SPTOkumaMixin:
             records[:] = [record for record in records if record.get("record_type") != "queue"]
             selected_item["id"] = None
             refresh_tree(keep_selection=False)
-
-        def collect_image_paths(sources, recursive=True):
-            found_paths = []
-            for source in sources or []:
-                if not source:
-                    continue
-                source = os.path.abspath(str(source))
-                if os.path.isdir(source):
-                    if recursive:
-                        for root_dir, _, files in os.walk(source):
-                            for name in files:
-                                path = os.path.join(root_dir, name)
-                                if os.path.splitext(path)[1].lower() in image_exts:
-                                    found_paths.append(path)
-                    else:
-                        try:
-                            names = os.listdir(source)
-                        except Exception:
-                            names = []
-                        for name in names:
-                            path = os.path.join(source, name)
-                            if os.path.isfile(path) and os.path.splitext(path)[1].lower() in image_exts:
-                                found_paths.append(path)
-                elif os.path.isfile(source) and os.path.splitext(source)[1].lower() in image_exts:
-                    found_paths.append(source)
-            return sorted(found_paths, key=lambda item: item.lower())
 
         def refresh_main_queue_status(extra=None):
             if main_read_state["active"]:
@@ -902,22 +772,10 @@ class SPTOkumaMixin:
             refresh_main_queue_status("kuyruk temizlendi")
 
         def spt_unique_key(kayit, fallback_source=""):
-            source = getattr(kayit, "kaynak_yolu", "") or getattr(kayit, "kaynak", "") or fallback_source
-            return (
-                source_unique_key(source),
-                normalize_sondaj_no(getattr(kayit, "sondaj_no", ""), target_var.get()),
-                round(safe_float(getattr(kayit, "derinlik", "")), 2),
-                str(getattr(kayit, "v15", "") or "").strip(),
-                str(getattr(kayit, "v30", "") or "").strip(),
-                str(getattr(kayit, "v45", "") or "").strip(),
-                str(getattr(kayit, "n30", "") or "").strip(),
-            )
+            return build_spt_unique_key(kayit, fallback_source=fallback_source, default_sondaj_no=target_var.get())
 
         def spt_location_key(kayit, fallback_source=""):
-            return (
-                normalize_sondaj_no(getattr(kayit, "sondaj_no", ""), target_var.get()),
-                round(safe_float(getattr(kayit, "derinlik", "")), 2),
-            )
+            return build_spt_location_key(kayit, default_sondaj_no=target_var.get())
 
         def add_result(sonuc, source_label, append=True):
             if not append:

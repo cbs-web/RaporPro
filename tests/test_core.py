@@ -15,6 +15,7 @@ from raporlama import (
     litoloji_dagilim_paragraflari,
 )
 from spt_okuma_motoru import (
+    SPTKaydi,
     _path_unique_key,
     _select_spt_records_for_batch,
     hedef_derinlige_yuvarla,
@@ -22,6 +23,7 @@ from spt_okuma_motoru import (
     n30_hesapla,
     normalize_sondaj_no,
 )
+from ui_spt_okuma_yardimci import collect_image_paths, duplicate_keys as spt_duplicate_keys, record_quality as spt_record_quality
 from taahhutname import taahhutname_context, taahhutname_olustur, taahhutname_yapi_adresi
 from tutanaklar import tutanaklari_olustur
 from ekler import (
@@ -90,6 +92,40 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         }
         result = wb_validate_rows(rows)
         self.assertIn(("litoloji", 0, "tanim"), result["warnings"])
+
+    def test_spt_helper_klasorden_resimleri_toplar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = os.path.join(tmp, "alt")
+            os.makedirs(nested)
+            image_a = os.path.join(tmp, "a.JPG")
+            image_b = os.path.join(nested, "b.png")
+            text_file = os.path.join(tmp, "not.txt")
+            for path in (image_a, image_b, text_file):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("x")
+
+            shallow = collect_image_paths([tmp], recursive=False)
+            recursive = collect_image_paths([tmp], recursive=True)
+
+            self.assertEqual([os.path.basename(path) for path in shallow], ["a.JPG"])
+            self.assertEqual(sorted(os.path.basename(path) for path in recursive), ["a.JPG", "b.png"])
+
+    def test_spt_helper_tekrar_ve_kalite_uyarisi_uret(self):
+        kayit1 = SPTKaydi(sondaj_no="SK-1", derinlik="1.50", v15="2", v30="3", v45="4", n30="7", guven="95")
+        kayit2 = SPTKaydi(sondaj_no="SK-1", derinlik="1.50", v15="2", v30="3", v45="4", n30="7", guven="95")
+        records = [{"kayit": kayit1, "include": True}, {"kayit": kayit2, "include": True}]
+
+        self.assertIn(("SK-1", 1.5), spt_duplicate_keys(records))
+        quality = spt_record_quality(
+            {"kayit": kayit1, "include": True},
+            duplicate=True,
+            current_sondaj_depth=lambda _no: 1.0,
+            valid_sondaj_nolari={"SK-1"},
+            settings={"guven_esigi": 90},
+        )
+        self.assertEqual(quality["level"], "warning")
+        self.assertIn("aynı derinlik", quality["message"])
+        self.assertIn("sondaj derinliğini geçiyor", quality["message"])
 
 
 class KesitCizimTestleri(unittest.TestCase):
