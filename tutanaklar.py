@@ -118,6 +118,34 @@ def _count_nonempty_rows(rows):
     return count
 
 
+def _safe_float(value):
+    try:
+        return float(str(value).replace(",", ".").strip())
+    except Exception:
+        return 0.0
+
+
+def _orselenmis_numune_sayisi(sondaj):
+    derinlik = _safe_float((sondaj or {}).get("der"))
+    if derinlik <= 0:
+        return 0
+    return int((derinlik + 1e-6) // 1.5)
+
+
+def _ud_numune_sayisi(sondaj):
+    count = 0
+    for row in (sondaj or {}).get("numuneler", []) or []:
+        if isinstance(row, dict):
+            values = row.values()
+        else:
+            values = row
+        text = " ".join(_clean(value) for value in values).upper()
+        tokens = text.replace("-", " ").replace("_", " ").replace("/", " ").split()
+        if any(token == "UD" or (token.startswith("UD") and token[2:].isdigit()) for token in tokens):
+            count += 1
+    return count
+
+
 def _yass_text(sondaj):
     for key in ("yass_d2", "yass_d1"):
         value = _clean(sondaj.get(key))
@@ -155,8 +183,8 @@ def _fill_sondaj_table(table, veri, sondaj):
     _set_cell(table.rows[10].cells[2], _fmt_coord(sondaj.get("y")))
     _set_cell(table.rows[10].cells[3], _fmt_coord(sondaj.get("x")))
     _set_row_value(table, 11, _clean(ayarlar.get("delgi_capi"), "89mm"), col_start=2)
-    _set_row_value(table, 12, str(_count_nonempty_rows(sondaj.get("numuneler", []))), col_start=2)
-    _set_row_value(table, 13, "-", col_start=2)
+    _set_row_value(table, 12, str(_orselenmis_numune_sayisi(sondaj)), col_start=2)
+    _set_row_value(table, 13, str(_ud_numune_sayisi(sondaj)), col_start=2)
     _set_row_value(table, 14, str(_count_nonempty_rows(sondaj.get("spt", []))), col_start=2)
     _set_row_value(table, 15, str(_count_nonempty_rows(sondaj.get("pmt", []))), col_start=2)
     _set_row_value(table, 16, "-", col_start=2)

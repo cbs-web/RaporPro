@@ -900,7 +900,7 @@ class TutanakTestleri(unittest.TestCase):
                     "spt": [["1.50", "2", "3", "4", "7"]],
                     "pmt": [["4.50", "100", "8"]],
                     "kaya": [],
-                    "numuneler": [],
+                    "numuneler": [["3.00-3.50", "UD"], ["6.00-6.50", "UD-1"], ["9.00", "Örselenmiş"]],
                     "yass_d1": "6.00",
                 }
             ],
@@ -919,6 +919,8 @@ class TutanakTestleri(unittest.TestCase):
             self.assertEqual(info["jeofizik_count"], 1)
             doc = Document(output_path)
             self.assertEqual(doc.tables[0].rows[2].cells[2].text, "SK-1")
+            self.assertEqual(doc.tables[0].rows[12].cells[2].text, "10")
+            self.assertEqual(doc.tables[0].rows[13].cells[2].text, "2")
             self.assertEqual(doc.tables[0].rows[14].cells[2].text, "1")
             self.assertEqual(doc.tables[0].rows[15].cells[2].text, "1")
             self.assertEqual(doc.tables[-1].rows[3].cells[1].text, "03.06.2026")
