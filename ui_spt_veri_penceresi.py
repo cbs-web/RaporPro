@@ -93,6 +93,20 @@ class SPTVeriPenceresi:
             pass
         return "break" # Tab'ın varsayılan (sağa kayma) hareketini durdurur!
 
+    def hucreye_git(self, row_dict, col_idx, delta):
+        if row_dict not in self.rows:
+            return "break"
+        row_idx = self.rows.index(row_dict) + delta
+        if row_idx >= len(self.rows):
+            self.add_empty_row()
+        if 0 <= row_idx < len(self.rows):
+            ents = self.rows[row_idx]["ents"]
+            col_idx = max(0, min(col_idx, len(ents) - 1))
+            entry = ents[col_idx]
+            entry.focus_set()
+            entry.selection_range(0, tk.END)
+        return "break"
+
     def source_for_row(self, data):
         if not data:
             return None
@@ -230,9 +244,11 @@ class SPTVeriPenceresi:
             
             # Enter ve TAB Tuşu Kontrolleri (Artık 45 ve N30 Sütunlarında geçerli)
             # i=3 (45 Sütunu) ve i=4 (N30 Sütunu)
-            if i in [3, 4]: 
-                e.bind("<Return>", lambda event, r=row_dict: self.sonraki_satira_gec(r))
+            if i in [3, 4]:
                 e.bind("<Tab>", lambda event, r=row_dict: self.sonraki_satira_gec(r))
+            e.bind("<Return>", lambda event, r=row_dict, c=i: self.hucreye_git(r, c, 1))
+            e.bind("<Down>", lambda event, r=row_dict, c=i: self.hucreye_git(r, c, 1))
+            e.bind("<Up>", lambda event, r=row_dict, c=i: self.hucreye_git(r, c, -1))
                 
         btn_src = tk.Button(
             self.scroll_frame,

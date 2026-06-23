@@ -274,6 +274,9 @@ class VeriGirisPenceresi(Toplevel):
 
         for col_idx, entry in enumerate(row_ents):
             entry.bind("<FocusIn>", lambda event, c=col_idx: self.aktif_hucre_ayarla(event.widget, c), add="+")
+            entry.bind("<Return>", lambda event, r=row_ents, c=col_idx: self.hucreye_git(r, c, 1))
+            entry.bind("<Down>", lambda event, r=row_ents, c=col_idx: self.hucreye_git(r, c, 1))
+            entry.bind("<Up>", lambda event, r=row_ents, c=col_idx: self.hucreye_git(r, c, -1))
             if self.litoloji_modu:
                 entry.bind("<Button-3>", lambda event, r=row_ents, c=col_idx: self.satir_sag_tik(event, r, c), add="+")
                 entry.bind("<KeyRelease>", lambda event: self.litoloji_yazim_kontrol(), add="+")
@@ -283,7 +286,6 @@ class VeriGirisPenceresi(Toplevel):
         
         son_entry = row_ents[-1]
         son_entry.bind("<Tab>", lambda event, r=row_ents: self.tab_basildi(event, r))
-        son_entry.bind("<Return>", lambda event, r=row_ents: self.tab_basildi(event, r))
         self.satirlar.append(row_ents)
         self.f.update_idletasks()
         self.c.configure(scrollregion=self.c.bbox("all"))
@@ -292,6 +294,19 @@ class VeriGirisPenceresi(Toplevel):
 
     def aktif_hucre_ayarla(self, widget, col_idx):
         self.aktif_hucre = (widget, col_idx)
+
+    def hucreye_git(self, row_ents, col_idx, delta):
+        if row_ents not in self.satirlar:
+            return "break"
+        row_idx = self.satirlar.index(row_ents) + delta
+        if row_idx >= len(self.satirlar):
+            self.satir_ekle()
+        if 0 <= row_idx < len(self.satirlar):
+            col_idx = max(0, min(col_idx, len(self.satirlar[row_idx]) - 1))
+            entry = self.satirlar[row_idx][col_idx]
+            entry.focus_set()
+            entry.selection_range(0, tk.END)
+        return "break"
 
     def satir_sag_tik(self, event, row_ents, col_idx):
         self.aktif_hucre_ayarla(event.widget, col_idx)
