@@ -30,7 +30,12 @@ from ui_spt_okuma_yardimci import (
     spt_location_key as build_spt_location_key,
     spt_unique_key as build_spt_unique_key,
 )
-from ui_spt_okuma_dialogs import export_spt_source_report, open_spt_settings_dialog, show_spt_history
+from ui_spt_okuma_dialogs import (
+    export_spt_source_report,
+    open_spt_photo_queue_dialog,
+    open_spt_settings_dialog,
+    show_spt_history,
+)
 class SPTOkumaMixin:
     def spt_excel_iceri_al(self):
         self.spt_okuma_merkezi_ac(baslat="excel")
@@ -1057,208 +1062,14 @@ class SPTOkumaMixin:
             threading.Thread(target=worker, daemon=True).start()
 
         def import_photos():
-            image_exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-            queued_paths = []
-            try:
-                from tkinterdnd2 import TkinterDnD
-                queue_win = TkinterDnD.Toplevel(win)
-            except Exception:
-                queue_win = Toplevel(win)
-            self.pencere_hazirla(queue_win, "SPT Fotoğraf Kuyruğu", "820x560", (700, 460), modal=False)
-
-            info_var = tk.StringVar(value="Fotoğraf veya klasör ekleyin. Okuma Başlat düğmesine basınca başlayacak.")
-            recursive_var = tk.BooleanVar(value=True)
-            dnd_var = tk.StringVar(value="")
-
-            top = ttk.Frame(queue_win, padding=8)
-            top.pack(fill="x")
-            ttk.Label(top, text="SPT Fotoğraf Kuyruğu", font=FONT_BOLD).pack(side="left", padx=(0, 12))
-            ttk.Label(top, textvariable=info_var, foreground="#555555").pack(side="left", fill="x", expand=True)
-
-            body = ttk.Frame(queue_win, padding=(8, 0, 8, 8))
-            body.pack(fill="both", expand=True)
-            drop_hint = ttk.Label(body, textvariable=dnd_var, foreground="#2874A6")
-            drop_hint.pack(anchor="w", pady=(0, 4))
-            list_frame = ttk.Frame(body)
-            list_frame.pack(fill="both", expand=True)
-            listbox = tk.Listbox(list_frame, selectmode="extended")
-            scroll_y = ttk.Scrollbar(list_frame, orient="vertical", command=listbox.yview)
-            scroll_x = ttk.Scrollbar(list_frame, orient="horizontal", command=listbox.xview)
-            listbox.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-            scroll_y.pack(side="right", fill="y")
-            scroll_x.pack(side="bottom", fill="x")
-            listbox.pack(side="left", fill="both", expand=True)
-
-            def refresh_queue():
-                listbox.delete(0, tk.END)
-                for idx, path in enumerate(queued_paths, start=1):
-                    listbox.insert(tk.END, f"{idx}. {path}")
-                info_var.set(f"{len(queued_paths)} fotoğraf kuyrukta. Başlatılana kadar okuma yapılmayacak.")
-
-            def queue_key(path):
-                try:
-                    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
-                except Exception:
-                    return os.path.normcase(os.path.abspath(str(path)))
-
-            def collect_images(source):
-                if not source:
-                    return []
-                source = os.path.abspath(str(source))
-                found = []
-                if os.path.isdir(source):
-                    if recursive_var.get():
-                        for root_dir, _, files in os.walk(source):
-                            for name in files:
-                                path = os.path.join(root_dir, name)
-                                if os.path.splitext(path)[1].lower() in image_exts:
-                                    found.append(path)
-                    else:
-                        for name in os.listdir(source):
-                            path = os.path.join(source, name)
-                            if os.path.isfile(path) and os.path.splitext(path)[1].lower() in image_exts:
-                                found.append(path)
-                elif os.path.isfile(source) and os.path.splitext(source)[1].lower() in image_exts:
-                    found.append(source)
-                return sorted(found, key=lambda item: item.lower())
-
-            def add_paths(paths):
-                existing = {queue_key(path) for path in queued_paths}
-                added = 0
-                skipped_duplicate = 0
-                skipped_invalid = 0
-                for source in paths:
-                    found = collect_images(source)
-                    if not found:
-                        skipped_invalid += 1
-                    for abs_path in found:
-                        key = queue_key(abs_path)
-                        if key in existing:
-                            skipped_duplicate += 1
-                            continue
-                        queued_paths.append(os.path.abspath(abs_path))
-                        existing.add(key)
-                        added += 1
-                queued_paths.sort(key=lambda item: item.lower())
-                # Son güvenlik: farklı ekleme yollarıyla aynı dosya geldiyse kuyruğu tekilleştir.
-                unique_paths = []
-                seen = set()
-                for path in queued_paths:
-                    key = queue_key(path)
-                    if key in seen:
-                        skipped_duplicate += 1
-                        continue
-                    unique_paths.append(path)
-                    existing.add(key)
-                    seen.add(key)
-                queued_paths[:] = unique_paths
-                refresh_queue()
-                if added:
-                    status_var.set(f"SPT kuyruğuna {added} fotoğraf eklendi.")
-                if skipped_duplicate:
-                    info_var.set(f"{len(queued_paths)} fotoğraf kuyrukta. {skipped_duplicate} tekrar dosya atlandı.")
-                elif skipped_invalid and not added:
-                    info_var.set("Geçerli fotoğraf bulunamadı. JPG, PNG, BMP veya WEBP dosyası/klasörü bırakın.")
-                return added, skipped_duplicate, skipped_invalid
-
-            def add_photos():
-                paths = filedialog.askopenfilenames(
-                    title="SPT Fotoğraflarını Kuyruğa Ekle",
-                    initialdir=self._spt_initial_dir(),
-                    filetypes=[("Resimler", "*.jpg *.jpeg *.png *.bmp *.webp *.JPG *.JPEG *.PNG"), ("Tüm Dosyalar", "*.*")],
-                    parent=queue_win,
-                )
-                add_paths(paths)
-
-            def add_folder():
-                folder = filedialog.askdirectory(title="SPT Fotoğraf Klasörü Seç", initialdir=self._spt_initial_dir(), parent=queue_win)
-                if not folder:
-                    return
-                add_paths([folder])
-
-            def remove_selected():
-                selected = list(listbox.curselection())
-                if not selected:
-                    return
-                for idx in reversed(selected):
-                    if 0 <= idx < len(queued_paths):
-                        del queued_paths[idx]
-                refresh_queue()
-
-            def clear_queue():
-                queued_paths.clear()
-                refresh_queue()
-
-            def start_queue():
-                if not queued_paths:
-                    messagebox.showwarning("SPT Fotoğraf Kuyruğu", "Başlatmak için önce fotoğraf ekleyin.", parent=queue_win)
-                    return
-                paths = []
-                seen = set()
-                for path in queued_paths:
-                    key = queue_key(path)
-                    if key in seen:
-                        continue
-                    paths.append(path)
-                    seen.add(key)
-                if len(paths) != len(queued_paths):
-                    queued_paths[:] = paths
-                    refresh_queue()
-                    status_var.set("SPT fotoğraf kuyruğundaki tekrar dosyalar temizlendi.")
-                queue_win.destroy()
-                add_to_main_photo_queue(paths)
-                start_main_photo_queue()
-
-            def parse_drop_paths(data):
-                try:
-                    return [item for item in queue_win.tk.splitlist(data) if item]
-                except Exception:
-                    return [item for item in str(data or "").split() if item]
-
-            def on_drop(event):
-                sources = parse_drop_paths(getattr(event, "data", ""))
-                added, skipped_duplicate, skipped_invalid = add_paths(sources)
-                if added:
-                    status_var.set(f"Sürükle-bırak ile {added} fotoğraf eklendi.")
-                elif skipped_duplicate:
-                    status_var.set("Sürükle-bırak: tekrar dosyalar atlandı.")
-                elif skipped_invalid:
-                    status_var.set("Sürükle-bırak: geçerli fotoğraf bulunamadı.")
-                return "break"
-
-            def enable_drag_drop():
-                try:
-                    from tkinterdnd2 import DND_FILES
-                    enabled = False
-                    targets = [queue_win, listbox]
-                    for target in targets:
-                        try:
-                            target.drop_target_register(DND_FILES)
-                            target.dnd_bind("<<Drop>>", on_drop)
-                            enabled = True
-                        except Exception:
-                            continue
-                    if enabled:
-                        dnd_var.set("Fotoğraf veya klasörü bu pencereye sürükleyip bırakabilirsiniz.")
-                        return True
-                except Exception:
-                    pass
-                dnd_var.set("Sürükle-bırak için tkinterdnd2 paketi gerekir. RaporPro_Baslat.bat ile paket kontrolünden kurabilirsiniz.")
-                return False
-
-            buttons = ttk.Frame(queue_win, padding=8)
-            buttons.pack(fill="x")
-            tk.Button(buttons, text="Fotoğraf Ekle", command=add_photos, bg="#2E86C1", fg="white", font=FONT_BOLD).pack(side="left", padx=3)
-            tk.Button(buttons, text="Klasör Ekle", command=add_folder, bg="#117864", fg="white", font=FONT_BOLD).pack(side="left", padx=3)
-            ttk.Checkbutton(buttons, text="Alt klasörleri tara", variable=recursive_var).pack(side="left", padx=8)
-            tk.Button(buttons, text="Seçileni Sil", command=remove_selected, bg=COLOR_DANGER, fg="white", font=FONT_BOLD).pack(side="left", padx=3)
-            tk.Button(buttons, text="Temizle", command=clear_queue, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="left", padx=3)
-            tk.Button(buttons, text="Başlat", command=start_queue, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=3)
-            tk.Button(buttons, text="Kapat", command=queue_win.destroy, bg="#ECF0F1", fg="#111", font=FONT_BOLD).pack(side="right", padx=3)
-            listbox.bind("<Delete>", lambda event: (remove_selected() or "break"))
-            enable_drag_drop()
-            refresh_queue()
-
+            open_spt_photo_queue_dialog(
+                self,
+                win,
+                self._spt_initial_dir(),
+                add_to_main_photo_queue,
+                start_main_photo_queue,
+                status_var,
+            )
         def import_cropped_photo():
             source_path = filedialog.askopenfilename(
                 title="Kırpılacak SPT Fotoğrafını Seç",
