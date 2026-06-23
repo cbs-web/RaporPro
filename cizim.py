@@ -277,8 +277,8 @@ class VeriGirisPenceresi(Toplevel):
             entry.bind("<Return>", lambda event, r=row_ents, c=col_idx: self.hucreye_git(r, c, 1))
             entry.bind("<Down>", lambda event, r=row_ents, c=col_idx: self.hucreye_git(r, c, 1))
             entry.bind("<Up>", lambda event, r=row_ents, c=col_idx: self.hucreye_git(r, c, -1))
+            entry.bind("<Button-3>", lambda event, r=row_ents, c=col_idx: self.satir_sag_tik(event, r, c), add="+")
             if self.litoloji_modu:
-                entry.bind("<Button-3>", lambda event, r=row_ents, c=col_idx: self.satir_sag_tik(event, r, c), add="+")
                 entry.bind("<KeyRelease>", lambda event: self.litoloji_yazim_kontrol(), add="+")
                 entry.bind("<FocusOut>", lambda event: self.litoloji_yazim_kontrol(), add="+")
             if self.litoloji_modu and col_idx == 2:
@@ -328,7 +328,7 @@ class VeriGirisPenceresi(Toplevel):
     def satir_sil(self, row_ents):
         if row_ents not in self.satirlar:
             return
-        if not messagebox.askyesno("Satırı Sil", "Seçili litoloji satırı silinsin mi?", parent=self):
+        if not messagebox.askyesno("Satırı Sil", "Seçili satır silinsin mi?", parent=self):
             return
         for entry in row_ents:
             entry.destroy()

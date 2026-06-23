@@ -249,6 +249,7 @@ class SPTVeriPenceresi:
             e.bind("<Return>", lambda event, r=row_dict, c=i: self.hucreye_git(r, c, 1))
             e.bind("<Down>", lambda event, r=row_dict, c=i: self.hucreye_git(r, c, 1))
             e.bind("<Up>", lambda event, r=row_dict, c=i: self.hucreye_git(r, c, -1))
+            e.bind("<Button-3>", lambda event, r=row_dict: self.satir_sag_tik(event, r), add="+")
                 
         btn_src = tk.Button(
             self.scroll_frame,
@@ -268,12 +269,42 @@ class SPTVeriPenceresi:
         self.rows.append(row_dict)
         self.canvas.update_idletasks()
         self.canvas.yview_moveto(1.0)
+
+    def satir_sag_tik(self, event, row_dict):
+        try:
+            event.widget.focus_set()
+        except Exception:
+            pass
+        menu = tk.Menu(self.top, tearoff=False)
+        menu.add_command(label="Seçili satırı sil", command=lambda r=row_dict: self.sil_satir(r, confirm=True))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+        return "break"
         
-    def sil_satir(self, row_dict):
+    def sil_satir(self, row_dict, confirm=False):
+        if row_dict not in self.rows:
+            return
+        if confirm and not messagebox.askyesno("Satırı Sil", "Seçili satır silinsin mi?", parent=self.top):
+            return
         for e in row_dict["ents"]: e.destroy()
         row_dict["btn_src"].destroy()
         row_dict["btn"].destroy()
         self.rows.remove(row_dict)
+        if not self.rows:
+            self.add_empty_row()
+        else:
+            for row_idx, row in enumerate(self.rows, start=1):
+                for col_idx, entry in enumerate(row["ents"]):
+                    entry.grid_configure(row=row_idx, column=col_idx)
+                row["btn_src"].grid_configure(row=row_idx, column=5)
+                row["btn"].grid_configure(row=row_idx, column=6)
+            self.canvas.update_idletasks()
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def hesapla_n30(self, row_dict):
         ents = row_dict["ents"]
