@@ -13,7 +13,6 @@ from spt_okuma_motoru import (
     kayit_normalize_et,
     n30_hesapla,
     spt_gecmis_kaydet,
-    spt_kirp_kaydet,
     spt_ogrenme_kaydet,
     spt_ayarlarini_yukle,
     normalize_sondaj_no,
@@ -32,6 +31,7 @@ from ui_spt_okuma_yardimci import (
 )
 from ui_spt_okuma_dialogs import (
     export_spt_source_report,
+    open_spt_crop_dialog,
     open_spt_photo_queue_dialog,
     open_spt_settings_dialog,
     show_spt_history,
@@ -1071,120 +1071,14 @@ class SPTOkumaMixin:
                 status_var,
             )
         def import_cropped_photo():
-            source_path = filedialog.askopenfilename(
-                title="Kırpılacak SPT Fotoğrafını Seç",
-                initialdir=self._spt_initial_dir(),
-                filetypes=[("Resimler", "*.jpg *.jpeg *.png *.JPG *.JPEG *.PNG"), ("Tüm Dosyalar", "*.*")],
+            open_spt_crop_dialog(
+                self,
+                win,
+                self._spt_initial_dir(),
+                target_var,
+                project_spt_settings,
+                add_result,
             )
-            if not source_path:
-                return
-            try:
-                from PIL import Image, ImageOps, ImageTk
-                image = Image.open(source_path)
-                try:
-                    image = ImageOps.exif_transpose(image)
-                except Exception:
-                    pass
-            except Exception as exc:
-                messagebox.showerror("Fotoğraf Kırp", f"Fotoğraf açılamadı:\n{exc}")
-                return
-
-            crop_win = Toplevel(win)
-            self.pencere_hazirla(crop_win, "SPT Fotoğraf Bölgesi Seç", "980x720", (820, 560), modal=True)
-            top_note = ttk.Label(crop_win, text="SPT tabelasının olduğu alanı fare ile çerçeveleyin, sonra Oku düğmesine basın.", padding=8)
-            top_note.pack(fill="x")
-            canvas_frame = ttk.Frame(crop_win)
-            canvas_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-            canvas = tk.Canvas(canvas_frame, bg="#222222", highlightthickness=0)
-            canvas.pack(fill="both", expand=True)
-            max_w, max_h = 920, 560
-            scale = min(max_w / image.width, max_h / image.height, 1.0)
-            display_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
-            display_image = image.resize(display_size)
-            tk_image = ImageTk.PhotoImage(display_image)
-            canvas.image = tk_image
-            image_id = canvas.create_image(10, 10, image=tk_image, anchor="nw")
-            rect_state = {"start": None, "rect": None}
-
-            def clamp_canvas(x, y):
-                return (
-                    max(10, min(x, 10 + display_size[0])),
-                    max(10, min(y, 10 + display_size[1])),
-                )
-
-            def on_press(event):
-                x, y = clamp_canvas(event.x, event.y)
-                rect_state["start"] = (x, y)
-                if rect_state["rect"]:
-                    canvas.delete(rect_state["rect"])
-                rect_state["rect"] = canvas.create_rectangle(x, y, x, y, outline="#F1C40F", width=3)
-
-            def on_drag(event):
-                if not rect_state["start"] or not rect_state["rect"]:
-                    return
-                x, y = clamp_canvas(event.x, event.y)
-                x0, y0 = rect_state["start"]
-                canvas.coords(rect_state["rect"], x0, y0, x, y)
-
-            canvas.bind("<ButtonPress-1>", on_press)
-            canvas.bind("<B1-Motion>", on_drag)
-
-            def read_crop():
-                if not rect_state["rect"]:
-                    messagebox.showwarning("Fotoğraf Kırp", "Önce bir alan seçin.")
-                    return
-                x1, y1, x2, y2 = canvas.coords(rect_state["rect"])
-                left, right = sorted([x1 - 10, x2 - 10])
-                top, bottom = sorted([y1 - 10, y2 - 10])
-                if right - left < 20 or bottom - top < 20:
-                    messagebox.showwarning("Fotoğraf Kırp", "Seçilen alan çok küçük.")
-                    return
-                crop_box = (left / scale, top / scale, right / scale, bottom / scale)
-                try:
-                    cropped_path = spt_kirp_kaydet(source_path, crop_box)
-                except Exception as exc:
-                    messagebox.showerror("Fotoğraf Kırp", f"Kırpma kaydedilemedi:\n{exc}")
-                    return
-                crop_win.destroy()
-                ayarlar = spt_ayarlarini_yukle()
-                progress_win = Toplevel(win)
-                self.pencere_hazirla(progress_win, "Kırpılmış SPT Okuma", "460x150", (420, 130), modal=False)
-                progress_text = tk.StringVar(value=f"Kırpılmış alan okunuyor. Motor: {ayarlar.get('aktif_motor', '-')}")
-                ttk.Label(progress_win, textvariable=progress_text, padding=12).pack(fill="x")
-                progress = ttk.Progressbar(progress_win, mode="indeterminate")
-                progress.pack(fill="x", padx=12, pady=8)
-                progress.start(12)
-
-                def finish(sonuc=None, hata=None):
-                    if progress_win.winfo_exists():
-                        progress_win.destroy()
-                    if hata:
-                        messagebox.showerror("Kırpılmış SPT Okuma", f"Okuma tamamlanamadı:\n{hata}")
-                        return
-                    if not sonuc or not sonuc.kayitlar:
-                        messagebox.showwarning("Kırpılmış SPT Okuma", "Kırpılmış alandan SPT satırı okunamadı.")
-                        return
-                    add_result(sonuc, "Kırpılmış Fotoğraf", append=True)
-
-                def worker():
-                    try:
-                        sonuc = fotograflardan_spt_oku(
-                            [cropped_path],
-                            default_sondaj_no=target_var.get(),
-                            ayarlar=ayarlar,
-                            auto_pro=project_spt_settings()["auto_pro"],
-                        )
-                        self.root.after(0, lambda: finish(sonuc=sonuc))
-                    except Exception as exc:
-                        self.root.after(0, lambda: finish(hata=exc))
-
-                threading.Thread(target=worker, daemon=True).start()
-
-            btns = ttk.Frame(crop_win, padding=8)
-            btns.pack(fill="x")
-            tk.Button(btns, text="Oku", command=read_crop, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
-            tk.Button(btns, text="Kapat", command=crop_win.destroy, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="right", padx=4)
-
         def apply_import(close=False):
             update_selected_from_form(silent=True)
             aktarilacak_records = [
