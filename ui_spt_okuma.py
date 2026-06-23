@@ -16,7 +16,6 @@ from spt_okuma_motoru import (
     spt_ogrenme_kaydet,
     spt_ayarlarini_yukle,
     normalize_sondaj_no,
-    yapay_zeka_ile_spt_oku,
 )
 from yardimcilar import safe_float
 from ui_spt_okuma_yardimci import (
@@ -35,7 +34,9 @@ from ui_spt_okuma_dialogs import (
     open_spt_settings_dialog,
     show_spt_history,
 )
+from ui_spt_okuma_foto import start_photo_reading as run_spt_photo_reading
 from ui_spt_okuma_preview import SPTPreviewController
+from ui_spt_okuma_pro import reread_selected_with_pro as run_spt_pro_reread
 
 
 class SPTOkumaMixin:
@@ -435,69 +436,16 @@ class SPTOkumaMixin:
             return "break"
 
         def reread_selected_with_pro():
-            kayit = update_selected_from_form(silent=True)
-            record = selected_record()
-            if not record or not kayit:
-                messagebox.showwarning("Gemini Pro Tekrar Oku", "Önce tekrar okutulacak satırı seçin.")
-                return
-            source_path = kayit.kaynak_yolu
-            if not source_path or not os.path.exists(source_path):
-                messagebox.showwarning("Gemini Pro Tekrar Oku", "Bu satırda tekrar okutulacak kaynak fotoğraf yok.")
-                return
-            if os.path.splitext(source_path)[1].lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
-                messagebox.showwarning("Gemini Pro Tekrar Oku", "Tekrar okuma için kaynak bir fotoğraf olmalı.")
-                return
-            ayarlar = spt_ayarlarini_yukle()
-            if not ayarlar.get("gemini_api_key"):
-                messagebox.showwarning("Gemini Pro Tekrar Oku", "Gemini API anahtarı bulunamadı. SPT Merkezi > Ayarlar kısmını kontrol edin.")
-                return
-            progress_win = Toplevel(win)
-            self.pencere_hazirla(progress_win, "Gemini Pro Tekrar Oku", "460x150", (420, 130), modal=False)
-            ttk.Label(progress_win, text="Seçili satır Gemini Pro ile tekrar okunuyor...", padding=12).pack(fill="x")
-            progress = ttk.Progressbar(progress_win, mode="indeterminate")
-            progress.pack(fill="x", padx=12, pady=8)
-            progress.start(12)
-
-            def finish(raw_items=None, hata=None):
-                if progress_win.winfo_exists():
-                    progress_win.destroy()
-                if hata:
-                    messagebox.showerror("Gemini Pro Tekrar Oku", f"Tekrar okuma tamamlanamadı:\n{hata}")
-                    return
-                normalized = []
-                for item in raw_items or []:
-                    item = dict(item)
-                    item["kaynak"] = kayit.kaynak or os.path.basename(source_path)
-                    item["kaynak_yolu"] = source_path
-                    normalized.append(kayit_normalize_et(item, kayit.sondaj_no or target_var.get()))
-                if not normalized:
-                    messagebox.showwarning("Gemini Pro Tekrar Oku", "Gemini Pro bu fotoğraftan SPT satırı okuyamadı.")
-                    return
-                old_depth = safe_float(kayit.derinlik)
-                if old_depth > 0:
-                    chosen = min(normalized, key=lambda item: abs(safe_float(item.derinlik) - old_depth) if safe_float(item.derinlik) > 0 else 9999)
-                else:
-                    chosen = normalized[0]
-                chosen.sondaj_no = chosen.sondaj_no or kayit.sondaj_no or target_var.get()
-                chosen.sondaj_no = normalize_sondaj_no(chosen.sondaj_no, target_var.get())
-                chosen.kaynak = kayit.kaynak or chosen.kaynak
-                chosen.kaynak_yolu = source_path
-                previous = kayit.to_dict()
-                record["kayit"] = chosen
-                record["include"] = True
-                spt_gecmis_kaydet("gemini_pro_tekrar_okundu", chosen, {"onceki": previous})
-                refresh_tree()
-                load_detail(record)
-                status_var.set("Seçili satır Gemini Pro ile tekrar okundu.")
-
-            def worker():
-                try:
-                    raw_items = yapay_zeka_ile_spt_oku(source_path, ayarlar=ayarlar, motor_zorla="gemini_pro", timeout=60)
-                    self.root.after(0, lambda: finish(raw_items=raw_items))
-                except Exception as exc:
-                    self.root.after(0, lambda: finish(hata=exc))
-
-            threading.Thread(target=worker, daemon=True).start()
+            run_spt_pro_reread(
+                self,
+                win,
+                selected_record,
+                update_selected_from_form,
+                target_var,
+                status_var,
+                refresh_tree,
+                load_detail,
+            )
 
         def fill_target_for_selected():
             hedef = target_var.get().strip()
@@ -932,72 +880,15 @@ class SPTOkumaMixin:
             add_result(sonuc, os.path.basename(path), append=True)
 
         def start_photo_reading(paths):
-            paths = list(paths or [])
-            unique_paths = []
-            seen_paths = set()
-            for path in paths:
-                key = source_unique_key(path)
-                if key in seen_paths:
-                    continue
-                seen_paths.add(key)
-                unique_paths.append(path)
-            if len(unique_paths) != len(paths):
-                status_var.set(f"SPT okuma öncesi {len(paths) - len(unique_paths)} tekrar fotoğraf yolu temizlendi.")
-            paths = unique_paths
-            if not paths:
-                messagebox.showwarning("SPT Fotoğraf", "Okunacak fotoğraf seçilmedi.")
-                return
-            ayarlar = spt_ayarlarini_yukle()
-            stop_event = threading.Event()
-            progress_win = Toplevel(win)
-            self.pencere_hazirla(progress_win, "SPT Fotoğraf Okuma", "500x170", (460, 150), modal=False)
-            progress_text = tk.StringVar(value=f"{len(paths)} fotoğraf sıraya alındı. Motor: {ayarlar.get('aktif_motor', '-')}")
-            ttk.Label(progress_win, text="Fotoğraflar okunuyor...", font=FONT_BOLD).pack(anchor="w", padx=12, pady=(12, 4))
-            ttk.Label(progress_win, textvariable=progress_text, wraplength=460).pack(anchor="w", padx=12, fill="x")
-            progress = ttk.Progressbar(progress_win, mode="determinate", maximum=len(paths))
-            progress.pack(fill="x", padx=12, pady=8)
-            tk.Button(progress_win, text="İptal", command=stop_event.set, bg=COLOR_DANGER, fg="white", font=FONT_BOLD).pack(side="right", padx=12, pady=8)
-
-            def progress_callback(done, total, name, state):
-                def update():
-                    if not progress_win.winfo_exists():
-                        return
-                    progress["maximum"] = max(1, total)
-                    progress["value"] = done
-                    progress_text.set(f"{done}/{total} | {name} | {state}")
-                    status_var.set(progress_text.get())
-                self.root.after(0, update)
-
-            def finish(sonuc=None, hata=None):
-                if progress_win.winfo_exists():
-                    progress_win.destroy()
-                if hata:
-                    messagebox.showerror("SPT Fotoğraf", f"Fotoğraf okuma tamamlanamadı:\n{hata}")
-                    return
-                if not sonuc or not sonuc.kayitlar:
-                    msg = "Fotoğraflardan aktarılacak SPT satırı bulunamadı."
-                    if sonuc and sonuc.uyarilar:
-                        msg += "\n\n" + "\n".join(sonuc.uyarilar[:10])
-                    messagebox.showwarning("SPT Fotoğraf", msg)
-                    return
-                add_result(sonuc, "Fotoğraf Okuma", append=True)
-
-            def worker():
-                try:
-                    settings = project_spt_settings()
-                    sonuc = fotograflardan_spt_oku(
-                        paths,
-                        default_sondaj_no=target_var.get(),
-                        ayarlar=ayarlar,
-                        progress_callback=progress_callback,
-                        stop_event=stop_event,
-                        auto_pro=settings["auto_pro"],
-                    )
-                    self.root.after(0, lambda: finish(sonuc=sonuc))
-                except Exception as exc:
-                    self.root.after(0, lambda: finish(hata=exc))
-
-            threading.Thread(target=worker, daemon=True).start()
+            run_spt_photo_reading(
+                self,
+                win,
+                paths,
+                target_var,
+                status_var,
+                project_spt_settings,
+                add_result,
+            )
 
         def import_photos():
             open_spt_photo_queue_dialog(
