@@ -35,6 +35,9 @@ from ui_spt_okuma_dialogs import (
     open_spt_settings_dialog,
     show_spt_history,
 )
+from ui_spt_okuma_preview import SPTPreviewController
+
+
 class SPTOkumaMixin:
     def spt_excel_iceri_al(self):
         self.spt_okuma_merkezi_ac(baslat="excel")
@@ -185,7 +188,7 @@ class SPTOkumaMixin:
         preview.pack(fill="both", expand=True, pady=(0, 8))
         preview_canvas = tk.Canvas(preview, bg="#FFFFFF", highlightthickness=1, highlightbackground="#D5DBDB", width=560, height=390)
         preview_canvas.pack(fill="both", expand=True)
-        preview_state = {"path": "", "message": "Satır seçildiğinde kaynak burada görünür.", "photo": None, "after_id": None}
+        preview_controller = SPTPreviewController(win, preview_canvas, preview_image)
 
         issues = ttk.LabelFrame(right, text="Uyarılar", padding=8)
         issues.pack(fill="x")
@@ -310,7 +313,7 @@ class SPTOkumaMixin:
             for ent in detail_entries.values():
                 ent.delete(0, tk.END)
             if not kayit:
-                draw_preview_message("Satır seçildiğinde kaynak burada görünür.")
+                preview_controller.draw_message("Satır seçildiğinde kaynak burada görünür.")
                 return
             values = {
                 "sondaj_no": kayit.sondaj_no,
@@ -322,74 +325,10 @@ class SPTOkumaMixin:
             }
             for key, value in values.items():
                 detail_entries[key].insert(0, value)
-            show_preview(kayit)
+            preview_controller.show(kayit)
 
-        def draw_preview_message(text):
-            preview_state["path"] = ""
-            preview_state["message"] = text
-            preview_state["photo"] = None
-            preview_image["ref"] = None
-            preview_canvas.delete("all")
-            w = max(240, preview_canvas.winfo_width())
-            h = max(180, preview_canvas.winfo_height())
-            preview_canvas.create_text(
-                w / 2,
-                h / 2,
-                text=text,
-                fill="#555555",
-                width=max(220, w - 40),
-                justify="center",
-                font=("Segoe UI", 10),
-            )
-
-        def draw_preview_image(path, fallback_text="Kaynak dosya bilgisi yok."):
-            preview_state["path"] = path or ""
-            preview_state["message"] = fallback_text
-            preview_state["photo"] = None
-            preview_image["ref"] = None
-            if not path or not os.path.exists(path):
-                draw_preview_message(fallback_text)
-                return
-            if os.path.splitext(path)[1].lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
-                draw_preview_message(f"Kaynak dosya:\n{path}")
-                return
-            try:
-                from PIL import Image, ImageOps, ImageTk
-                image = Image.open(path)
-                try:
-                    image = ImageOps.exif_transpose(image)
-                except Exception:
-                    pass
-                image = image.convert("RGB")
-                preview_canvas.update_idletasks()
-                canvas_w = max(360, preview_canvas.winfo_width())
-                canvas_h = max(260, preview_canvas.winfo_height())
-                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
-                image.thumbnail((canvas_w - 18, canvas_h - 18), resample)
-                tk_image = ImageTk.PhotoImage(image)
-                preview_state["photo"] = tk_image
-                preview_image["ref"] = tk_image
-                preview_canvas.delete("all")
-                preview_canvas.create_image(canvas_w / 2, canvas_h / 2, image=tk_image, anchor="center")
-            except Exception as exc:
-                draw_preview_message(f"Önizleme açılamadı:\n{exc}")
-
-        def schedule_preview_redraw(event=None):
-            if not preview_state.get("path"):
-                return
-            if preview_state.get("after_id"):
-                try:
-                    win.after_cancel(preview_state["after_id"])
-                except Exception:
-                    pass
-            preview_state["after_id"] = win.after(120, lambda: draw_preview_image(preview_state["path"], preview_state["message"]))
-
-        def show_preview(kayit):
-            path = kayit.kaynak_yolu
-            draw_preview_image(path, kayit.kaynak or "Kaynak dosya bilgisi yok.")
-
-        preview_canvas.bind("<Configure>", schedule_preview_redraw)
-        draw_preview_message("Satır seçildiğinde kaynak burada görünür.")
+        preview_canvas.bind("<Configure>", preview_controller.schedule_redraw)
+        preview_controller.draw_message("Satır seçildiğinde kaynak burada görünür.")
 
         def selected_record():
             selection = tree.selection()
