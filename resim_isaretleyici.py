@@ -4,22 +4,16 @@ from tkinter import ttk, filedialog, messagebox
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.patches as patches
-import matplotlib.image as mpimg
 import math
-import numpy as np
 import os
 
 from harita_cikti import yeni_harita_cikti_yolu
 from harita_referans import affine_from_refs, coord_to_pixel, valid_latlon
-from performans import log_exception
+from harita_resim_cache import display_image_read
+from performans import log_exception, perf_timer
 from sabitler import DEFAULT_EXPORT_DPI, HARITA_PAFTA_LAYOUT
 from resim_pafta import ResimPaftaMixin
 from resim_georef import ResimGeorefMixin
-
-
-DISPLAY_IMAGE_MAX_DIM = 2400
-IMAGE_PREVIEW_CACHE = {}
-IMAGE_PREVIEW_CACHE_LIMIT = 3
 
 
 class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
@@ -70,8 +64,10 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.dragging_object = None
         self.drag_offset = (0, 0)
         
-        self.setup_ui()
-        self.plot_image()
+        with perf_timer("map.image_marker_setup_ui"):
+            self.setup_ui()
+        with perf_timer("map.image_marker_plot"):
+            self.plot_image()
 
     def setup_ui(self):
         paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashwidth=5, bg="#ccc")
@@ -244,8 +240,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         if self.olcek_artist is not None:
             try:
                 self.olcek_artist.remove()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("resim_isaretleyici.olcek_artist.remove", exc_value=exc)
             self.olcek_artist = None
         text = self.olcek_metni()
         if text:
@@ -284,55 +280,15 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         )
 
     def display_image_oku(self):
-        cache_key = None
         try:
-            cache_key = (os.path.abspath(self.img_path), os.path.getmtime(self.img_path), os.path.getsize(self.img_path), DISPLAY_IMAGE_MAX_DIM)
-            cached = IMAGE_PREVIEW_CACHE.get(cache_key)
-            if cached:
-                self.image_width = cached["width"]
-                self.image_height = cached["height"]
-                self.display_image_shape = cached["shape"]
-                return cached["array"]
-        except Exception:
-            cache_key = None
-
-        try:
-            from PIL import Image
-
-            with Image.open(self.img_path) as pil_img:
-                self.image_width, self.image_height = pil_img.size
-                try:
-                    pil_img.draft("RGB", (DISPLAY_IMAGE_MAX_DIM, DISPLAY_IMAGE_MAX_DIM))
-                except Exception:
-                    pass
-                if max(pil_img.size) > DISPLAY_IMAGE_MAX_DIM:
-                    resample = getattr(Image, "Resampling", Image).LANCZOS
-                    pil_img.thumbnail((DISPLAY_IMAGE_MAX_DIM, DISPLAY_IMAGE_MAX_DIM), resample)
-                if pil_img.mode not in ("RGB", "RGBA"):
-                    pil_img = pil_img.convert("RGB")
-                arr = np.asarray(pil_img).copy()
-                self.display_image_shape = arr.shape
-                self._display_image_cache_kaydet(cache_key, arr)
-                return arr
-        except Exception:
-            img = mpimg.imread(self.img_path)
-            self.image_height, self.image_width = img.shape[:2]
-            self.display_image_shape = img.shape
-            self._display_image_cache_kaydet(cache_key, img)
+            img, width, height, shape = display_image_read(self.img_path)
+            self.image_width = width
+            self.image_height = height
+            self.display_image_shape = shape
             return img
-
-    def _display_image_cache_kaydet(self, cache_key, arr):
-        if not cache_key:
-            return
-        IMAGE_PREVIEW_CACHE[cache_key] = {
-            "array": arr,
-            "width": self.image_width,
-            "height": self.image_height,
-            "shape": self.display_image_shape,
-        }
-        while len(IMAGE_PREVIEW_CACHE) > IMAGE_PREVIEW_CACHE_LIMIT:
-            oldest_key = next(iter(IMAGE_PREVIEW_CACHE))
-            IMAGE_PREVIEW_CACHE.pop(oldest_key, None)
+        except Exception:
+            log_exception("resim_isaretleyici.display_image_oku")
+            raise
 
     def check_tree_item(self, item_id):
         if self.tree.exists(item_id):
@@ -602,7 +558,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             self.tree.selection_set(item_id)
         target["last"] = (event.xdata, event.ydata)
         if target["kind"] == "point":
-            if item_id not in self.drawn_objects.get(target["mod"], {}):
+            if item_id not in self.drawn_objects.get(target["mod"], {}) or item_id not in self.coords_memory.get(target["mod"], {}):
                 return
             coord = self.coords_memory[target["mod"]][item_id]
             elements = self.drawn_objects[target["mod"]][item_id]
@@ -612,7 +568,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                 text_offsets.append((txt, tx - coord[0], ty - coord[1]))
             target["text_offsets"] = text_offsets
         elif target["kind"].startswith("ss"):
-            if item_id not in self.drawn_objects.get("ss", {}):
+            if item_id not in self.drawn_objects.get("ss", {}) or item_id not in self.coords_memory.get("ss", {}):
                 return
             coords = self.coords_memory["ss"][item_id]
             mid = ((coords[0][0] + coords[1][0]) / 2, (coords[0][1] + coords[1][1]) / 2)
@@ -636,6 +592,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         if target["kind"] == "point":
             mod = target["mod"]
             item_id = target["item_id"]
+            if item_id not in self.coords_memory.get(mod, {}) or item_id not in self.drawn_objects.get(mod, {}):
+                return
             old_x, old_y = self.coords_memory[mod][item_id]
             new_x, new_y = old_x + dx, old_y + dy
             self.coords_memory[mod][item_id] = (new_x, new_y)
@@ -647,6 +605,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
 
         elif target["kind"] in ("ss_endpoint", "ss_line"):
             item_id = target["item_id"]
+            if item_id not in self.coords_memory.get("ss", {}) or item_id not in self.drawn_objects.get("ss", {}):
+                return
             coords = list(self.coords_memory["ss"][item_id])
             if target["kind"] == "ss_endpoint":
                 endpoint = target["endpoint"]
@@ -660,6 +620,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.canvas.draw_idle()
 
     def _ss_artists_guncelle(self, item_id, text_offsets=None):
+        if item_id not in self.coords_memory.get("ss", {}) or item_id not in self.drawn_objects.get("ss", {}):
+            return
         coords = self.coords_memory["ss"][item_id]
         if len(coords) < 2:
             return
@@ -671,8 +633,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                 markers[0].set_data([x1], [y1])
                 markers[1].set_data([x1, x2], [y1, y2])
                 markers[2].set_data([x2], [y2])
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("resim_isaretleyici.ss_artists_guncelle", exc_value=exc)
         mid = ((x1 + x2) / 2, (y1 + y2) / 2)
         if text_offsets is None:
             text_offsets = []
@@ -841,8 +803,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         if self.temp_ss_marker and mod == "ss" and item_id == self.active_id:
             try:
                 self.temp_ss_marker.remove()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("resim_isaretleyici.temp_ss_marker.remove", exc_value=exc)
             self.temp_ss_marker = None
             self.ss_start = None
         if self.active_mod == mod and self.active_id == item_id:
@@ -877,8 +839,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         if self.temp_ss_marker:
             try:
                 self.temp_ss_marker.set_visible(self.mod_gorunur("ss"))
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("resim_isaretleyici.temp_ss_marker.visibility", exc_value=exc)
         if redraw and hasattr(self, "canvas"):
             self.canvas.draw_idle()
 
@@ -888,8 +850,16 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
     def set_mod_visibility(self, mod, visible):
         if mod in self.drawn_objects:
             for item_id, elements in self.drawn_objects[mod].items():
-                for m in elements.get("markers", []): m.set_visible(visible)
-                for t in elements.get("texts", []): t.set_visible(visible)
+                for m in elements.get("markers", []):
+                    try:
+                        m.set_visible(visible)
+                    except Exception as exc:
+                        log_exception(f"resim_isaretleyici.set_mod_visibility.{mod}.{item_id}.marker", exc_value=exc)
+                for t in elements.get("texts", []):
+                    try:
+                        t.set_visible(visible)
+                    except Exception as exc:
+                        log_exception(f"resim_isaretleyici.set_mod_visibility.{mod}.{item_id}.text", exc_value=exc)
 
     def set_temp_ss_marker_visibility(self, visible):
         if not self.temp_ss_marker:
@@ -898,7 +868,8 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             onceki = self.temp_ss_marker.get_visible()
             self.temp_ss_marker.set_visible(visible)
             return onceki
-        except Exception:
+        except Exception as exc:
+            log_exception("resim_isaretleyici.temp_ss_marker.set_visibility", exc_value=exc)
             return None
 
     def export_for_word(self):

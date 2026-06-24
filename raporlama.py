@@ -2,6 +2,7 @@
 import os
 import datetime
 import re
+import time
 import unicodedata
 from tkinter import filedialog
 import pandas as pd
@@ -16,7 +17,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 
 from yardimcilar import temizle_baslik, zemin_sinifi_cevir, safe_float
 from motor import GeoEngine
-from performans import log_exception
+from performans import log_exception, perf_log, perf_timer
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
 from raporlama_litoloji import (
     INCE_DANELILER,
@@ -33,6 +34,7 @@ from raporlama_tablo import (
     TABLE_TEXT_COLOR,
     apply_report_table_style,
     create_word_table,
+    keep_table_together,
     repeat_table_header,
     set_cell_border,
     set_cell_margins,
@@ -70,6 +72,47 @@ def iter_all_paragraphs(doc):
                         for cell in row.cells:
                             for p in cell.paragraphs: yield p
 
+def word_bosluk_paragrafi(space_before_pt=6, space_after_pt=6):
+    paragraph = OxmlElement("w:p")
+    p_pr = OxmlElement("w:pPr")
+    spacing = OxmlElement("w:spacing")
+    spacing.set(qn("w:before"), str(int(space_before_pt * 20)))
+    spacing.set(qn("w:after"), str(int(space_after_pt * 20)))
+    spacing.set(qn("w:line"), "240")
+    spacing.set(qn("w:lineRule"), "auto")
+    p_pr.append(spacing)
+    paragraph.append(p_pr)
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+    text.text = " "
+    run.append(text)
+    paragraph.append(run)
+    return paragraph
+
+def word_sayfa_sonu_paragrafi():
+    paragraph = OxmlElement("w:p")
+    run = OxmlElement("w:r")
+    br = OxmlElement("w:br")
+    br.set(qn("w:type"), "page")
+    run.append(br)
+    paragraph.append(run)
+    return paragraph
+
+def jeo_parametre_degeri_formatla(anahtar, deger, son_tabaka=False):
+    if anahtar == "h" and son_tabaka:
+        return "-"
+    if anahtar in ("E", "G", "K"):
+        text = clean_val(deger)
+        if text == "-":
+            return "-"
+        try:
+            return str(int(round(float(text.replace(",", ".")))))
+        except Exception as exc:
+            _log_silent("jeo_parametre_degeri_formatla", exc)
+            return fmt_jeo(deger)
+    return fmt_jeo(deger)
+
 BINA_FIELDS_MAP = [
     ("Bina Kullanım Amacı", "kul"),
     ("Bina Kullanım Sınıfı", "sinif"),
@@ -102,68 +145,91 @@ def bina_bloklari_rapor(bina):
         bloklar.append(row)
     return bloklar
 
-def bina_bilgileri_tablolari_olustur(doc, bina):
+def bina_bilgileri_tablo_kayitlari(bina):
     bloklar = bina_bloklari_rapor(bina)
     if bloklar:
-        summary_headers = ["Blok", "Kullanım", "Sınıf", "Malzeme", "Bodrum", "Kat", "Hn", "Temel Alanı", "Temel Tipi", "Kazı Der."]
-        summary_rows = [
-            [
-                blok.get("blok_adi", "-"),
-                blok.get("kul", "-"),
-                blok.get("sinif", "-"),
-                blok.get("malz", "-"),
-                blok.get("bod", "-"),
-                blok.get("kat", "-"),
-                blok.get("yukseklik", "-"),
-                blok.get("temel_alan", "-"),
-                blok.get("tem", "-"),
-                blok.get("der", "-"),
-            ]
-            for blok in bloklar
-        ]
-        load_headers = ["Blok", "GQE Min", "GQE Maks", "GQE Ort", "1.4G+1.6Q Min", "1.4G+1.6Q Maks", "1.4G+1.6Q Ort"]
-        load_rows = [
-            [
-                blok.get("blok_adi", "-"),
-                blok.get("gqe_min", "-"),
-                blok.get("gqe_max", "-"),
-                blok.get("gqe_ort", "-"),
-                blok.get("comb_min", "-"),
-                blok.get("comb_max", "-"),
-                blok.get("comb_ort", "-"),
-            ]
-            for blok in bloklar
-        ]
-        return [create_word_table(doc, summary_headers, summary_rows), create_word_table(doc, load_headers, load_rows)]
+        return [(blok.get("blok_adi", f"Blok {idx + 1}"), blok) for idx, blok in enumerate(bloklar)]
+    return [(None, bina)]
 
-    table = doc.add_table(rows=0, cols=4)
+def bina_bilgileri_dikey_tablo_olustur(doc, bina):
+    kayitlar = bina_bilgileri_tablo_kayitlari(bina)
+    coklu_blok = len(kayitlar) > 1
+    total_cols = 1 + (len(kayitlar) * 3)
+    table = doc.add_table(rows=0, cols=total_cols)
     table.style = 'Table Grid'
+
+    def merge_block_cells(row, block_idx):
+        start = 1 + block_idx * 3
+        return row.cells[start].merge(row.cells[start + 2])
+
+    if coklu_blok:
+        row = table.add_row()
+        set_cell_text_clean(row.cells[0], "Bina Bilgileri", bold=True)
+        for block_idx, (blok_adi, _) in enumerate(kayitlar):
+            cell = merge_block_cells(row, block_idx)
+            set_cell_text_clean(cell, clean_val(blok_adi), bold=True)
+            set_vertical_cell_alignment(cell, "center")
+
     for label, key in BINA_FIELDS_MAP:
         row = table.add_row()
         set_cell_text_clean(row.cells[0], label, bold=True)
-        row.cells[1].merge(row.cells[3])
-        set_cell_text_clean(row.cells[1], clean_val(bina.get(key, "")), bold=False)
-        set_vertical_cell_alignment(row.cells[1], "center")
+        for block_idx, (_, blok) in enumerate(kayitlar):
+            cell = merge_block_cells(row, block_idx)
+            set_cell_text_clean(cell, clean_val(blok.get(key, "")), bold=False)
+            set_vertical_cell_alignment(cell, "center")
+
     header_row = table.add_row()
-    headers = ["Binadan Temel Zeminine Aktarılan En Yükler (t/m2)", "Min", "Maks", "Ort."]
-    for i, h in enumerate(headers):
-        set_cell_text_clean(header_row.cells[i], h, bold=True)
-        set_vertical_cell_alignment(header_row.cells[i], "center")
+    set_cell_text_clean(header_row.cells[0], "Binadan Temel Zeminine Aktarılan En Yükler (t/m2)", bold=True)
+    if coklu_blok:
+        for block_idx, (blok_adi, _) in enumerate(kayitlar):
+            cell = merge_block_cells(header_row, block_idx)
+            set_cell_text_clean(cell, clean_val(blok_adi), bold=True)
+            set_vertical_cell_alignment(cell, "center")
+    else:
+        for offset, h in enumerate(("Min", "Ortalama", "Maks"), start=1):
+            set_cell_text_clean(header_row.cells[offset], h, bold=True)
+            set_vertical_cell_alignment(header_row.cells[offset], "center")
+
+    sub_header_row = None
+    if coklu_blok:
+        sub_header_row = table.add_row()
+        set_cell_text_clean(sub_header_row.cells[0], "", bold=True)
+        for block_idx, _ in enumerate(kayitlar):
+            start = 1 + block_idx * 3
+            for offset, h in enumerate(("Min", "Ortalama", "Maks")):
+                set_cell_text_clean(sub_header_row.cells[start + offset], h, bold=True)
+                set_vertical_cell_alignment(sub_header_row.cells[start + offset], "center")
+
     row_gqe = table.add_row()
     set_cell_text_clean(row_gqe.cells[0], "(G+Q+E)", bold=True)
-    set_cell_text_clean(row_gqe.cells[1], clean_val(bina.get("gqe_min", "")))
-    set_cell_text_clean(row_gqe.cells[2], clean_val(bina.get("gqe_max", "")))
-    set_cell_text_clean(row_gqe.cells[3], clean_val(bina.get("gqe_ort", "")))
+    for block_idx, (_, blok) in enumerate(kayitlar):
+        start = 1 + block_idx * 3
+        set_cell_text_clean(row_gqe.cells[start], clean_val(blok.get("gqe_min", "")))
+        set_cell_text_clean(row_gqe.cells[start + 1], clean_val(blok.get("gqe_ort", "")))
+        set_cell_text_clean(row_gqe.cells[start + 2], clean_val(blok.get("gqe_max", "")))
+
     row_comb = table.add_row()
     set_cell_text_clean(row_comb.cells[0], "1.4G+1.6Q", bold=True)
-    set_cell_text_clean(row_comb.cells[1], clean_val(bina.get("comb_min", "")))
-    set_cell_text_clean(row_comb.cells[2], clean_val(bina.get("comb_max", "")))
-    set_cell_text_clean(row_comb.cells[3], clean_val(bina.get("comb_ort", "")))
+    for block_idx, (_, blok) in enumerate(kayitlar):
+        start = 1 + block_idx * 3
+        set_cell_text_clean(row_comb.cells[start], clean_val(blok.get("comb_min", "")))
+        set_cell_text_clean(row_comb.cells[start + 1], clean_val(blok.get("comb_ort", "")))
+        set_cell_text_clean(row_comb.cells[start + 2], clean_val(blok.get("comb_max", "")))
+
     for r in [row_gqe, row_comb]:
-        for i in range(1, 4):
+        for i in range(1, total_cols):
             set_vertical_cell_alignment(r.cells[i], "center")
-    apply_report_table_style(table, header_rows=0, label_cols={0}, widths_cm=[5.2, 2.4, 2.4, 2.4])
+    widths_cm = [5.2] + [1.55] * (total_cols - 1)
+    apply_report_table_style(table, header_rows=0, label_cols={0}, widths_cm=widths_cm)
+    if coklu_blok:
+        style_report_table_row(table.rows[0])
     style_report_table_row(header_row)
+    if sub_header_row is not None:
+        style_report_table_row(sub_header_row)
+    return table
+
+def bina_bilgileri_tablolari_olustur(doc, bina):
+    table = bina_bilgileri_dikey_tablo_olustur(doc, bina)
     return [table]
 
 def replace_text(doc, tag, value):
@@ -229,10 +295,19 @@ def raporla(app_instance):
     app_instance.set_status("Rapor oluşturuluyor...", level="warning")
     app_instance.root.update()
     app_instance.veri_kaydet()
+    step_time = [time.perf_counter()]
+
+    def report_step(name):
+        now = time.perf_counter()
+        perf_log(f"report.step.{name}", now - step_time[0])
+        step_time[0] = now
     
     try:
-        doc = Document(app_instance.word_path)
-        clean_word_tags(doc)
+        with perf_timer("report.open_template", app_instance.word_path):
+            doc = Document(app_instance.word_path)
+        with perf_timer("report.clean_tags"):
+            clean_word_tags(doc)
+        report_step("template_ready")
         kunye = app_instance.veri["kunye"]
         jeofizik = app_instance.veri["jeofizik"]
         arazi = app_instance.veri["arazi"]
@@ -246,7 +321,8 @@ def raporla(app_instance):
         
         if jeo_excel_path:
             try:
-                df_jeo = read_table_file(jeo_excel_path, header=None)
+                with perf_timer("report.read_jeofizik_excel", jeo_excel_path):
+                    df_jeo = read_table_file(jeo_excel_path, header=None)
                 current_serim = None
                 for idx, row in df_jeo.iterrows():
                     row_str = [str(x).strip() for x in row if pd.notna(x)]
@@ -294,6 +370,7 @@ def raporla(app_instance):
                 traceback.print_exc()
                 param_ss_list = ss_list 
         else: param_ss_list = ss_list
+        report_step("jeofizik_data_ready")
 
         tum_vs30 = []
         for ss in param_ss_list:
@@ -310,6 +387,8 @@ def raporla(app_instance):
         tum_t0 = []
         for mt in mt_list:
             to_raw = mt.get("to", "")
+            if str(to_raw).strip() == "":
+                continue
             try:
                 v_to = float(str(to_raw).replace(",", "."))
                 if v_to > 0: tum_t0.append(v_to)
@@ -356,15 +435,23 @@ def raporla(app_instance):
             sondaj_metni = f"Sahada toplam {len(sondajlar)} adet sondaj kuyusu ({ozet_parca}) açılmıştır."
         else: sondaj_metni = "Sahada sondaj çalışması yapılmamıştır."
         replace_text(doc, "[SONDAJ_BILGISI]", sondaj_metni)
+        report_step("basic_tags")
 
         bina = app_instance.veri["bina"]
         for p in iter_all_paragraphs(doc):
             if "[BINA_BILGILERI]" in p.text:
                 p.text = p.text.replace("[BINA_BILGILERI]", "")
                 tables = bina_bilgileri_tablolari_olustur(doc, bina)
-                for table in reversed(tables):
-                    p._p.addnext(table._tbl)
+                anchor = p._p
+                for idx, table in enumerate(tables):
+                    anchor.addnext(table._tbl)
+                    anchor = table._tbl
+                    if idx < len(tables) - 1:
+                        spacer = OxmlElement("w:p")
+                        anchor.addnext(spacer)
+                        anchor = spacer
                 break
+        report_step("bina_table")
         
         for p in iter_all_paragraphs(doc):
             if "[Sondaj]" in p.text:
@@ -386,10 +473,12 @@ def raporla(app_instance):
                         for col_idx, val in enumerate(vals): set_cell_text_clean(table.rows[start_idx].cells[col_idx], val); set_vertical_cell_alignment(table.rows[start_idx].cells[col_idx], "center")
                 apply_report_table_style(table, header_rows=1, text_cols={7}, widths_cm=[1.5, 1.8, 1.8, 2.2, 2.2, 1.4, 1.7, 5.4])
                 p._p.addnext(table._tbl); break 
+        report_step("sondaj_table")
         
         yass_data = []
         for s in app_instance.veri["sondaj"]: v1 = f"{clean_val(s.get('yass_d1'))} ({clean_val(s.get('yass_t1'))})" if s.get('yass_d1') else "-"; v2 = f"{clean_val(s.get('yass_d2'))} ({clean_val(s.get('yass_t2'))})" if s.get('yass_d2') else "-"; yass_data.append([s["no"], v1, v2])
         islem_tablo_yerlestir(doc, "[YASS_TABLO]", ["Kuyu No", "1. Ölçüm (Delgi Sonu)", "2. Ölçüm (Statik)"], yass_data)
+        report_step("yass_table")
 
         lab_fizik_headers = ["Birim", "Değer", "Çakıl (%)", "Kum (%)", "Silt+Kil (%)", "Kil (%)", "LL (%)", "PL (%)", "PI (%)", "Wn (%)", "γn (g/cm³)", "γk (g/cm³)"]
         lab_mekanik_headers = ["Birim", "Değer", "İçsel Sürtünme (ϕ)", "Kohezyon (c)"]
@@ -401,7 +490,8 @@ def raporla(app_instance):
 
         if app_instance.lab_excel_path:
             try:
-                df_lab = pd.read_excel(app_instance.lab_excel_path, header=None)
+                with perf_timer("report.read_lab_excel", app_instance.lab_excel_path):
+                    df_lab = pd.read_excel(app_instance.lab_excel_path, header=None)
                 h_idx = 0
                 for r, row in df_lab.head(30).iterrows():
                     if any("Sondaj No" in str(x) for x in row): h_idx = r; break
@@ -616,6 +706,7 @@ def raporla(app_instance):
 
         lito_paragraphs = litoloji_dagilim_paragraflari(app_instance.veri.get("sondaj", []))
         replace_tag_with_paragraphs(doc, "[LITOLOJI_DAGILIM]", lito_paragraphs)
+        report_step("lab_and_lithology")
 
         spt_data = []; pmt_data = []; kaya_data = []
         for s in app_instance.veri["sondaj"]:
@@ -644,6 +735,7 @@ def raporla(app_instance):
 
         islem_tablo_yerlestir(doc, "[PMT]", ["Kuyu No", "Derinlik", "Em (kg/cm2)", "Pl (kg/cm2)"], pmt_data)
         islem_tablo_yerlestir(doc, "[KAYA_TABLO]", ["Kuyu No", "Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"], kaya_data)
+        report_step("field_test_tables")
         
         # --- JEO_PARAMETRE ÇİFT BAŞLIKLI DİKEY TABLO (TRANSPOZE) ---
         for p in iter_all_paragraphs(doc):
@@ -693,17 +785,24 @@ def raporla(app_instance):
                             set_cell_text_clean(table.rows[1].cells[current_col], f"Tab. {layer_idx}", bold=True)
                             current_col += 1
 
+                    kirmizi_parametre_satirlari = []
                     for baslik, anahtar in param_etiketleri:
                         row_cells = table.add_row().cells
                         set_cell_text_clean(row_cells[0], baslik, bold=True)
                         for col_idx, (layer, is_last) in enumerate(all_layers_flat):
-                            val = "-" if anahtar == "h" and is_last else fmt_jeo(layer.get(anahtar, "-"))
+                            val = jeo_parametre_degeri_formatla(anahtar, layer.get(anahtar, "-"), is_last)
                             set_cell_text_clean(row_cells[col_idx + 1], val)
+                        if anahtar in ("vp", "vs"):
+                            kirmizi_parametre_satirlari.append(row_cells)
 
                     for row in table.rows:
                         for cell in row.cells:
                             set_vertical_cell_alignment(cell, "center")
-                    apply_report_table_style(table, header_rows=2, label_cols={0})
+                    apply_report_table_style(table, header_rows=2, label_cols={0}, repeat_headers=False)
+                    for row_cells in kirmizi_parametre_satirlari:
+                        for cell in row_cells:
+                            style_cell_text(cell, font_color="C00000")
+                    keep_table_together(table)
                     return table
 
                 valid_serimler = [ss for ss in param_ss_list if ss.get("layers", [])]
@@ -714,9 +813,16 @@ def raporla(app_instance):
                         tables.append(table)
                 if not tables:
                     continue
-                for table in reversed(tables):
-                    p._p.addnext(table._tbl)
+                anchor = p._p
+                for idx, table in enumerate(tables):
+                    anchor.addnext(table._tbl)
+                    anchor = table._tbl
+                    if idx < len(tables) - 1:
+                        page_break = word_sayfa_sonu_paragrafi()
+                        anchor.addnext(page_break)
+                        anchor = page_break
                 break
+        report_step("jeo_parametre_table")
 
         for p in iter_all_paragraphs(doc):
             if "[MASW]" in p.text:
@@ -754,6 +860,7 @@ def raporla(app_instance):
                 apply_report_table_style(table, header_rows=1, widths_cm=[2.2, 2.0, 2.3, 2.3, 2.3])
                 p._p.addnext(table._tbl)
                 break
+        report_step("masw_table")
 
         for p in iter_all_paragraphs(doc):
             if "[VP]" in p.text:
@@ -782,6 +889,7 @@ def raporla(app_instance):
                 apply_report_table_style(table, header_rows=1, widths_cm=[2.8, 2.0, 2.4])
                 p._p.addnext(table._tbl)
                 break
+        report_step("vp_table")
 
         for p in iter_all_paragraphs(doc):
             if "[JEO_KOOR]" in p.text:
@@ -847,6 +955,7 @@ def raporla(app_instance):
             row = [mt.get("no", "-"), clean_val(mt.get("freq", "-")), clean_val(mt.get("to", "-")), clean_val(mt.get("ta", "-")), clean_val(mt.get("tb", "-")), clean_val(mt.get("hv", "-")), clean_val(mt.get("sure", "-")), "-"]
             mt_table_data.append(row)
         islem_tablo_yerlestir(doc, "[MT_TABLO]", mt_headers, mt_table_data)
+        report_step("jeofizik_coord_mt_tables")
 
         # DİNAMİK JEOFİZİK SONUÇ CÜMLESİ OLUŞTURMA
         sonuc_parcalari = []
@@ -883,20 +992,23 @@ def raporla(app_instance):
             yass_oneri = f"Yapılan sondaj çalışmaları sonucunda çalışma alanında {r_str} yeraltı suyuna rastlanmıştır. Yeraltı, yüzey ve atık sularının yapı temeline ve temelin oturacağı zemine sızarak meydana getirebileceği olumsuz etkiler göz önüne alınarak; su geçirgenliğini önlemek amacıyla standartlara uygun bir yalıtım projelendirilmeli ve suları temelden uzak tutacak etkin bir drenaj sistemi oluşturulmalıdır."
             
         replace_text(doc, "[YASS_ONERI]", yass_oneri)
+        report_step("result_texts")
 
-        doc_replace_img(doc, "RESIM:Yerbuldurur", app_instance.img_yer)
-        doc_replace_img(doc, "[RESIM_YERBULDURUR]", app_instance.img_yer)
-        
-        doc_replace_img(doc, "RESIM:TKGM", app_instance.img_tkgm)
-        doc_replace_img(doc, "RESIM:PGA", app_instance.img_pga)
-        
-        doc_replace_img(doc, "[RESIM_JEOFIZIK]", getattr(app_instance, 'word_img_jeofizik', None))
-        mjh_path = mjh_resim_yolu(app_instance)
-        doc_replace_img(doc, "RESIM:MJH", mjh_path)
-        doc_replace_img(doc, "[RESIM_MJH]", mjh_path)
-        doc_replace_img(doc, "[RESIM:MJH]", mjh_path)
-        doc_replace_img(doc, "[RESIM_SONDAJ]", getattr(app_instance, 'word_img_sondaj', None))
-        doc_replace_img(doc, "[RESIM:SONDAJ]", getattr(app_instance, 'word_img_sondaj', None))
+        with perf_timer("report.replace_images"):
+            doc_replace_img(doc, "RESIM:Yerbuldurur", app_instance.img_yer)
+            doc_replace_img(doc, "[RESIM_YERBULDURUR]", app_instance.img_yer)
+
+            doc_replace_img(doc, "RESIM:TKGM", app_instance.img_tkgm)
+            doc_replace_img(doc, "RESIM:PGA", app_instance.img_pga)
+
+            doc_replace_img(doc, "[RESIM_JEOFIZIK]", getattr(app_instance, 'word_img_jeofizik', None))
+            mjh_path = mjh_resim_yolu(app_instance)
+            doc_replace_img(doc, "RESIM:MJH", mjh_path)
+            doc_replace_img(doc, "[RESIM_MJH]", mjh_path)
+            doc_replace_img(doc, "[RESIM:MJH]", mjh_path)
+            doc_replace_img(doc, "[RESIM_SONDAJ]", getattr(app_instance, 'word_img_sondaj', None))
+            doc_replace_img(doc, "[RESIM:SONDAJ]", getattr(app_instance, 'word_img_sondaj', None))
+        report_step("images")
         
         cikti_klasor = app_instance.veri.get("ayarlar", {}).get("varsayilan_cikti_klasor", "")
         save_opts = {"defaultextension": ".docx", "filetypes": [("Word Dosyası", "*.docx")]}
@@ -904,7 +1016,9 @@ def raporla(app_instance):
             save_opts["initialdir"] = cikti_klasor
         final = filedialog.asksaveasfilename(**save_opts)
         if final:
-            doc.save(final)
+            with perf_timer("report.save_docx", final):
+                doc.save(final)
+            report_step("save_docx")
             return True, "Rapor oluşturuldu!"
         return False, "İptal edildi."
 

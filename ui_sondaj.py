@@ -74,7 +74,7 @@ class SondajMixin:
         self.sondaj_scroll_frame = ttk.Frame(canvas); self.sondaj_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.sondaj_scroll_frame, anchor="nw"); canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
         scrollbar_y.pack(side="right", fill="y"); scrollbar_x.pack(side="bottom", fill="x"); canvas.pack(side="left", fill="both", expand=True)
-        self.sondaj_headers = [("Sondaj No", "no"), ("Derinlik", "der"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"), ("Baş. Tarihi", "bas_tar"), ("Bit. Tarihi", "bit_tar"), ("YASS İlk", "yass_d1"), ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")]
+        self.sondaj_headers = [("Sondaj No", "no"), ("Derinlik", "der"), ("Tür", "sondaj_turu"), ("Delgi Çapı", "delgi_capi"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"), ("Baş. Tarihi", "bas_tar"), ("Bit. Tarihi", "bit_tar"), ("YASS İlk", "yass_d1"), ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")]
         self.sondaj_tablosunu_ciz()
 
     @perf_tracked("sondaj.table_redraw")
@@ -107,9 +107,16 @@ class SondajMixin:
             tk.Label(row_frame, text=str(idx+1), width=3, bg=row_bg, fg="#2C3E50", font=FONT_BOLD).pack(side="left", padx=1)
             row_entries = {}
             for lbl, key in self.sondaj_headers:
-                e = UndoRedoEntry(row_frame, width=12)
+                if key == "sondaj_turu":
+                    e = ttk.Combobox(row_frame, values=("Zemin", "Kaya"), state="readonly", width=10)
+                    e.set(self.sondaj_turu_degeri(s_data))
+                elif key == "delgi_capi":
+                    e = ttk.Combobox(row_frame, values=("76mm", "89mm"), state="readonly", width=10)
+                    e.set(self.sondaj_delgi_capi_degeri(s_data))
+                else:
+                    e = UndoRedoEntry(row_frame, width=12)
+                    e.insert(0, s_data.get(key, ""))
                 e._sondaj_parity = parity
-                e.insert(0, s_data.get(key, ""))
                 e.pack(side="left", padx=1, pady=3)
                 e.bind("<FocusIn>", lambda event, rf=row_frame: self.sondaj_satir_vurgula(rf, True), add="+")
                 e.bind("<FocusOut>", lambda event, rf=row_frame: self.sondaj_satir_vurgula(rf, False), add="+")
@@ -129,6 +136,7 @@ class SondajMixin:
             for key, ent in row_entries.items():
                 ent.bind("<KeyRelease>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
                 ent.bind("<FocusOut>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
+                ent.bind("<<ComboboxSelected>>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
             self.sondaj_satirini_canli_dogrula(row_entries)
             
             btn_f = tk.Frame(row_frame, bg=row_bg)
@@ -166,15 +174,43 @@ class SondajMixin:
             entry = self.sondaj_ui_rows[row_idx].get(key)
             if entry:
                 entry.focus_set()
-                entry.selection_range(0, tk.END)
+                try:
+                    entry.selection_range(0, tk.END)
+                except Exception:
+                    pass
         return "break"
+
+    def sondaj_turu_degeri(self, sondaj):
+        text = str((sondaj or {}).get("sondaj_turu", "")).strip().lower()
+        if text in ("kaya", "rock"):
+            return "Kaya"
+        if text in ("zemin", "soil"):
+            return "Zemin"
+        return "Kaya" if (sondaj or {}).get("kaya") else "Zemin"
+
+    def sondaj_delgi_capi_degeri(self, sondaj):
+        ayarlar = self.veri.get("ayarlar", {}) if hasattr(self, "veri") else {}
+        text = str((sondaj or {}).get("delgi_capi") or ayarlar.get("delgi_capi") or "76mm").strip().replace(" ", "")
+        if text.lower() in ("76", "76mm"):
+            return "76mm"
+        if text.lower() in ("89", "89mm"):
+            return "89mm"
+        return "76mm"
+
+    def sondaj_log_verisi(self, sondaj):
+        proje = dict(self.veri)
+        ayarlar = dict(proje.get("ayarlar", {}))
+        ayarlar["delgi_capi"] = self.sondaj_delgi_capi_degeri(sondaj)
+        proje["ayarlar"] = ayarlar
+        return proje
 
     def sondaj_satirini_canli_dogrula(self, row_entries):
         row_has_data = any(str(ent.get()).strip() for ent in row_entries.values())
         for key, ent in row_entries.items():
             state, message = self.sondaj_hucre_durumu(key, ent.get(), row_has_data)
             try:
-                ent.configure(style=self.sondaj_entry_stili(state, getattr(ent, "_sondaj_parity", "even")))
+                if ent.winfo_class() != "TCombobox":
+                    ent.configure(style=self.sondaj_entry_stili(state, getattr(ent, "_sondaj_parity", "even")))
             except Exception:
                 pass
             ent._validation_message = message
@@ -189,6 +225,10 @@ class SondajMixin:
             if not text:
                 return "warning", "Derinlik eksik"
             return ("ok", "") if safe_float(text) > 0 else ("error", "Derinlik pozitif olmalı")
+        if key == "sondaj_turu":
+            return ("ok", "") if text in ("Zemin", "Kaya") else ("warning", "Zemin/Kaya seçilmeli")
+        if key == "delgi_capi":
+            return ("ok", "") if text in ("76mm", "89mm") else ("warning", "76mm veya 89mm seçilmeli")
         if key in ("y", "x"):
             if not text:
                 return "ok", ""
@@ -319,6 +359,12 @@ class SondajMixin:
             if not sondaj.get("no"):
                 sondaj["no"] = f"SK-{idx + 1}"
                 changed += 1
+            if not sondaj.get("sondaj_turu"):
+                sondaj["sondaj_turu"] = self.sondaj_turu_degeri(sondaj)
+                changed += 1
+            if not sondaj.get("delgi_capi"):
+                sondaj["delgi_capi"] = self.sondaj_delgi_capi_degeri(sondaj)
+                changed += 1
             if not sondaj.get("litoloji"):
                 sondaj["litoloji"] = [[0, f"{depth:.2f}", "Kil"]]
                 changed += 1
@@ -350,7 +396,7 @@ class SondajMixin:
         focused_cell = {"row": 0, "col": 0}
         table_rows = []
         widths = {
-            "no": 10, "der": 9, "y": 14, "x": 14, "k": 9,
+            "no": 10, "der": 9, "sondaj_turu": 9, "delgi_capi": 10, "y": 14, "x": 14, "k": 9,
             "bas_tar": 12, "bit_tar": 12, "yass_d1": 9, "yass_t1": 12,
             "yass_d2": 9, "yass_t2": 12,
         }
@@ -376,7 +422,7 @@ class SondajMixin:
             bugun_str = bugun.strftime("%d.%m.%Y")
             t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
             return {
-                "no": f"SK-{idx+1}", "der": "15.0", "y": "", "x": "", "k": "",
+                "no": f"SK-{idx+1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": self.sondaj_delgi_capi_degeri({}), "y": "", "x": "", "k": "",
                 "bas_tar": bugun_str, "bit_tar": bugun_str,
                 "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
                 "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
@@ -399,7 +445,13 @@ class SondajMixin:
             entries = {}
             for col_idx, (label, key) in enumerate(self.sondaj_headers, start=1):
                 ent = UndoRedoEntry(table, width=widths.get(key, 11))
-                ent.insert(0, data.get(key, ""))
+                if key == "sondaj_turu":
+                    value = data.get(key) or self.sondaj_turu_degeri(data)
+                elif key == "delgi_capi":
+                    value = data.get(key) or self.sondaj_delgi_capi_degeri(data)
+                else:
+                    value = data.get(key, "")
+                ent.insert(0, value)
                 ent.grid(row=row_idx + 1, column=col_idx, padx=1, pady=2, sticky="nsew")
                 entries[key] = ent
                 ent.bind("<FocusIn>", lambda event, r=row_idx, c=col_idx-1: focused_cell.update({"row": r, "col": c}))
@@ -569,7 +621,7 @@ class SondajMixin:
         top_bar = tk.Frame(f, bg="#333", height=40); top_bar.pack(fill="x")
         cv = Canvas(f); sb = Scrollbar(f, command=cv.yview); fr = Frame(cv); cv.create_window((0,0), window=fr, anchor="nw"); cv.configure(yscrollcommand=sb.set); cv.pack(side="left", fill="both", expand=True); sb.pack(side="right", fill="y"); fr.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
         def on_draw_warning(msg, level="info"): self.root.after(0, lambda: self.set_status(msg, level))
-        GeoEngine.reset_warnings(); figs = GeoEngine.ciz_profesyonel_log(sondaj_data, self.veri, log_callback=on_draw_warning)
+        GeoEngine.reset_warnings(); figs = GeoEngine.ciz_profesyonel_log(sondaj_data, self.sondaj_log_verisi(sondaj_data), log_callback=on_draw_warning)
         for fig in figs: FigureCanvasTkAgg(fig, master=fr).get_tk_widget().pack(pady=10)
         def save_this_log():
             path = filedialog.asksaveasfilename(
@@ -797,7 +849,7 @@ class SondajMixin:
                 self.set_status(f"Log hazırlanıyor ({idx}/{total}): {sondaj_no}", level="info")
                 figures = []
                 try:
-                    figures = GeoEngine.ciz_profesyonel_log(sondaj, self.veri)
+                    figures = GeoEngine.ciz_profesyonel_log(sondaj, self.sondaj_log_verisi(sondaj))
                     safe_no = self._guvenli_dosya_adi(sondaj_no, f"SK_{idx}")
                     for page_idx, fig in enumerate(figures, start=1):
                         suffix = f"_Sayfa{page_idx}" if len(figures) > 1 else ""
@@ -844,7 +896,7 @@ class SondajMixin:
         bugun_str = bugun.strftime("%d.%m.%Y")
         t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
         self.veri["sondaj"].append({
-            "no": f"SK-{len(self.veri['sondaj']) + 1}", "der": "15.0", "y": "", "x": "", "k": "", 
+            "no": f"SK-{len(self.veri['sondaj']) + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": self.sondaj_delgi_capi_degeri({}), "y": "", "x": "", "k": "",
             "bas_tar": bugun_str, "bit_tar": bugun_str, "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str, 
             "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
         })

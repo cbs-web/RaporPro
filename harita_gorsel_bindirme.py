@@ -3,7 +3,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 
+from harita_resim_cache import display_image_read
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, valid_latlon
+from performans import log_exception
 
 
 class TopluHaritaGorselBindirme(tk.Toplevel):
@@ -170,12 +172,7 @@ class TopluHaritaGorselBindirme(tk.Toplevel):
                 self._isareti_isaretle(f"{group}_{idx}")
 
     def plot_image(self):
-        import matplotlib.image as mpimg
-        from PIL import Image
-
-        with Image.open(self.img_path) as pil_img:
-            self.image_width, self.image_height = pil_img.size
-        img = mpimg.imread(self.img_path)
+        img, self.image_width, self.image_height, _shape = display_image_read(self.img_path)
         self.ax.clear()
         self.ax.set_facecolor("#FFFFFF")
         self.image_artist = self.ax.imshow(img, extent=(0, self.image_width, self.image_height, 0), alpha=self.alpha_var.get())
@@ -487,16 +484,16 @@ class TopluHaritaGorselBindirme(tk.Toplevel):
             text = self.tree.item(item_id, "text")
             if not text.endswith(" (✓)"):
                 self.tree.item(item_id, text=text + " (✓)")
-        except Exception:
-            pass
+        except Exception as exc:
+            log_exception("harita_gorsel_bindirme.isareti_isaretle", exc_value=exc)
 
     def _isareti_temizle(self, item_id):
         try:
             text = self.tree.item(item_id, "text")
             if text.endswith(" (✓)"):
                 self.tree.item(item_id, text=text[:-4])
-        except Exception:
-            pass
+        except Exception as exc:
+            log_exception("harita_gorsel_bindirme.isareti_temizle", exc_value=exc)
 
     def _renk(self, mod):
         return {
@@ -530,8 +527,8 @@ class TopluHaritaGorselBindirme(tk.Toplevel):
             try:
                 x, y = coord_to_pixel(coeff, alan[0], alan[1])
                 self._tek_nokta_ciz("alan", "alan_0", x, y, "Merkez Koordinat")
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("harita_gorsel_bindirme.sonuclari_ciz.alan", exc_value=exc)
 
         for group in ("sondaj", "mt"):
             for idx, coord in (self.results.get(group) or {}).items():
@@ -539,7 +536,8 @@ class TopluHaritaGorselBindirme(tk.Toplevel):
                     item_id = f"{group}_{idx}"
                     x, y = coord_to_pixel(coeff, coord[0], coord[1])
                     self._tek_nokta_ciz(group, item_id, x, y, self._item_text(item_id, f"{group.upper()}-{idx + 1}"))
-                except Exception:
+                except Exception as exc:
+                    log_exception(f"harita_gorsel_bindirme.sonuclari_ciz.{group}", exc_value=exc)
                     continue
 
         for idx, coords in (self.results.get("ss") or {}).items():
@@ -550,15 +548,16 @@ class TopluHaritaGorselBindirme(tk.Toplevel):
                 x1, y1 = coord_to_pixel(coeff, coords[0], coords[1])
                 x2, y2 = coord_to_pixel(coeff, coords[4], coords[5])
                 self._ss_ciz(item_id, x1, y1, x2, y2, self._item_text(item_id, f"SS-{idx + 1}"))
-            except Exception:
+            except Exception as exc:
+                log_exception("harita_gorsel_bindirme.sonuclari_ciz.ss", exc_value=exc)
                 continue
 
     def _artist_list_sil(self, artists):
         for artist in artists:
             try:
                 artist.remove()
-            except Exception:
-                pass
+            except Exception as exc:
+                log_exception("harita_gorsel_bindirme.artist.remove", exc_value=exc)
 
     def _drawn_sil(self, item_id):
         artists = self.drawn_objects.pop(item_id, [])

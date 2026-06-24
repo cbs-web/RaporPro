@@ -178,6 +178,25 @@ def _ud_numune_sayisi(sondaj):
     return count
 
 
+def _sondaj_turu(sondaj):
+    text = _clean((sondaj or {}).get("sondaj_turu")).lower()
+    if text in ("kaya", "rock"):
+        return "Kaya"
+    if text in ("zemin", "soil"):
+        return "Zemin"
+    return "Kaya" if (sondaj or {}).get("kaya") else "Zemin"
+
+
+def _delgi_capi(veri, sondaj):
+    ayarlar = (veri or {}).get("ayarlar", {})
+    text = _clean((sondaj or {}).get("delgi_capi") or ayarlar.get("delgi_capi"), "76mm").replace(" ", "")
+    if text.lower() in ("76", "76mm"):
+        return "76mm"
+    if text.lower() in ("89", "89mm"):
+        return "89mm"
+    return "76mm"
+
+
 def _yass_text(sondaj):
     for key in ("yass_d2", "yass_d1"):
         value = _clean(sondaj.get(key))
@@ -205,8 +224,7 @@ def _fill_sondaj_table(table, veri, sondaj):
     _set_row_value(table, 1, _project_name(veri), col_start=1)
     _set_row_value(table, 2, _clean(sondaj.get("no"), "SK-"), col_start=2)
     _set_row_value(table, 3, _clean(sondaj.get("k"), "-"), col_start=2)
-    sondaj_turu = "Kaya" if sondaj.get("kaya") else "Zemin"
-    _set_row_value(table, 4, sondaj_turu, col_start=2)
+    _set_row_value(table, 4, _sondaj_turu(sondaj), col_start=2)
     _set_row_value(table, 5, _clean(ayarlar.get("tutanak_uygulama_sekli"), "Burgusuz/Sulu"), col_start=2)
     _set_row_value(table, 6, _clean(ayarlar.get("tutanak_sondaj_makinesi"), "SMK-500"), col_start=2)
     _set_row_value(table, 7, _clean(sondaj.get("bas_tar"), "-"), col_start=2)
@@ -214,7 +232,7 @@ def _fill_sondaj_table(table, veri, sondaj):
     _set_row_value(table, 9, _clean(sondaj.get("der"), "-"), col_start=2)
     _set_cell(table.rows[10].cells[2], _fmt_coord(sondaj.get("y")))
     _set_cell(table.rows[10].cells[3], _fmt_coord(sondaj.get("x")))
-    _set_row_value(table, 11, _clean(ayarlar.get("delgi_capi"), "89mm"), col_start=2)
+    _set_row_value(table, 11, _delgi_capi(veri, sondaj), col_start=2)
     _set_row_value(table, 12, str(_orselenmis_numune_sayisi(sondaj)), col_start=2)
     _set_row_value(table, 13, str(_ud_numune_sayisi(sondaj)), col_start=2)
     _set_row_value(table, 14, str(_count_nonempty_rows(sondaj.get("spt", []))), col_start=2)

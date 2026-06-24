@@ -1,6 +1,8 @@
 import importlib.util
 import sys
 
+from motor_log_saglik import check_motor_log_bridge
+
 
 REQUIRED_DEPENDENCIES = [
     ("matplotlib", "matplotlib", "Grafik ve kesit çizimleri"),
@@ -44,7 +46,17 @@ def _missing_from(dependencies):
 
 
 def check_dependencies():
-    return _missing_from(REQUIRED_DEPENDENCIES), _missing_from(OPTIONAL_DEPENDENCIES)
+    required_missing = _missing_from(REQUIRED_DEPENDENCIES)
+    optional_missing = _missing_from(OPTIONAL_DEPENDENCIES)
+    if not required_missing:
+        motor_log_problems = check_motor_log_bridge()
+        for problem in motor_log_problems:
+            required_missing.append({
+                "module": "motor_log",
+                "package": "motor_log.py",
+                "purpose": f"Sondaj logu cizim motoru - {problem}",
+            })
+    return required_missing, optional_missing
 
 
 def install_command(python_executable=None):

@@ -63,7 +63,7 @@ class WorkbookMixin(WorkbookEskiMixin):
             bugun_str = bugun.strftime("%d.%m.%Y")
             t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
             return {
-                "no": f"SK-{idx + 1}", "der": "15.0", "y": "", "x": "", "k": "",
+                "no": f"SK-{idx + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": "76mm", "y": "", "x": "", "k": "",
                 "bas_tar": bugun_str, "bit_tar": bugun_str,
                 "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
                 "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
@@ -602,6 +602,8 @@ class WorkbookMixin(WorkbookEskiMixin):
                 "sondajno": "sondaj_no", "sondaj": "sondaj_no", "sk": "sondaj_no", "kuyuno": "sondaj_no",
                 "no": "no", "sondajadi": "no", "derinlik": "der", "der": "der", "derinlikm": "der",
                 "enlem": "y", "lat": "y", "latitude": "y", "y": "y", "boylam": "x", "lon": "x", "longitude": "x", "x": "x",
+                "tur": "sondaj_turu", "turu": "sondaj_turu", "sondajturu": "sondaj_turu", "zeminkaya": "sondaj_turu",
+                "delgicapi": "delgi_capi", "delgicap": "delgi_capi", "cap": "delgi_capi", "capi": "delgi_capi",
                 "kot": "k", "bastarih": "bas_tar", "bastarihi": "bas_tar", "baslangictarihi": "bas_tar",
                 "bittarih": "bit_tar", "bittarihi": "bit_tar", "bitistarihi": "bit_tar",
                 "yassilk": "yass_d1", "yassd1": "yass_d1", "yass1": "yass_d1", "yasst1": "yass_t1", "yassilktarih": "yass_t1",
@@ -615,7 +617,10 @@ class WorkbookMixin(WorkbookEskiMixin):
             allowed = {key for _, key in sheet_defs[sheet_key]["columns"]}
             mapped = []
             for cell in cells:
-                key = aliases.get(normalize_header(cell))
+                normalized = normalize_header(cell)
+                key = aliases.get(normalized)
+                if sheet_key == "sondajlar" and normalized in ("tur", "turu", "sondajturu", "zeminkaya"):
+                    key = "sondaj_turu"
                 if sheet_key == "sondajlar" and key == "sondaj_no":
                     key = "no"
                 elif sheet_key != "sondajlar" and key == "no":
@@ -958,4 +963,3 @@ class WorkbookMixin(WorkbookEskiMixin):
         tk.Button(apply_group, text="Uygula", command=lambda: apply_workbook(False), bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
         tk.Button(apply_group, text="Kapat", command=lambda: apply_workbook(True), bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
         self.set_status("Excel mod workbook acildi.", level="success")
-

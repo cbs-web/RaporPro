@@ -137,13 +137,26 @@ def style_report_table_row(row, fill=TABLE_HEADER_FILL, bold=True, font_size=10)
         set_cell_border(cell)
         style_cell_text(cell, bold=bold, font_size=font_size, font_color=TABLE_TEXT_COLOR, alignment=WD_ALIGN_PARAGRAPH.CENTER)
 
-def apply_report_table_style(table, header_rows=1, label_cols=None, text_cols=None, widths_cm=None):
+def keep_table_together(table):
+    try:
+        for row_idx, row in enumerate(table.rows):
+            tr_pr = row._tr.get_or_add_trPr()
+            if tr_pr.find(qn("w:cantSplit")) is None:
+                tr_pr.append(OxmlElement("w:cantSplit"))
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    paragraph.paragraph_format.keep_together = True
+                    paragraph.paragraph_format.keep_with_next = row_idx < len(table.rows) - 1
+    except Exception as exc:
+        _log_silent("keep_table_together", exc)
+
+def apply_report_table_style(table, header_rows=1, label_cols=None, text_cols=None, widths_cm=None, repeat_headers=True):
     label_cols = set(label_cols or [])
     text_cols = set(text_cols or [])
     set_table_fit_to_window(table)
     for row_idx, row in enumerate(table.rows):
         is_header = row_idx < header_rows
-        if is_header:
+        if is_header and repeat_headers:
             repeat_table_header(row)
         for col_idx, cell in enumerate(row.cells):
             set_cell_margins(cell)

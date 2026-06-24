@@ -15,10 +15,15 @@ build/
 dist/
 
 .codex_tools/
+.decompile_tools/
+.decompile_src/
+.decompiled/
+.zig-cache-global/
 
 logs/
 autosave/
 _log_analiz/
+_smoke_test/
 harita_ciktilari/
 
 *.zip

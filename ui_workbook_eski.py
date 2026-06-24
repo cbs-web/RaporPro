@@ -13,6 +13,7 @@ from workbook_motoru import (
     calc_n30 as wb_calc_n30,
     header_map as wb_header_map,
     rows_to_dicts as wb_rows_to_dicts,
+    sondaj_sayfa_degeri as wb_sondaj_sayfa_degeri,
     validate_rows as wb_validate_rows,
 )
 from karot_motoru import derinlik_baslangic
@@ -30,11 +31,12 @@ class WorkbookEskiMixin:
             "sondajlar": {
                 "title": "Sondajlar",
                 "columns": [
-                    ("SondajNo", "no"), ("Derinlik", "der"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"),
+                    ("SondajNo", "no"), ("Derinlik", "der"), ("Tur", "sondaj_turu"), ("DelgiCapi", "delgi_capi"),
+                    ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"),
                     ("Baş.Tarih", "bas_tar"), ("Bit.Tarih", "bit_tar"), ("YASS İlk", "yass_d1"),
                     ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")
                 ],
-                "widths": {"no": 11, "der": 9, "y": 14, "x": 14, "k": 9, "bas_tar": 12, "bit_tar": 12, "yass_d1": 9, "yass_t1": 12, "yass_d2": 9, "yass_t2": 12},
+                "widths": {"no": 11, "der": 9, "sondaj_turu": 9, "delgi_capi": 10, "y": 14, "x": 14, "k": 9, "bas_tar": 12, "bit_tar": 12, "yass_d1": 9, "yass_t1": 12, "yass_d2": 9, "yass_t2": 12},
             },
             "litoloji": {
                 "title": "Litoloji",
@@ -84,7 +86,7 @@ class WorkbookEskiMixin:
             bugun_str = bugun.strftime("%d.%m.%Y")
             t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
             return {
-                "no": f"SK-{idx + 1}", "der": "15.0", "y": "", "x": "", "k": "",
+                "no": f"SK-{idx + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": "76mm", "y": "", "x": "", "k": "",
                 "bas_tar": bugun_str, "bit_tar": bugun_str,
                 "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
                 "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
@@ -484,6 +486,8 @@ class WorkbookEskiMixin:
                 "derinlik": "der", "der": "der", "derinlikm": "der",
                 "enlem": "y", "lat": "y", "latitude": "y", "y": "y",
                 "boylam": "x", "lon": "x", "longitude": "x", "x": "x",
+                "tur": "sondaj_turu", "turu": "sondaj_turu", "sondajturu": "sondaj_turu", "zeminkaya": "sondaj_turu",
+                "delgicapi": "delgi_capi", "delgicap": "delgi_capi", "cap": "delgi_capi", "capi": "delgi_capi",
                 "kot": "k",
                 "bastarih": "bas_tar", "bastarihi": "bas_tar", "baslangictarihi": "bas_tar",
                 "bittarih": "bit_tar", "bittarihi": "bit_tar", "bitistarihi": "bit_tar",
@@ -501,7 +505,10 @@ class WorkbookEskiMixin:
             allowed = {key for _, key in sheet["columns"]}
             mapped = []
             for cell in cells:
-                key = aliases.get(normalize_header(cell))
+                normalized = normalize_header(cell)
+                key = aliases.get(normalized)
+                if sheet_key == "sondajlar" and normalized in ("tur", "turu", "sondajturu", "zeminkaya"):
+                    key = "sondaj_turu"
                 if sheet_key == "sondajlar" and key == "sondaj_no":
                     key = "no"
                 elif sheet_key != "sondajlar" and key == "no":
@@ -814,7 +821,15 @@ class WorkbookEskiMixin:
             create_sheet(key)
 
         for sondaj in self.veri.get("sondaj", []):
-            add_row("sondajlar", {key: sondaj.get(key, "") for _, key in sheets["sondajlar"]["columns"]}, source_no=sondaj.get("no", ""))
+            default_delgi_capi = self.veri.get("ayarlar", {}).get("delgi_capi", "76mm")
+            add_row(
+                "sondajlar",
+                {
+                    key: wb_sondaj_sayfa_degeri(sondaj, key, default_delgi_capi)
+                    for _, key in sheets["sondajlar"]["columns"]
+                },
+                source_no=sondaj.get("no", ""),
+            )
             no = sondaj.get("no", "")
             for row in sondaj.get("litoloji", []):
                 add_row("litoloji", {"sondaj_no": no, "top": row[0] if len(row) > 0 else "", "bot": row[1] if len(row) > 1 else "", "tanim": row[2] if len(row) > 2 else ""})

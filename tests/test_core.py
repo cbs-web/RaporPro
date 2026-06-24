@@ -10,6 +10,7 @@ from motor import GeoEngine, log_ornek_derinligi_formatla
 from raporlama import (
     bina_bilgileri_tablolari_olustur,
     bina_bloklari_rapor,
+    jeo_parametre_degeri_formatla,
     jeofizik_vp_layers_sadelestir,
     litoloji_dagilim_birimi,
     litoloji_dagilim_paragraflari,
@@ -47,6 +48,8 @@ from proje_arsiv import (
     proje_merkez_koordinati,
 )
 from yardimcilar import atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float
+from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
+from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import validate_rows as wb_validate_rows
 
 
@@ -92,6 +95,29 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         }
         result = wb_validate_rows(rows)
         self.assertIn(("litoloji", 0, "tanim"), result["warnings"])
+
+    def test_workbook_sondaj_turu_ve_delgi_capi_tasir(self):
+        veri = {
+            "ayarlar": {"delgi_capi": "89mm"},
+            "sondaj": [{"no": "SK-1", "der": "12", "kaya": []}],
+        }
+        initial, source_nos = wb_build_initial_rows(veri)
+        headers = initial["sondajlar"][0]
+        self.assertEqual(headers[2], "Zemin")
+        self.assertEqual(headers[3], "89mm")
+
+        rows = {
+            "sondajlar": [{"no": "SK-1", "der": "12", "sondaj_turu": "Kaya", "delgi_capi": "76mm"}],
+            "litoloji": [],
+            "spt": [],
+            "pmt": [],
+            "kaya": [],
+            "numune": [],
+        }
+        sondajlar, warnings = wb_apply_rows_to_veri(veri, rows, source_nos)
+        self.assertFalse(warnings)
+        self.assertEqual(sondajlar[0]["sondaj_turu"], "Kaya")
+        self.assertEqual(sondajlar[0]["delgi_capi"], "76mm")
 
     def test_spt_helper_klasorden_resimleri_toplar(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -563,17 +589,25 @@ class BinaBlokRaporTestleri(unittest.TestCase):
         bina = {
             "coklu_blok": True,
             "bloklar": [
-                {"blok_adi": "A Blok", "kul": "Konut", "kat": "5", "der": "3.0", "tem": "Radye", "gqe_min": "10"},
-                {"blok_adi": "B Blok", "kul": "Ticaret", "kat": "3", "der": "2.5", "tem": "Mütemadi", "gqe_min": "8"},
+                {"blok_adi": "A Blok", "kul": "Konut", "kat": "5", "der": "3.0", "tem": "Radye", "gqe_min": "10", "gqe_ort": "11", "gqe_max": "12"},
+                {"blok_adi": "B Blok", "kul": "Ticaret", "kat": "3", "der": "2.5", "tem": "Mütemadi", "gqe_min": "8", "gqe_ort": "9", "gqe_max": "10"},
             ],
         }
         self.assertEqual([item["blok_adi"] for item in bina_bloklari_rapor(bina)], ["A Blok", "B Blok"])
         doc = Document()
         tables = bina_bilgileri_tablolari_olustur(doc, bina)
-        self.assertEqual(len(tables), 2)
-        self.assertEqual(tables[0].rows[1].cells[0].text, "A Blok")
-        self.assertEqual(tables[0].rows[1].cells[8].text, "Radye")
-        self.assertEqual(tables[1].rows[2].cells[0].text, "B Blok")
+        self.assertEqual(len(tables), 1)
+        first_text = "\n".join(cell.text for row in tables[0].rows for cell in row.cells)
+        self.assertIn("Bina Bilgileri", first_text)
+        self.assertIn("A Blok", first_text)
+        self.assertIn("Temel Tipi", first_text)
+        self.assertIn("Radye", first_text)
+        self.assertIn("Binadan Temel Zeminine Aktarılan En Yükler", first_text)
+        self.assertIn("Ortalama", first_text)
+        self.assertIn("B Blok", first_text)
+        self.assertIn("Mütemadi", first_text)
+        gqe_row = tables[0].rows[-2]
+        self.assertEqual([gqe_row.cells[i].text for i in range(1, 7)], ["10", "11", "12", "8", "9", "10"])
 
     def test_tek_bina_temel_tipi_ve_yerel_zemin_rapora_yazilir(self):
         from docx import Document
@@ -586,6 +620,33 @@ class BinaBlokRaporTestleri(unittest.TestCase):
         self.assertIn("Radye", text)
         self.assertIn("Yerel Zemin Sınıfı", text)
         self.assertIn("ZC", text)
+
+    def test_tablo_baslik_tekrari_kapatilabilir(self):
+        from docx import Document
+        from docx.oxml.ns import qn
+        from raporlama_tablo import apply_report_table_style
+
+        doc = Document()
+        table = doc.add_table(rows=2, cols=2)
+        apply_report_table_style(table, header_rows=2, repeat_headers=False)
+        for row in table.rows[:2]:
+            tr_pr = row._tr.trPr
+            self.assertIsNone(tr_pr.find(qn("w:tblHeader")) if tr_pr is not None else None)
+
+    def test_word_sayfa_sonu_paragrafi_page_break_uretiyor(self):
+        from docx.oxml.ns import qn
+        from raporlama import word_sayfa_sonu_paragrafi
+
+        paragraph = word_sayfa_sonu_paragrafi()
+        br = paragraph.find(".//" + qn("w:br"))
+        self.assertIsNotNone(br)
+        self.assertEqual(br.get(qn("w:type")), "page")
+
+    def test_jeo_parametre_modulleri_tam_sayi_formatlanir(self):
+        self.assertEqual(jeo_parametre_degeri_formatla("E", "274,16"), "274")
+        self.assertEqual(jeo_parametre_degeri_formatla("G", "1454.88"), "1455")
+        self.assertEqual(jeo_parametre_degeri_formatla("K", "29036,98"), "29037")
+        self.assertEqual(jeo_parametre_degeri_formatla("vp", "1918.25"), "1918,25")
 
 
 class LogCizimTestleri(unittest.TestCase):
@@ -898,6 +959,8 @@ class TutanakTestleri(unittest.TestCase):
                     "der": "15.00",
                     "y": "40.100000",
                     "x": "26.400000",
+                    "sondaj_turu": "Kaya",
+                    "delgi_capi": "76mm",
                     "spt": [["1.50", "2", "3", "4", "7"]],
                     "pmt": [["4.50", "100", "8"]],
                     "kaya": [],
@@ -920,6 +983,8 @@ class TutanakTestleri(unittest.TestCase):
             self.assertEqual(info["jeofizik_count"], 1)
             doc = Document(output_path)
             self.assertEqual(doc.tables[0].rows[2].cells[2].text, "SK-1")
+            self.assertEqual(doc.tables[0].rows[4].cells[2].text, "Kaya")
+            self.assertEqual(doc.tables[0].rows[11].cells[2].text, "76mm")
             self.assertEqual(doc.tables[0].rows[12].cells[2].text, "10")
             self.assertEqual(doc.tables[0].rows[13].cells[2].text, "2")
             self.assertEqual(doc.tables[0].rows[14].cells[2].text, "1")

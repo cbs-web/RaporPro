@@ -9,11 +9,12 @@ WORKBOOK_SHEET_DEFS = {
     "sondajlar": {
         "title": "Sondajlar",
         "columns": [
-            ("SondajNo", "no"), ("Derinlik", "der"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"),
+            ("SondajNo", "no"), ("Derinlik", "der"), ("Tur", "sondaj_turu"), ("DelgiCapi", "delgi_capi"),
+            ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"),
             ("Bas.Tarih", "bas_tar"), ("Bit.Tarih", "bit_tar"), ("YASS Ilk", "yass_d1"),
             ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")
         ],
-        "widths": [110, 85, 130, 130, 80, 110, 110, 85, 110, 85, 110],
+        "widths": [110, 85, 80, 90, 130, 130, 80, 110, 110, 85, 110, 85, 110],
     },
     "litoloji": {
         "title": "Litoloji",
@@ -48,11 +49,37 @@ def yeni_sondaj_sablonu(idx):
     bugun_str = bugun.strftime("%d.%m.%Y")
     t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
     return {
-        "no": f"SK-{idx + 1}", "der": "15.0", "y": "", "x": "", "k": "",
+        "no": f"SK-{idx + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": "76mm", "y": "", "x": "", "k": "",
         "bas_tar": bugun_str, "bit_tar": bugun_str,
         "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
         "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
     }
+
+
+def sondaj_turu_degeri(sondaj):
+    text = str((sondaj or {}).get("sondaj_turu", "")).strip().lower()
+    if text in ("kaya", "rock"):
+        return "Kaya"
+    if text in ("zemin", "soil"):
+        return "Zemin"
+    return "Kaya" if (sondaj or {}).get("kaya") else "Zemin"
+
+
+def sondaj_delgi_capi_degeri(sondaj, fallback="76mm"):
+    text = str((sondaj or {}).get("delgi_capi") or fallback or "76mm").strip().replace(" ", "")
+    if text.lower() in ("76", "76mm"):
+        return "76mm"
+    if text.lower() in ("89", "89mm"):
+        return "89mm"
+    return "76mm"
+
+
+def sondaj_sayfa_degeri(sondaj, col_key, default_delgi_capi="76mm"):
+    if col_key == "sondaj_turu":
+        return sondaj_turu_degeri(sondaj)
+    if col_key == "delgi_capi":
+        return sondaj_delgi_capi_degeri(sondaj, default_delgi_capi)
+    return (sondaj or {}).get(col_key, "")
 
 
 def normalize_header(cell):
@@ -135,8 +162,12 @@ def build_initial_rows(veri, sheet_defs=None):
     sheet_defs = sheet_defs or WORKBOOK_SHEET_DEFS
     initial = {key: [] for key in sheet_defs}
     source_nos = []
+    default_delgi_capi = ((veri or {}).get("ayarlar", {}) or {}).get("delgi_capi", "76mm")
     for sondaj in veri.get("sondaj", []):
-        initial["sondajlar"].append([sondaj.get(col_key, "") for _, col_key in sheet_defs["sondajlar"]["columns"]])
+        initial["sondajlar"].append([
+            sondaj_sayfa_degeri(sondaj, col_key, default_delgi_capi)
+            for _, col_key in sheet_defs["sondajlar"]["columns"]
+        ])
         source_nos.append(sondaj.get("no", ""))
         no = sondaj.get("no", "")
         for row in sondaj.get("litoloji", []):
@@ -158,6 +189,8 @@ def header_map(sheet_key, cells, sheet_defs=None):
         "sondajno": "sondaj_no", "sondaj": "sondaj_no", "sk": "sondaj_no", "kuyuno": "sondaj_no",
         "no": "no", "sondajadi": "no", "derinlik": "der", "der": "der", "derinlikm": "der",
         "enlem": "y", "lat": "y", "latitude": "y", "y": "y", "boylam": "x", "lon": "x", "longitude": "x", "x": "x",
+        "tur": "sondaj_turu", "turu": "sondaj_turu", "sondajturu": "sondaj_turu", "zeminkaya": "sondaj_turu",
+        "delgicapi": "delgi_capi", "delgicap": "delgi_capi", "cap": "delgi_capi", "capi": "delgi_capi",
         "kot": "k", "bastarih": "bas_tar", "bastarihi": "bas_tar", "baslangictarihi": "bas_tar",
         "bittarih": "bit_tar", "bittarihi": "bit_tar", "bitistarihi": "bit_tar",
         "yassilk": "yass_d1", "yassd1": "yass_d1", "yass1": "yass_d1", "yasst1": "yass_t1", "yassilktarih": "yass_t1",
@@ -171,7 +204,10 @@ def header_map(sheet_key, cells, sheet_defs=None):
     allowed = {key for _, key in sheet_defs[sheet_key]["columns"]}
     mapped = []
     for cell in cells:
-        key = aliases.get(normalize_header(cell))
+        normalized = normalize_header(cell)
+        key = aliases.get(normalized)
+        if sheet_key == "sondajlar" and normalized in ("tur", "turu", "sondajturu", "zeminkaya"):
+            key = "sondaj_turu"
         if sheet_key == "sondajlar" and key == "sondaj_no":
             key = "no"
         elif sheet_key != "sondajlar" and key == "no":
@@ -294,6 +330,11 @@ def apply_rows_to_veri(current_veri, rows_by_sheet, source_nos=None):
         sondaj = source.copy()
         sondaj.update(values)
         sondaj["no"] = no
+        sondaj["sondaj_turu"] = sondaj_turu_degeri(sondaj)
+        sondaj["delgi_capi"] = sondaj_delgi_capi_degeri(
+            sondaj,
+            (current_veri.get("ayarlar", {}) or {}).get("delgi_capi", "76mm"),
+        )
         if old_no and old_no != no:
             no_alias[old_no] = no
         for key in ("litoloji", "spt", "pmt", "kaya", "numuneler"):

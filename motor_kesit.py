@@ -499,8 +499,12 @@ class GeoEngineKesitMixin:
             if len(xs) >= 3:
                 xs_arr, ys_arr = np.array(xs), np.array(ys); sort_idx = np.argsort(xs_arr)
                 ux, idx = np.unique(xs_arr[sort_idx], return_index=True); uy = ys_arr[sort_idx][idx]
-                X_ = np.linspace(ux.min(), ux.max(), 100); Y_ = make_interp_spline(ux, uy)(X_)
-                ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                if len(ux) >= 3:
+                    spline_degree = min(3, len(ux) - 1)
+                    X_ = np.linspace(ux.min(), ux.max(), 100); Y_ = make_interp_spline(ux, uy, k=spline_degree)(X_)
+                    ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                else:
+                    ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
             else: 
                 ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
         except Exception as exc:
