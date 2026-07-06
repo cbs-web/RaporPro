@@ -109,16 +109,27 @@ class ArayuzAraclarMixin:
             ("Sondor / belge", "sondor_belge"),
             ("Makine metodu", "makine_metodu"),
             ("SPT şahmerdan tipi", "spt_sahmerdan"),
-            ("Delgi çapı", "delgi_capi"),
+            ("Varsayılan sondaj türü", "sondaj_turu"),
+            ("Varsayılan delgi çapı", "delgi_capi"),
             ("Yedek sayısı", "yedek_sayisi"),
         ]
 
         entries = {}
         for row_idx, (label, key) in enumerate(fields):
             ttk.Label(form, text=label).grid(row=row_idx, column=0, sticky="e", padx=6, pady=5)
-            entry = ttk.Entry(form, width=48)
+            if key == "sondaj_turu":
+                entry = ttk.Combobox(form, values=("Zemin", "Kaya"), state="readonly", width=46)
+            elif key == "delgi_capi":
+                entry = ttk.Combobox(form, values=("76mm", "89mm"), state="readonly", width=46)
+            else:
+                entry = ttk.Entry(form, width=48)
             entry.grid(row=row_idx, column=1, sticky="ew", padx=6, pady=5)
-            entry.insert(0, ayarlar.get(key, ""))
+            if key == "sondaj_turu":
+                entry.set(ayarlar.get(key, "Zemin") or "Zemin")
+            elif key == "delgi_capi":
+                entry.set(ayarlar.get(key, "76mm") or "76mm")
+            else:
+                entry.insert(0, ayarlar.get(key, ""))
             entries[key] = entry
 
         start_row = len(fields)
@@ -152,18 +163,12 @@ class ArayuzAraclarMixin:
         entries["taahhut_tarih"] = tarih_entry
         ttk.Label(taahhut_form, text="Boşsa bugünün tarihi kullanılır. Yapı adresi ve yapı sahibinin adresi: Mahalle / İlçe / İl.").grid(row=1, column=2, columnspan=2, sticky="w", padx=6, pady=5)
 
-        ttk.Label(taahhut_form, text="Excel şablonu").grid(row=2, column=0, sticky="e", padx=6, pady=5)
-        taahhut_template_entry = ttk.Entry(taahhut_form, width=48)
-        taahhut_template_entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=6, pady=5)
-        taahhut_template_entry.insert(0, ayarlar.get("taahhut_excel_sablon_path", ""))
-        entries["taahhut_excel_sablon_path"] = taahhut_template_entry
-        self.modern_button(
+        ttk.Label(taahhut_form, text="Üretim").grid(row=2, column=0, sticky="e", padx=6, pady=5)
+        ttk.Label(
             taahhut_form,
-            text="Seç",
-            command=lambda: self._ayar_dosya_sec(taahhut_template_entry, [("Excel", "*.xlsx")]),
-            role="neutral",
-            outline=True,
-        ).grid(row=2, column=3, padx=6, pady=5)
+            text="Taahhütnameler şablon dosyası olmadan program tarafından otomatik oluşturulur.",
+            foreground="#555555",
+        ).grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=(0, 5))
 
         def taahhut_profile_frame(parent, title, prefix, col):
             frame = ttk.LabelFrame(parent, text=title, padding=10)
@@ -193,6 +198,10 @@ class ArayuzAraclarMixin:
         def kaydet():
             for key, entry in entries.items():
                 ayarlar[key] = entry.get().strip()
+            if ayarlar.get("sondaj_turu") not in ("Zemin", "Kaya"):
+                ayarlar["sondaj_turu"] = "Zemin"
+            if ayarlar.get("delgi_capi") not in ("76mm", "89mm"):
+                ayarlar["delgi_capi"] = "76mm"
             try:
                 keep = int(ayarlar.get("yedek_sayisi", "10"))
                 ayarlar["yedek_sayisi"] = str(max(1, keep))

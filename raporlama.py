@@ -3,7 +3,9 @@ import os
 import datetime
 import re
 import time
+import tempfile
 import unicodedata
+from types import SimpleNamespace
 from tkinter import filedialog
 import pandas as pd
 import traceback
@@ -18,6 +20,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from yardimcilar import temizle_baslik, zemin_sinifi_cevir, safe_float
 from motor import GeoEngine
 from performans import log_exception, perf_log, perf_timer
+from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
 from raporlama_litoloji import (
     INCE_DANELILER,
@@ -48,6 +51,141 @@ from raporlama_tablo import (
 )
 def _log_silent(name, exc):
     log_exception(f"raporlama.{name}", exc_value=exc)
+
+def lab_sheet_satirlari(app_instance):
+    try:
+        rows = app_instance.veri.get("lab_sheet", {}).get("rows", [])
+    except Exception:
+        return []
+    clean_rows = []
+    for row in rows or []:
+        cells = ["" if cell is None else str(cell) for cell in (row or [])]
+        while cells and not str(cells[-1]).strip():
+            cells.pop()
+        clean_rows.append(cells)
+    while clean_rows and not any(str(cell).strip() for cell in clean_rows[-1]):
+        clean_rows.pop()
+    return clean_rows
+
+def lab_sheet_verisi_var_mi(app_instance):
+    return any(any(str(cell).strip() for cell in row) for row in lab_sheet_satirlari(app_instance))
+
+DUZELTME_ETIKET_GRUPLARI = [
+    (
+        "Proje ve arazi",
+        [
+            ("[BINA_BILGILERI]", "Bina bilgileri"),
+            ("[Sondaj]", "Sondaj / litoloji tablosu"),
+            ("[YASS_TABLO]", "Yeraltı suyu tablosu"),
+            ("[YASS_ONERI]", "Yeraltı suyu önerisi"),
+        ],
+    ),
+    (
+        "Laboratuvar ve arazi deneyleri",
+        [
+            ("[LAB_FIZIK]", "Laboratuvar fiziksel deneyler"),
+            ("[LAB_MEKANIK]", "Laboratuvar mekanik deneyler"),
+            ("[ZEMIN_OZET]", "Zemin parametre özeti"),
+            ("[LITOLOJI_DAGILIM]", "Litoloji dağılımı"),
+            ("[SPT]", "SPT tablosu"),
+            ("[PMT]", "Presiyometre tablosu"),
+            ("[KAYA_TABLO]", "Kaya / karot tablosu"),
+        ],
+    ),
+    (
+        "Jeofizik",
+        [
+            ("[JEO_PARAMETRE]", "Jeofizik parametre tablosu"),
+            ("[MASW]", "MASW tablosu"),
+            ("[VP]", "VP tablosu"),
+            ("[JEO_KOOR]", "Jeofizik koordinatlar"),
+            ("[MT_TABLO]", "Mikrotremör tablosu"),
+            ("[JEO_SONUC]", "Jeofizik sonuç"),
+        ],
+    ),
+    (
+        "Görseller",
+        [
+            ("[RESIM_YERBULDURUR]", "Yerbuldurur haritası"),
+            ("RESIM:TKGM", "TKGM görseli"),
+            ("RESIM:PGA", "PGA görseli"),
+            ("[RESIM_JEOFIZIK]", "Jeofizik lokasyon haritası"),
+            ("RESIM:MJH", "Mühendislik jeolojisi haritası"),
+            ("[RESIM_SONDAJ]", "Sondaj lokasyon haritası"),
+        ],
+    ),
+]
+
+DUZELTME_ETIKET_ADLARI = {
+    tag: label
+    for _group_title, items in DUZELTME_ETIKET_GRUPLARI
+    for tag, label in items
+}
+
+def duzeltme_etiketleri_temizle(tags):
+    selected = []
+    seen = set()
+    for tag in tags or []:
+        clean = str(tag or "").strip()
+        if not clean or clean in seen:
+            continue
+        selected.append(clean)
+        seen.add(clean)
+    return selected
+
+def duzeltme_etiket_sablonu_olustur(tags, template_path):
+    selected = duzeltme_etiketleri_temizle(tags)
+    if not selected:
+        raise ValueError("En az bir etiket seçilmelidir.")
+
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Cm(1.6)
+        section.bottom_margin = Cm(1.6)
+        section.left_margin = Cm(1.8)
+        section.right_margin = Cm(1.8)
+
+    title = doc.add_heading("RAPOR DÜZELTME ETİKET ÇIKTISI", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    note = doc.add_paragraph(
+        "Bu dosya yalnızca seçilen etiketlerin güncel proje verileriyle yeniden üretilmiş halidir."
+    )
+    note.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    for tag in selected:
+        heading = doc.add_paragraph()
+        heading.paragraph_format.space_before = Pt(12)
+        heading.paragraph_format.space_after = Pt(4)
+        heading.paragraph_format.keep_with_next = True
+        heading_run = heading.add_run(DUZELTME_ETIKET_ADLARI.get(tag, tag))
+        heading_run.bold = True
+        heading_run.font.size = Pt(12)
+        placeholder = doc.add_paragraph(tag)
+        placeholder.paragraph_format.keep_with_next = False
+        if "RESIM" in tag:
+            placeholder.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    doc.save(template_path)
+    return selected
+
+def duzeltme_etiket_ciktisi_olustur(app_instance, tags, final_path):
+    if not final_path:
+        return False, "Kaydedilecek dosya seçilmedi."
+    selected = duzeltme_etiketleri_temizle(tags)
+    if not selected:
+        return False, "En az bir etiket seçilmelidir."
+
+    with tempfile.TemporaryDirectory(prefix="raporpro_duzeltme_") as tmp:
+        tmp_template = os.path.join(tmp, "duzeltme_etiket_sablonu.docx")
+        duzeltme_etiket_sablonu_olustur(selected, tmp_template)
+        attrs = dict(getattr(app_instance, "__dict__", {}))
+        attrs["word_path"] = tmp_template
+        attrs.setdefault("set_status", lambda *_args, **_kwargs: None)
+        context = SimpleNamespace(**attrs)
+        success, msg = raporla(context, final_path=final_path, autosave=False)
+        if success:
+            return True, f"Düzeltme etiket çıktısı oluşturuldu: {len(selected)} etiket."
+        return False, msg
 
 def clean_word_tags(doc):
     for p in iter_all_paragraphs(doc):
@@ -98,6 +236,51 @@ def word_sayfa_sonu_paragrafi():
     run.append(br)
     paragraph.append(run)
     return paragraph
+
+def _plain_heading_text(text):
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    text = text.strip(" .:-–—")
+    return text
+
+def _normalize_style_name(name):
+    text = unicodedata.normalize("NFKD", str(name or "").lower())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.replace("ı", "i")
+
+def _major_heading_mi(paragraph):
+    text = _plain_heading_text(paragraph.text)
+    if not text or "[" in text or "]" in text:
+        return False
+    if len(text) > 120:
+        return False
+
+    style_name = _normalize_style_name(getattr(getattr(paragraph, "style", None), "name", ""))
+    if style_name in {"heading 1", "baslik 1", "başlık 1"} or style_name.startswith("heading 1"):
+        return True
+    if style_name.startswith("baslik 1") or style_name.startswith("başlık 1"):
+        return True
+
+    numbered = re.match(r"^\d+(\.\d+)*\.?\s+.+", text)
+    if not numbered:
+        return False
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return False
+    upper_ratio = sum(1 for ch in letters if ch.upper() == ch) / max(1, len(letters))
+    word_count = len(text.split())
+    return upper_ratio >= 0.72 and word_count <= 12
+
+def buyuk_basliklari_yeni_sayfaya_al(doc):
+    count = 0
+    for idx, paragraph in enumerate(doc.paragraphs):
+        if idx == 0:
+            continue
+        if not _major_heading_mi(paragraph):
+            continue
+        paragraph.paragraph_format.page_break_before = True
+        paragraph.paragraph_format.keep_with_next = True
+        count += 1
+    return count
 
 def jeo_parametre_degeri_formatla(anahtar, deger, son_tabaka=False):
     if anahtar == "h" and son_tabaka:
@@ -232,9 +415,15 @@ def bina_bilgileri_tablolari_olustur(doc, bina):
     table = bina_bilgileri_dikey_tablo_olustur(doc, bina)
     return [table]
 
-def replace_text(doc, tag, value):
+def _paragraph_source(doc, paragraphs=None):
+    return paragraphs if paragraphs is not None else iter_all_paragraphs(doc)
+
+def replace_text(doc, tag, value, paragraphs=None, paragraph_index=None):
     val_str = str(value)
-    for p in iter_all_paragraphs(doc):
+    candidates = [paragraph_index.get(tag)] if paragraph_index is not None else _paragraph_source(doc, paragraphs)
+    for p in candidates:
+        if p is None:
+            continue
         if tag in p.text:
             replaced = False
             for run in p.runs:
@@ -248,8 +437,66 @@ def replace_text(doc, tag, value):
                     for r in p.runs[1:]:
                         r.text = ""
 
-def islem_tablo_yerlestir(doc, tag, headers, data_list):
-    for p in iter_all_paragraphs(doc):
+def replace_many_text(doc, replacements, paragraphs=None):
+    items = [(str(tag), str(value)) for tag, value in (replacements or {}).items() if tag]
+    if not items:
+        return 0
+    changed = 0
+    for p in _paragraph_source(doc, paragraphs):
+        paragraph_text = p.text
+        if not paragraph_text or not any(tag in paragraph_text for tag, _ in items):
+            continue
+        for run in p.runs:
+            if not run.text:
+                continue
+            original = run.text
+            updated = original
+            for tag, value in items:
+                if tag in updated:
+                    changed += updated.count(tag)
+                    updated = updated.replace(tag, value)
+            if updated != original:
+                run.text = updated
+
+        full_text = "".join(r.text for r in p.runs)
+        if any(tag in full_text for tag, _ in items):
+            updated = full_text
+            for tag, value in items:
+                if tag in updated:
+                    changed += updated.count(tag)
+                    updated = updated.replace(tag, value)
+            if p.runs:
+                p.runs[0].text = updated
+                for run in p.runs[1:]:
+                    run.text = ""
+            else:
+                p.text = updated
+    return changed
+
+def find_paragraph_with_tag(doc, tag, paragraphs=None):
+    for p in _paragraph_source(doc, paragraphs):
+        if tag in p.text:
+            return p
+    return None
+
+def build_paragraph_tag_index(paragraphs, tags):
+    index = {}
+    remaining = set(tags or [])
+    for p in paragraphs or []:
+        if not remaining:
+            break
+        text = p.text or ""
+        matched = [tag for tag in remaining if tag in text]
+        for tag in matched:
+            index[tag] = p
+            remaining.remove(tag)
+    return index
+
+def islem_tablo_yerlestir(doc, tag, headers, data_list, paragraphs=None, paragraph_index=None):
+    candidates = [paragraph_index.get(tag)] if paragraph_index is not None else _paragraph_source(doc, paragraphs)
+    for p in candidates:
+        if p is None:
+            continue
         if tag in p.text: 
             p.text = p.text.replace(tag, "")
             if data_list:
@@ -257,11 +504,14 @@ def islem_tablo_yerlestir(doc, tag, headers, data_list):
                 p._p.addnext(table._tbl)
             return
 
-def doc_replace_text_everywhere(doc, old_text, new_text):
-    replace_text(doc, old_text, new_text)
+def doc_replace_text_everywhere(doc, old_text, new_text, paragraphs=None, paragraph_index=None):
+    replace_text(doc, old_text, new_text, paragraphs=paragraphs, paragraph_index=paragraph_index)
 
-def replace_tag_with_paragraphs(doc, tag, text_list):
-    for p in iter_all_paragraphs(doc):
+def replace_tag_with_paragraphs(doc, tag, text_list, paragraphs=None, paragraph_index=None):
+    candidates = [paragraph_index.get(tag)] if paragraph_index is not None else _paragraph_source(doc, paragraphs)
+    for p in candidates:
+        if p is None:
+            continue
         if tag in p.text:
             p.text = p.text.replace(tag, "")
             for text in reversed(text_list):
@@ -269,13 +519,23 @@ def replace_tag_with_paragraphs(doc, tag, text_list):
                 new_p = OxmlElement("w:p"); new_r = OxmlElement("w:r"); new_t = OxmlElement("w:t"); new_t.text = text; new_r.append(new_t); new_p.append(new_r); p._p.addnext(new_p)
             return
 
-def doc_replace_img(doc, keyword, img_path):
-    if not img_path or not os.path.exists(img_path): return
-    for p in iter_all_paragraphs(doc):
-        if keyword in p.text: 
-            p.text = ""
-            run = p.add_run()
-            run.add_picture(img_path, width=Cm(16))
+def doc_replace_img(doc, keyword, img_path, paragraphs=None, paragraph_index=None):
+    label = _safe_perf_label(keyword)
+    if not img_path or not os.path.exists(img_path):
+        perf_log(f"report.image.{label}.skip", detail=f"{keyword}|missing")
+        return
+    replaced = 0
+    with perf_timer(f"report.image.{label}", _file_perf_detail(img_path)):
+        candidates = [paragraph_index.get(keyword)] if paragraph_index is not None else _paragraph_source(doc, paragraphs)
+        for p in candidates:
+            if p is None:
+                continue
+            if keyword in p.text:
+                p.text = ""
+                run = p.add_run()
+                run.add_picture(img_path, width=Cm(16))
+                replaced += 1
+    perf_log(f"report.image.{label}.matches", detail=_report_detail(count=replaced, keyword=keyword))
 
 def first_existing_path(*paths):
     for path in paths:
@@ -290,16 +550,52 @@ def mjh_resim_yolu(app_instance):
         getattr(app_instance, 'img_tkgm', None),
     )
 
-def raporla(app_instance):
+def _report_detail(**items):
+    parts = []
+    for key, value in items.items():
+        try:
+            parts.append(f"{key}={value}")
+        except Exception:
+            parts.append(f"{key}=?")
+    return " ".join(parts)
+
+def _safe_perf_label(text):
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(text or "").strip("[]"))
+    return (label or "tag")[:80]
+
+def _file_perf_detail(path):
+    if not path:
+        return "path=missing"
+    try:
+        size_kb = os.path.getsize(path) / 1024
+        return _report_detail(path=os.path.basename(path), size_kb=f"{size_kb:.1f}")
+    except Exception:
+        return _report_detail(path=os.path.basename(str(path)))
+
+def _doc_perf_stats(doc):
+    try:
+        table_rows = sum(len(table.rows) for table in doc.tables)
+        return _report_detail(
+            paragraphs=sum(1 for _ in iter_all_paragraphs(doc)),
+            tables=len(doc.tables),
+            table_rows=table_rows,
+        )
+    except Exception as exc:
+        _log_silent("doc_perf_stats", exc)
+        return ""
+
+def raporla(app_instance, final_path=None, autosave=True):
     if not app_instance.word_path: return False, "Lütfen önce bir Word şablonu seçin."
     app_instance.set_status("Rapor oluşturuluyor...", level="warning")
-    app_instance.root.update()
-    app_instance.veri_kaydet()
+    if final_path is None and hasattr(app_instance, "root"):
+        app_instance.root.update()
+    if autosave and hasattr(app_instance, "veri_kaydet"):
+        app_instance.veri_kaydet()
     step_time = [time.perf_counter()]
 
-    def report_step(name):
+    def report_step(name, detail=""):
         now = time.perf_counter()
-        perf_log(f"report.step.{name}", now - step_time[0])
+        perf_log(f"report.step.{name}", now - step_time[0], detail)
         step_time[0] = now
     
     try:
@@ -307,7 +603,21 @@ def raporla(app_instance):
             doc = Document(app_instance.word_path)
         with perf_timer("report.clean_tags"):
             clean_word_tags(doc)
-        report_step("template_ready")
+        report_paragraphs = list(iter_all_paragraphs(doc))
+        structural_tags = [
+            "[BINA_BILGILERI]", "[Sondaj]", "[YASS_TABLO]", "[LAB_FIZIK]", "[LAB_MEKANIK]",
+            "[ZEMIN_OZET]", "[LITOLOJI_DAGILIM]", "[SPT]", "[PMT]", "[KAYA_TABLO]",
+            "[JEO_PARAMETRE]", "[MASW]", "[VP]", "[JEO_KOOR]", "[MT_TABLO]",
+            "[JEO_SONUC]", "[YASS_ONERI]",
+            "RESIM:Yerbuldurur", "[RESIM_YERBULDURUR]", "RESIM:TKGM", "RESIM:PGA",
+            "[RESIM_JEOFIZIK]", "RESIM:MJH", "[RESIM_MJH]", "[RESIM:MJH]",
+            "[RESIM_SONDAJ]", "[RESIM:SONDAJ]",
+        ]
+        report_tag_index = build_paragraph_tag_index(report_paragraphs, structural_tags)
+        with perf_timer("report.revision_markers"):
+            marker_count = revizyon_isaretleri_ekle(doc, report_tag_index, structural_tags)
+        report_step("revision_markers", _report_detail(count=marker_count))
+        report_step("template_ready", _doc_perf_stats(doc))
         kunye = app_instance.veri["kunye"]
         jeofizik = app_instance.veri["jeofizik"]
         arazi = app_instance.veri["arazi"]
@@ -370,7 +680,11 @@ def raporla(app_instance):
                 traceback.print_exc()
                 param_ss_list = ss_list 
         else: param_ss_list = ss_list
-        report_step("jeofizik_data_ready")
+        param_layer_count = sum(len(ss.get("layers", []) or []) for ss in param_ss_list)
+        report_step(
+            "jeofizik_data_ready",
+            _report_detail(ss=len(ss_list), mt=len(mt_list), param_ss=len(param_ss_list), layers=param_layer_count),
+        )
 
         tum_vs30 = []
         for ss in param_ss_list:
@@ -404,57 +718,68 @@ def raporla(app_instance):
             except Exception as exc:
                 _log_silent("yass_parse", exc)
 
+        basic_tag_start = time.perf_counter()
         prefixes = ["", "S1_", "S2_", "S3_", "S4_", "S5_"]
         kunye_map = [("sahibi", "PROJE_ADI"), ("il", "IL"), ("ilce", "ILCE"), ("mah", "MAHALLE"), ("mev", "MEVKI"), ("paf", "PAFTA"), ("ada", "ADA"), ("par", "PARSEL")]
+        basic_replacements = {}
         for key, tag_base in kunye_map:
             val = kunye.get(key, "")
-            for pre in prefixes: replace_text(doc, f"[{pre}{tag_base}]", val)
+            for pre in prefixes: basic_replacements[f"[{pre}{tag_base}]"] = val
         
-        replace_text(doc, "[KATEGORI]", arazi.get("kategori", "-"))
-        replace_text(doc, "[KATEGORI_ZEMIN]", arazi.get("zemin", "-")) 
-        replace_text(doc, "[PGA]", arazi.get("pga", "-"))
-        replace_text(doc, "[JEO_TARIH]", jeofizik.get("tarih", "-"))
-        replace_text(doc, "[SAYI_SS]", str(len(ss_list)))
-        replace_text(doc, "[SAYI_MT]", str(len(mt_list)))
-        replace_text(doc, "[YEREL_ZEMIN]", app_instance.veri["bina"].get("ysinif", "-"))
-        replace_text(doc, "[KOT_ORT]", arazi.get("ort", "-"))
-        replace_text(doc, "[KOT_MAX]", arazi.get("max", "-"))
-        replace_text(doc, "[KOT_MIN]", arazi.get("min", "-"))
-        replace_text(doc, "[EGIM_YUZDE]", arazi.get("egim", "-"))
-        replace_text(doc, "[EGIM_YONU]", arazi.get("yon", "-"))
+        basic_replacements["[KATEGORI]"] = arazi.get("kategori", "-")
+        basic_replacements["[KATEGORI_ZEMIN]"] = arazi.get("zemin", "-")
+        basic_replacements["[PGA]"] = arazi.get("pga", "-")
+        basic_replacements["[JEO_TARIH]"] = jeofizik.get("tarih", "-")
+        basic_replacements["[SAYI_SS]"] = str(len(ss_list))
+        basic_replacements["[SAYI_MT]"] = str(len(mt_list))
+        basic_replacements["[YEREL_ZEMIN]"] = app_instance.veri["bina"].get("ysinif", "-")
+        basic_replacements["[KOT_ORT]"] = arazi.get("ort", "-")
+        basic_replacements["[KOT_MAX]"] = arazi.get("max", "-")
+        basic_replacements["[KOT_MIN]"] = arazi.get("min", "-")
+        basic_replacements["[EGIM_YUZDE]"] = arazi.get("egim", "-")
+        basic_replacements["[EGIM_YONU]"] = arazi.get("yon", "-")
         
         imar_alani_ham = arazi.get("imar_alani", "").strip(); imar_alani_final = f"({imar_alani_ham})" if imar_alani_ham else "-"
-        replace_text(doc, "[IMAR_ALANI]", imar_alani_final)
-        replace_text(doc, "[IMAR_DURUMU]", arazi.get("imar_durumu", "-"))
+        basic_replacements["[IMAR_ALANI]"] = imar_alani_final
+        basic_replacements["[IMAR_DURUMU]"] = arazi.get("imar_durumu", "-")
 
         ay = clean_val(app_instance.veri["arazi"].get("alan_y", "-")); ax = clean_val(app_instance.veri["arazi"].get("alan_x", "-"))
-        replace_text(doc, "[ALAN_ENLEM]", ay); replace_text(doc, "[ALAN_BOYLAM]", ax)
+        basic_replacements["[ALAN_ENLEM]"] = ay
+        basic_replacements["[ALAN_BOYLAM]"] = ax
         
         if sondajlar:
             ozet_parca = ", ".join([f"{s['no']}: {s['der']}m" for s in sondajlar])
             sondaj_metni = f"Sahada toplam {len(sondajlar)} adet sondaj kuyusu ({ozet_parca}) açılmıştır."
         else: sondaj_metni = "Sahada sondaj çalışması yapılmamıştır."
-        replace_text(doc, "[SONDAJ_BILGISI]", sondaj_metni)
-        report_step("basic_tags")
+        basic_replacements["[SONDAJ_BILGISI]"] = sondaj_metni
+        replaced_basic_tags = replace_many_text(doc, basic_replacements, paragraphs=report_paragraphs)
+        basic_tag_detail = _report_detail(tags=len(basic_replacements), replaced=replaced_basic_tags, sondaj=len(sondajlar))
+        perf_log("report.basic_tags.replace", time.perf_counter() - basic_tag_start, basic_tag_detail)
+        report_step("basic_tags", basic_tag_detail)
 
         bina = app_instance.veri["bina"]
-        for p in iter_all_paragraphs(doc):
-            if "[BINA_BILGILERI]" in p.text:
-                p.text = p.text.replace("[BINA_BILGILERI]", "")
-                tables = bina_bilgileri_tablolari_olustur(doc, bina)
-                anchor = p._p
-                for idx, table in enumerate(tables):
-                    anchor.addnext(table._tbl)
-                    anchor = table._tbl
-                    if idx < len(tables) - 1:
-                        spacer = OxmlElement("w:p")
-                        anchor.addnext(spacer)
-                        anchor = spacer
-                break
-        report_step("bina_table")
+        bina_table_start = time.perf_counter()
+        bina_detail = _report_detail(blocks=len(bina_bilgileri_tablo_kayitlari(bina)), coklu=bool(bina.get("coklu_blok")))
+        p = report_tag_index.get("[BINA_BILGILERI]")
+        if p is not None and "[BINA_BILGILERI]" in p.text:
+            p.text = p.text.replace("[BINA_BILGILERI]", "")
+            tables = bina_bilgileri_tablolari_olustur(doc, bina)
+            anchor = p._p
+            for idx, table in enumerate(tables):
+                anchor.addnext(table._tbl)
+                anchor = table._tbl
+                if idx < len(tables) - 1:
+                    spacer = OxmlElement("w:p")
+                    anchor.addnext(spacer)
+                    anchor = spacer
+        perf_log("report.table.bina", time.perf_counter() - bina_table_start, bina_detail)
+        report_step("bina_table", bina_detail)
         
-        for p in iter_all_paragraphs(doc):
-            if "[Sondaj]" in p.text:
+        sondaj_table_start = time.perf_counter()
+        sondaj_lit_count = sum(len(s.get("litoloji", []) or []) for s in app_instance.veri["sondaj"])
+        sondaj_table_detail = _report_detail(sondaj=len(app_instance.veri["sondaj"]), litoloji=sondaj_lit_count)
+        p = report_tag_index.get("[Sondaj]")
+        if p is not None and "[Sondaj]" in p.text:
                 p.text = p.text.replace("[Sondaj]", ""); headers = ["Kuyu No", "Başlangıç", "Bitiş", "Enlem", "Boylam", "Kot", "Derinlik", "Litoloji"]; table = doc.add_table(rows=1, cols=len(headers)); table.style = 'Table Grid'
                 for i, h in enumerate(headers): set_cell_text_clean(table.rows[0].cells[i], h, bold=True); set_vertical_cell_alignment(table.rows[0].cells[i], "center")
                 for s in app_instance.veri["sondaj"]:
@@ -472,13 +797,17 @@ def raporla(app_instance):
                     else:
                         for col_idx, val in enumerate(vals): set_cell_text_clean(table.rows[start_idx].cells[col_idx], val); set_vertical_cell_alignment(table.rows[start_idx].cells[col_idx], "center")
                 apply_report_table_style(table, header_rows=1, text_cols={7}, widths_cm=[1.5, 1.8, 1.8, 2.2, 2.2, 1.4, 1.7, 5.4])
-                p._p.addnext(table._tbl); break 
-        report_step("sondaj_table")
+                p._p.addnext(table._tbl)
+        perf_log("report.table.sondaj", time.perf_counter() - sondaj_table_start, sondaj_table_detail)
+        report_step("sondaj_table", sondaj_table_detail)
         
         yass_data = []
         for s in app_instance.veri["sondaj"]: v1 = f"{clean_val(s.get('yass_d1'))} ({clean_val(s.get('yass_t1'))})" if s.get('yass_d1') else "-"; v2 = f"{clean_val(s.get('yass_d2'))} ({clean_val(s.get('yass_t2'))})" if s.get('yass_d2') else "-"; yass_data.append([s["no"], v1, v2])
-        islem_tablo_yerlestir(doc, "[YASS_TABLO]", ["Kuyu No", "1. Ölçüm (Delgi Sonu)", "2. Ölçüm (Statik)"], yass_data)
-        report_step("yass_table")
+        yass_table_start = time.perf_counter()
+        islem_tablo_yerlestir(doc, "[YASS_TABLO]", ["Kuyu No", "1. Ölçüm (Delgi Sonu)", "2. Ölçüm (Statik)"], yass_data, paragraph_index=report_tag_index)
+        yass_detail = _report_detail(rows=len(yass_data))
+        perf_log("report.table.yass", time.perf_counter() - yass_table_start, yass_detail)
+        report_step("yass_table", yass_detail)
 
         lab_fizik_headers = ["Birim", "Değer", "Çakıl (%)", "Kum (%)", "Silt+Kil (%)", "Kil (%)", "LL (%)", "PL (%)", "PI (%)", "Wn (%)", "γn (g/cm³)", "γk (g/cm³)"]
         lab_mekanik_headers = ["Birim", "Değer", "İçsel Sürtünme (ϕ)", "Kohezyon (c)"]
@@ -487,11 +816,20 @@ def raporla(app_instance):
         lab_birim_isimleri = []
         lito_groups = {}
         unit_spt_values = {}
+        lab_section_start = time.perf_counter()
 
-        if app_instance.lab_excel_path:
+        lab_rows = lab_sheet_satirlari(app_instance)
+        lab_sheet_ready = any(any(str(cell).strip() for cell in row) for row in lab_rows)
+        lab_excel_path = getattr(app_instance, "lab_excel_path", None)
+
+        if lab_sheet_ready or lab_excel_path:
             try:
-                with perf_timer("report.read_lab_excel", app_instance.lab_excel_path):
-                    df_lab = pd.read_excel(app_instance.lab_excel_path, header=None)
+                if lab_sheet_ready:
+                    with perf_timer("report.read_lab_sheet", "internal"):
+                        df_lab = pd.DataFrame(lab_rows).replace(r'^\s*$', np.nan, regex=True)
+                else:
+                    with perf_timer("report.read_lab_excel", lab_excel_path):
+                        df_lab = pd.read_excel(lab_excel_path, header=None)
                 h_idx = 0
                 for r, row in df_lab.head(30).iterrows():
                     if any("Sondaj No" in str(x) for x in row): h_idx = r; break
@@ -631,11 +969,11 @@ def raporla(app_instance):
                         ozet_metinler.append(f"{giris_cumlesi}, {lab_kisim}.")
                     
                     if ozet_metinler:
-                        doc_replace_text_everywhere(doc, "[ZEMIN_OZET]", " ".join(ozet_metinler))
+                        doc_replace_text_everywhere(doc, "[ZEMIN_OZET]", " ".join(ozet_metinler), paragraph_index=report_tag_index)
                         zemin_ozet_yazildi = True
 
-                    for p in iter_all_paragraphs(doc):
-                        if "[LAB_FIZIK]" in p.text:
+                    p = report_tag_index.get("[LAB_FIZIK]")
+                    if p is not None and "[LAB_FIZIK]" in p.text:
                             p.text = p.text.replace("[LAB_FIZIK]", ""); t = create_word_table(doc, lab_fizik_headers, [])
                             table_has_data = False
                             for n, g in df_gruplanmis:
@@ -669,10 +1007,10 @@ def raporla(app_instance):
                             if table_has_data:
                                 apply_report_table_style(t, header_rows=1, text_cols={0}, widths_cm=[2.1, 1.2, 1.35, 1.35, 1.45, 1.35, 1.2, 1.2, 1.2, 1.25, 1.45, 1.45])
                                 p._p.addnext(t._tbl)
-                            break
+
                     
-                    for p in iter_all_paragraphs(doc):
-                         if "[LAB_MEKANIK]" in p.text:
+                    p = report_tag_index.get("[LAB_MEKANIK]")
+                    if p is not None and "[LAB_MEKANIK]" in p.text:
                             p.text = p.text.replace("[LAB_MEKANIK]", ""); t = create_word_table(doc, lab_mekanik_headers, [])
                             table_has_data = False
                             for n, g in df_gruplanmis:
@@ -696,17 +1034,24 @@ def raporla(app_instance):
                             if table_has_data:
                                 apply_report_table_style(t, header_rows=1, text_cols={0}, widths_cm=[3.0, 1.4, 3.0, 3.0])
                                 p._p.addnext(t._tbl)
-                            break
+
             except Exception as exc:
                 _log_silent("zemin_ozet_table", exc)
 
-        if not zemin_ozet_yazildi: doc_replace_text_everywhere(doc, "[ZEMIN_OZET]", "Laboratuvar verisi girilmediği için zemin özeti oluşturulamadı.")
-        islem_tablo_yerlestir(doc, "[LAB_FIZIK]", lab_fizik_headers, []) 
-        islem_tablo_yerlestir(doc, "[LAB_MEKANIK]", lab_mekanik_headers, []) 
+        if not zemin_ozet_yazildi: doc_replace_text_everywhere(doc, "[ZEMIN_OZET]", "Laboratuvar verisi girilmediği için zemin özeti oluşturulamadı.", paragraph_index=report_tag_index)
+        islem_tablo_yerlestir(doc, "[LAB_FIZIK]", lab_fizik_headers, [], paragraph_index=report_tag_index)
+        islem_tablo_yerlestir(doc, "[LAB_MEKANIK]", lab_mekanik_headers, [], paragraph_index=report_tag_index)
 
         lito_paragraphs = litoloji_dagilim_paragraflari(app_instance.veri.get("sondaj", []))
-        replace_tag_with_paragraphs(doc, "[LITOLOJI_DAGILIM]", lito_paragraphs)
-        report_step("lab_and_lithology")
+        replace_tag_with_paragraphs(doc, "[LITOLOJI_DAGILIM]", lito_paragraphs, paragraph_index=report_tag_index)
+        lab_detail = _report_detail(
+            lab_sheet=lab_sheet_ready,
+            lab_excel=bool(lab_excel_path),
+            lab_units=len(lab_birim_isimleri),
+            lito_paragraphs=len(lito_paragraphs),
+        )
+        perf_log("report.lab_and_lithology.detail", time.perf_counter() - lab_section_start, lab_detail)
+        report_step("lab_and_lithology", lab_detail)
 
         spt_data = []; pmt_data = []; kaya_data = []
         for s in app_instance.veri["sondaj"]:
@@ -716,9 +1061,9 @@ def raporla(app_instance):
                 if len(row)>=3: pmt_data.append([s["no"], row[0], row[1], row[2]])
             for row in s.get("kaya", []): 
                 if len(row)>=4: kaya_data.append([s["no"], row[0], row[1], row[2], row[3]])
-        
-        for p in iter_all_paragraphs(doc):
-            if "[SPT]" in p.text:
+        field_tables_start = time.perf_counter()
+        p = report_tag_index.get("[SPT]")
+        if p is not None and "[SPT]" in p.text:
                 p.text = p.text.replace("[SPT]", ""); headers = ["Kuyu No", "Derinlik", "0-15", "15-30", "30-45", "N30"]; table = create_word_table(doc, headers, [])
                 for s in app_instance.veri["sondaj"]:
                     spt_rows = s.get("spt", []); valid_spt = [row for row in spt_rows if len(row) >= 5]
@@ -731,15 +1076,20 @@ def raporla(app_instance):
                     end_idx = len(table.rows) - 1
                     if end_idx > start_idx: first = table.rows[start_idx].cells[0]; first.merge(table.rows[end_idx].cells[0]); set_cell_text_clean(first, clean_val(s["no"])); set_vertical_cell_alignment(first, "center")
                 apply_report_table_style(table, header_rows=1, widths_cm=[2.0, 2.0, 1.5, 1.5, 1.5, 1.5])
-                p._p.addnext(table._tbl); break
+                p._p.addnext(table._tbl)
 
-        islem_tablo_yerlestir(doc, "[PMT]", ["Kuyu No", "Derinlik", "Em (kg/cm2)", "Pl (kg/cm2)"], pmt_data)
-        islem_tablo_yerlestir(doc, "[KAYA_TABLO]", ["Kuyu No", "Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"], kaya_data)
-        report_step("field_test_tables")
+        islem_tablo_yerlestir(doc, "[PMT]", ["Kuyu No", "Derinlik", "Em (kg/cm2)", "Pl (kg/cm2)"], pmt_data, paragraph_index=report_tag_index)
+        islem_tablo_yerlestir(doc, "[KAYA_TABLO]", ["Kuyu No", "Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"], kaya_data, paragraph_index=report_tag_index)
+        field_detail = _report_detail(spt=len(spt_data), pmt=len(pmt_data), kaya=len(kaya_data))
+        perf_log("report.table.field_tests", time.perf_counter() - field_tables_start, field_detail)
+        report_step("field_test_tables", field_detail)
+        jeo_parametre_start = time.perf_counter()
+        valid_serimler = []
+        jeo_parametre_table_count = 0
         
         # --- JEO_PARAMETRE ÇİFT BAŞLIKLI DİKEY TABLO (TRANSPOZE) ---
-        for p in iter_all_paragraphs(doc):
-            if "[JEO_PARAMETRE]" in p.text:
+        p = report_tag_index.get("[JEO_PARAMETRE]")
+        if p is not None and "[JEO_PARAMETRE]" in p.text:
                 p.text = p.text.replace("[JEO_PARAMETRE]", "")
 
                 param_etiketleri = [
@@ -811,21 +1161,22 @@ def raporla(app_instance):
                     table = jeo_parametre_tablosu_olustur(valid_serimler[start:start + 3])
                     if table is not None:
                         tables.append(table)
-                if not tables:
-                    continue
-                anchor = p._p
-                for idx, table in enumerate(tables):
-                    anchor.addnext(table._tbl)
-                    anchor = table._tbl
-                    if idx < len(tables) - 1:
-                        page_break = word_sayfa_sonu_paragrafi()
-                        anchor.addnext(page_break)
-                        anchor = page_break
-                break
-        report_step("jeo_parametre_table")
+                if tables:
+                    jeo_parametre_table_count = len(tables)
+                    anchor = p._p
+                    for idx, table in enumerate(tables):
+                        anchor.addnext(table._tbl)
+                        anchor = table._tbl
+                        if idx < len(tables) - 1:
+                            page_break = word_sayfa_sonu_paragrafi()
+                            anchor.addnext(page_break)
+                            anchor = page_break
+        jeo_parametre_detail = _report_detail(serim=len(valid_serimler), tables=jeo_parametre_table_count)
+        perf_log("report.table.jeo_parametre", time.perf_counter() - jeo_parametre_start, jeo_parametre_detail)
+        report_step("jeo_parametre_table", jeo_parametre_detail)
 
-        for p in iter_all_paragraphs(doc):
-            if "[MASW]" in p.text:
+        p = report_tag_index.get("[MASW]")
+        if p is not None and "[MASW]" in p.text:
                 p.text = p.text.replace("[MASW]", "")
                 masw_headers = ["Serim No", "Ortam No", "Vs(m/sn)", "Kalınlık h (m)", "Vs30(m/sn)"]
                 table = create_word_table(doc, masw_headers, [])
@@ -859,11 +1210,11 @@ def raporla(app_instance):
                         set_vertical_cell_alignment(first_c4, "center")
                 apply_report_table_style(table, header_rows=1, widths_cm=[2.2, 2.0, 2.3, 2.3, 2.3])
                 p._p.addnext(table._tbl)
-                break
-        report_step("masw_table")
+        masw_detail = _report_detail(serim=sum(1 for ss in param_ss_list if ss.get("layers", [])))
+        report_step("masw_table", masw_detail)
 
-        for p in iter_all_paragraphs(doc):
-            if "[VP]" in p.text:
+        p = report_tag_index.get("[VP]")
+        if p is not None and "[VP]" in p.text:
                 p.text = p.text.replace("[VP]", "")
                 vp_headers = ["Ölçü No", "Ortam No", "Vp (m/sn)"]
                 table = create_word_table(doc, vp_headers, [])
@@ -888,11 +1239,11 @@ def raporla(app_instance):
                         set_vertical_cell_alignment(first_c0, "center")
                 apply_report_table_style(table, header_rows=1, widths_cm=[2.8, 2.0, 2.4])
                 p._p.addnext(table._tbl)
-                break
-        report_step("vp_table")
+        vp_detail = _report_detail(serim=sum(1 for ss in param_ss_list if ss.get("layers", [])))
+        report_step("vp_table", vp_detail)
 
-        for p in iter_all_paragraphs(doc):
-            if "[JEO_KOOR]" in p.text:
+        p = report_tag_index.get("[JEO_KOOR]")
+        if p is not None and "[JEO_KOOR]" in p.text:
                 p.text = p.text.replace("[JEO_KOOR]", "")
                 table = doc.add_table(rows=0, cols=7)
                 table.style = 'Table Grid'
@@ -948,14 +1299,13 @@ def raporla(app_instance):
                     for cell in row.cells: set_vertical_cell_alignment(cell, "center")
                 apply_report_table_style(table, header_rows=3, widths_cm=[2.2, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0])
                 p._p.addnext(table._tbl)
-                break
 
         mt_table_data = []; mt_headers = ["Ölçü No", "Baskın Frekans (Hz)", "Baskın Periyot (To) (sn)", "Ta (sn)", "Tb (sn)", "H/V Oranı", "Kayıt Süresi (dk)", "Formasyon"]
         for mt in mt_list:
             row = [mt.get("no", "-"), clean_val(mt.get("freq", "-")), clean_val(mt.get("to", "-")), clean_val(mt.get("ta", "-")), clean_val(mt.get("tb", "-")), clean_val(mt.get("hv", "-")), clean_val(mt.get("sure", "-")), "-"]
             mt_table_data.append(row)
-        islem_tablo_yerlestir(doc, "[MT_TABLO]", mt_headers, mt_table_data)
-        report_step("jeofizik_coord_mt_tables")
+        islem_tablo_yerlestir(doc, "[MT_TABLO]", mt_headers, mt_table_data, paragraph_index=report_tag_index)
+        report_step("jeofizik_coord_mt_tables", _report_detail(ss=len(ss_list), mt=len(mt_list)))
 
         # DİNAMİK JEOFİZİK SONUÇ CÜMLESİ OLUŞTURMA
         sonuc_parcalari = []
@@ -975,9 +1325,8 @@ def raporla(app_instance):
         if sonuc_parcalari:
             birlestirilmis = " olarak, ".join(sonuc_parcalari)
             jeo_sonuc_cumlesi = f"Çalışma alanında yapılan jeofizik çalışmalar sonucunda {birlestirilmis} olarak bulunmuştur."
-            replace_text(doc, "[JEO_SONUC]", jeo_sonuc_cumlesi)
         else: 
-            replace_text(doc, "[JEO_SONUC]", "")
+            jeo_sonuc_cumlesi = ""
         
         if not yass_seviyeleri:
             yass_oneri = "Yapılan sondaj çalışmaları sonucunda çalışma alanında yeraltı suyuna rastlanmamıştır. Ancak, olası yüzey ve atık sularının yapı temeline ve temelin oturacağı zemine sızarak meydana getirebileceği olumsuz etkiler göz önüne alınarak; su geçirgenliğini önlemek amacıyla standartlara uygun bir yalıtım projelendirilmeli ve suları temelden uzak tutacak etkin bir drenaj sistemi oluşturulmalıdır."
@@ -991,34 +1340,51 @@ def raporla(app_instance):
             
             yass_oneri = f"Yapılan sondaj çalışmaları sonucunda çalışma alanında {r_str} yeraltı suyuna rastlanmıştır. Yeraltı, yüzey ve atık sularının yapı temeline ve temelin oturacağı zemine sızarak meydana getirebileceği olumsuz etkiler göz önüne alınarak; su geçirgenliğini önlemek amacıyla standartlara uygun bir yalıtım projelendirilmeli ve suları temelden uzak tutacak etkin bir drenaj sistemi oluşturulmalıdır."
             
-        replace_text(doc, "[YASS_ONERI]", yass_oneri)
-        report_step("result_texts")
+        replace_text(doc, "[JEO_SONUC]", jeo_sonuc_cumlesi, paragraph_index=report_tag_index)
+        replace_text(doc, "[YASS_ONERI]", yass_oneri, paragraph_index=report_tag_index)
+        report_step("result_texts", _report_detail(vs30=len(tum_vs30), t0=len(tum_t0), yass=len(yass_seviyeleri)))
 
-        with perf_timer("report.replace_images"):
-            doc_replace_img(doc, "RESIM:Yerbuldurur", app_instance.img_yer)
-            doc_replace_img(doc, "[RESIM_YERBULDURUR]", app_instance.img_yer)
+        mjh_path = mjh_resim_yolu(app_instance)
+        image_paths = [
+            app_instance.img_yer,
+            app_instance.img_tkgm,
+            app_instance.img_pga,
+            getattr(app_instance, 'word_img_jeofizik', None),
+            mjh_path,
+            getattr(app_instance, 'word_img_sondaj', None),
+        ]
+        image_detail = _report_detail(paths=sum(1 for path in image_paths if path and os.path.exists(path)), tags=10)
+        with perf_timer("report.replace_images", image_detail):
+            doc_replace_img(doc, "RESIM:Yerbuldurur", app_instance.img_yer, paragraphs=report_paragraphs)
+            doc_replace_img(doc, "[RESIM_YERBULDURUR]", app_instance.img_yer, paragraphs=report_paragraphs)
 
-            doc_replace_img(doc, "RESIM:TKGM", app_instance.img_tkgm)
-            doc_replace_img(doc, "RESIM:PGA", app_instance.img_pga)
+            doc_replace_img(doc, "RESIM:TKGM", app_instance.img_tkgm, paragraphs=report_paragraphs)
+            doc_replace_img(doc, "RESIM:PGA", app_instance.img_pga, paragraphs=report_paragraphs)
 
-            doc_replace_img(doc, "[RESIM_JEOFIZIK]", getattr(app_instance, 'word_img_jeofizik', None))
-            mjh_path = mjh_resim_yolu(app_instance)
-            doc_replace_img(doc, "RESIM:MJH", mjh_path)
-            doc_replace_img(doc, "[RESIM_MJH]", mjh_path)
-            doc_replace_img(doc, "[RESIM:MJH]", mjh_path)
-            doc_replace_img(doc, "[RESIM_SONDAJ]", getattr(app_instance, 'word_img_sondaj', None))
-            doc_replace_img(doc, "[RESIM:SONDAJ]", getattr(app_instance, 'word_img_sondaj', None))
-        report_step("images")
+            doc_replace_img(doc, "[RESIM_JEOFIZIK]", getattr(app_instance, 'word_img_jeofizik', None), paragraphs=report_paragraphs)
+            doc_replace_img(doc, "RESIM:MJH", mjh_path, paragraphs=report_paragraphs)
+            doc_replace_img(doc, "[RESIM_MJH]", mjh_path, paragraphs=report_paragraphs)
+            doc_replace_img(doc, "[RESIM:MJH]", mjh_path, paragraphs=report_paragraphs)
+            doc_replace_img(doc, "[RESIM_SONDAJ]", getattr(app_instance, 'word_img_sondaj', None), paragraphs=report_paragraphs)
+            doc_replace_img(doc, "[RESIM:SONDAJ]", getattr(app_instance, 'word_img_sondaj', None), paragraphs=report_paragraphs)
+        report_step("images", image_detail)
         
-        cikti_klasor = app_instance.veri.get("ayarlar", {}).get("varsayilan_cikti_klasor", "")
-        save_opts = {"defaultextension": ".docx", "filetypes": [("Word Dosyası", "*.docx")]}
-        if cikti_klasor and os.path.isdir(cikti_klasor):
-            save_opts["initialdir"] = cikti_klasor
-        final = filedialog.asksaveasfilename(**save_opts)
+        final = final_path
+        if final is None:
+            cikti_klasor = app_instance.veri.get("ayarlar", {}).get("varsayilan_cikti_klasor", "")
+            save_opts = {"defaultextension": ".docx", "filetypes": [("Word Dosyası", "*.docx")]}
+            if cikti_klasor and os.path.isdir(cikti_klasor):
+                save_opts["initialdir"] = cikti_klasor
+            final = filedialog.asksaveasfilename(**save_opts)
         if final:
+            heading_page_break_enabled = str(app_instance.veri.get("ayarlar", {}).get("rapor_buyuk_baslik_yeni_sayfa", "1")).lower() not in ("0", "false", "no", "off", "hayir", "hayır")
+            if heading_page_break_enabled:
+                with perf_timer("report.major_headings_page_break"):
+                    heading_count = buyuk_basliklari_yeni_sayfaya_al(doc)
+                report_step("major_headings_page_break", _report_detail(headings=heading_count))
             with perf_timer("report.save_docx", final):
                 doc.save(final)
-            report_step("save_docx")
+            report_step("save_docx", _file_perf_detail(final))
             return True, "Rapor oluşturuldu!"
         return False, "İptal edildi."
 

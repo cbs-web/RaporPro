@@ -2,11 +2,44 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import tkintermapview
+import tkintermapview.map_widget as tkintermapview_map_widget
 import math
 import os
 
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, valid_latlon
 from performans import log_exception
+
+DEFAULT_TILE_SERVER = "Google Uydu"
+GOOGLE_SATELLITE_TILE_URL = "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"
+HGM_ORTOFOTO_TILE_URL = os.environ.get(
+    "RAPORPRO_HGM_ORTOFOTO_URL",
+    "https://atlas.harita.gov.tr/webservis/ortofoto/{z}/{x}/{y}.jpg?apikey=rXKdDZxXgj2hgFspEC4BKG4HMittQ0Y6",
+)
+HGM_ORTOFOTO_URL_MARKER = "atlas.harita.gov.tr/webservis/ortofoto/"
+
+TILE_SERVERS = {
+    "Google Uydu": {"url": GOOGLE_SATELLITE_TILE_URL, "max_zoom": 22},
+    "HGM Ortofoto": {"url": HGM_ORTOFOTO_TILE_URL, "max_zoom": 22},
+}
+
+
+def ensure_hgm_tile_headers():
+    requests_module = getattr(tkintermapview_map_widget, "requests", None)
+    if requests_module is None or getattr(requests_module.get, "_raporpro_hgm_headers", False):
+        return
+    original_get = requests_module.get
+
+    def get_with_hgm_headers(url, *args, **kwargs):
+        if isinstance(url, str) and HGM_ORTOFOTO_URL_MARKER in url:
+            headers = dict(kwargs.get("headers") or {})
+            headers["Referer"] = "https://atlas.harita.gov.tr/"
+            kwargs["headers"] = headers
+        return original_get(url, *args, **kwargs)
+
+    get_with_hgm_headers._raporpro_hgm_headers = True
+    get_with_hgm_headers._raporpro_original_get = original_get
+    requests_module.get = get_with_hgm_headers
+
 
 class TopluHarita(tk.Toplevel):
     def __init__(self, master, kml_path=None, map_data=None, callback=None):
@@ -69,12 +102,25 @@ class TopluHarita(tk.Toplevel):
         info_frame.pack(fill="x")
         self.lbl_talimat = tk.Label(info_frame, text="Lütfen sağdaki listeden işlem yapmak istediğiniz noktayı seçin.", fg="white", bg="#34495E", font=("Arial", 11, "bold"))
         self.lbl_talimat.pack(side="left", padx=15, pady=10)
+        tile_frame = tk.Frame(info_frame, bg="#34495E")
+        tile_frame.pack(side="right", padx=(8, 12), pady=7)
+        tk.Label(tile_frame, text="Altlık", fg="white", bg="#34495E", font=("Arial", 9, "bold")).pack(side="left", padx=(0, 5))
+        self.tile_server_var = tk.StringVar(value=DEFAULT_TILE_SERVER)
+        self.cmb_tile_server = ttk.Combobox(
+            tile_frame,
+            textvariable=self.tile_server_var,
+            values=list(TILE_SERVERS.keys()),
+            state="readonly",
+            width=14,
+        )
+        self.cmb_tile_server.pack(side="left")
+        self.cmb_tile_server.bind("<<ComboboxSelected>>", self.altlik_degistir)
         self.lbl_mesafe = tk.Label(info_frame, text="", fg="#F1C40F", bg="#34495E", font=("Arial", 11, "bold"))
         self.lbl_mesafe.pack(side="right", padx=15, pady=10)
 
         self.map_widget = tkintermapview.TkinterMapView(map_frame, corner_radius=0)
         self.map_widget.pack(fill="both", expand=True)
-        self.map_widget.set_tile_server("https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}", max_zoom=22)
+        self.altlik_uygula(DEFAULT_TILE_SERVER, show_status=False)
         self.map_widget.set_position(39.9334, 32.8597) 
         self.map_widget.set_zoom(6)
         self.map_widget.add_left_click_map_command(self.on_map_click)
@@ -136,6 +182,36 @@ class TopluHarita(tk.Toplevel):
 
         btn_kaydet = tk.Button(right_frame, text="💾 KAYDET VE AKTAR", bg="#27AE60", fg="white", font=("Arial", 12, "bold"), pady=10, command=self.kaydet_ve_kapat)
         btn_kaydet.pack(fill="x", padx=5, pady=10)
+
+    def altlik_uygula(self, name, show_status=True):
+        provider = TILE_SERVERS.get(name) or TILE_SERVERS[DEFAULT_TILE_SERVER]
+        url = provider.get("url", "")
+        if not url:
+            name = DEFAULT_TILE_SERVER
+            provider = TILE_SERVERS[DEFAULT_TILE_SERVER]
+            url = provider["url"]
+        try:
+            if HGM_ORTOFOTO_URL_MARKER in url:
+                ensure_hgm_tile_headers()
+            self.map_widget.set_tile_server(url, max_zoom=provider.get("max_zoom", 19))
+            self.active_tile_server = name
+            if hasattr(self, "tile_server_var"):
+                self.tile_server_var.set(name)
+            if show_status:
+                self.lbl_talimat.config(text=f"{name} altlığı seçildi. Harita üzerinde işaretlemeye devam edebilirsiniz.")
+        except Exception as exc:
+            log_exception("map.tile_server", exc_value=exc)
+            if name != DEFAULT_TILE_SERVER:
+                messagebox.showwarning(
+                    "Harita Altlığı",
+                    f"{name} altlığı uygulanamadı. Google Uydu altlığına dönülüyor.",
+                )
+                self.altlik_uygula(DEFAULT_TILE_SERVER, show_status=show_status)
+            else:
+                messagebox.showerror("Harita Altlığı", f"Harita altlığı uygulanamadı:\n{exc}")
+
+    def altlik_degistir(self, event=None):
+        self.altlik_uygula(self.tile_server_var.get())
 
     def gorsel_bindirme_ac(self):
         if not self.kml_path or not os.path.exists(self.kml_path):

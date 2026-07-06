@@ -6,7 +6,6 @@ from tkinter import Toplevel, filedialog, messagebox, ttk
 from sabitler import *
 from ui_spt_okuma_aktar import apply_spt_import
 from spt_okuma_motoru import (
-    SPTImportSonucu,
     SPTKaydi,
     excelden_spt_oku,
     fotograflardan_spt_oku,
@@ -816,7 +815,23 @@ class SPTOkumaMixin:
                     self.root.after(0, lambda path=path, sonuc=sonuc: finish_file(path, sonuc=sonuc))
                 self.root.after(0, lambda cancelled=cancelled or stop_event.is_set(): finish_all(cancelled))
 
-            threading.Thread(target=worker, daemon=True).start()
+            def worker_failed(exc):
+                if not win.winfo_exists():
+                    return
+                main_read_state["active"] = False
+                main_read_state["stop_event"] = None
+                refresh_main_queue_status("hata")
+                status_var.set(f"SPT fotoğraf okuma durdu: {exc}")
+                messagebox.showerror("SPT Fotoğraf", f"Okuma tamamlanamadı:\n{exc}", parent=win)
+
+            self.arka_plan_gorevi_baslat(
+                "SPT fotoğraf kuyruğu",
+                worker,
+                status_start="SPT fotoğraf kuyruğu arka planda başlatıldı.",
+                status_success="SPT fotoğraf kuyruğu işlemi bitti.",
+                status_error="SPT fotoğraf kuyruğu tamamlanamadı: {error}",
+                on_error=worker_failed,
+            )
 
         def stop_main_photo_queue():
             stop_event = main_read_state.get("stop_event")

@@ -259,9 +259,12 @@ class GeoEngineLogMixin:
                     return rect, txt
                 return rect, None
 
+            header_label_bonus = 0.35
+            header_value_bonus = 0.85
+
             def draw_label_value(x, y, label_w, value_w, label, value, fs=6.2):
-                draw_cell(x, y, label_w, row_h, label, fs=fs, fw="bold", ha="left", fc="#F4F4F4")
-                draw_cell(x + label_w, y, value_w, row_h, value, fs=fs + 0.2, ha="left")
+                draw_cell(x, y, label_w, row_h, label, fs=fs + header_label_bonus, fw="bold", ha="left", fc="#F4F4F4")
+                draw_cell(x + label_w, y, value_w, row_h, value, fs=fs + header_value_bonus, ha="left")
 
             def d2y(depth):
                 return body_top - ((depth - z_start) / PAGE_CAPACITY) * (body_top - body_bottom)
@@ -314,28 +317,28 @@ class GeoEngineLogMixin:
             ]
 
             y = header_top - row_h
-            draw_cell(hx[0], y, c1, row_h, "Yüklenici Firma", fs=6.7, fw="bold", ha="left", fc="#F4F4F4")
-            draw_cell(hx[1], y, page_w - c1, row_h, firma_adi, fs=7.2, fw="bold", ha="left")
+            draw_cell(hx[0], y, c1, row_h, "Yüklenici Firma", fs=7.0, fw="bold", ha="left", fc="#F4F4F4")
+            draw_cell(hx[1], y, page_w - c1, row_h, firma_adi, fs=8.2, fw="bold", ha="left")
             ax.text(
                 hx[1] + (page_x1 - hx[1]) / 2,
                 y + row_h / 2,
                 log_baslik,
                 ha="center",
                 va="center",
-                fontsize=11.5,
+                fontsize=13.0,
                 fontweight="bold",
                 zorder=8,
             )
 
             y -= row_h
-            draw_cell(hx[0], y, c1, row_h, "Proje Adı", fs=6.6, fw="bold", ha="left", fc="#F4F4F4")
-            draw_cell(hx[1], y, c2 + c3 + c4, row_h, val(kunye.get("sahibi")), fs=6.8, ha="left")
-            draw_cell(hx[4], y, c5, row_h, "Sondaj No", fs=6.6, fw="bold", ha="left", fc="#F4F4F4")
-            draw_cell(hx[5], y, c6, row_h, val(sondaj.get("no"), "SK-1"), fs=7.4, fw="bold")
+            draw_cell(hx[0], y, c1, row_h, "Proje Adı", fs=7.0, fw="bold", ha="left", fc="#F4F4F4")
+            draw_cell(hx[1], y, c2 + c3 + c4, row_h, val(kunye.get("sahibi")), fs=7.7, ha="left")
+            draw_cell(hx[4], y, c5, row_h, "Sondaj No", fs=7.0, fw="bold", ha="left", fc="#F4F4F4")
+            draw_cell(hx[5], y, c6, row_h, val(sondaj.get("no"), "SK-1"), fs=8.2, fw="bold")
 
             header_rows = [
                 ("İl", kunye.get("il", ""), "Sondaj Derinliği (m)", sondaj.get("der", ""), "Sayfa No", f"{page_idx + 1} / {num_pages}"),
-                ("İlçe", kunye.get("ilce", ""), "Başlama Tarihi", sondaj.get("bas_tar", ""), "İşveren", val(kunye.get("sahibi"))),
+                ("İlçe", kunye.get("ilce", ""), "Başlama Tarihi", sondaj.get("bas_tar", ""), "İşveren", ""),
                 ("Mahalle/Köy", kunye.get("mah", ""), "Bitiş Tarihi", sondaj.get("bit_tar", ""), sorumlu_unvan, ""),
                 ("Pafta", kunye.get("paf", ""), "Makine Tipi/Metodu", makine_metodu, sorumlu_muhendis, ""),
                 ("Ada", kunye.get("ada", ""), "SPT Şahmerdan Tipi", spt_sahmerdan, sondor_belge_baslik, ""),
@@ -349,15 +352,15 @@ class GeoEngineLogMixin:
                 if idx < 6:
                     draw_label_value(hx[2], y, c3, c4, l2, val(v2), fs=6.0)
                 else:
-                    draw_cell(hx[2], y - row_h * 2, c3, row_h * 3, l2, fs=6.2, fw="bold", fc="#F4F4F4")
+                    draw_cell(hx[2], y - row_h * 2, c3, row_h * 3, l2, fs=7.2, fw="bold", fc="#F4F4F4")
                     water_w = c4 / 3
-                    draw_cell(hx[3], y, water_w, row_h, "Derinlik", fs=5.1, fw="bold", fc="#F4F4F4")
-                    draw_cell(hx[3] + water_w, y, water_w, row_h, "Tarih", fs=5.1, fw="bold", fc="#F4F4F4")
-                    draw_cell(hx[3] + water_w * 2, y, water_w, row_h, "Açıklama", fs=5.1, fw="bold", fc="#F4F4F4")
+                    draw_cell(hx[3], y, water_w, row_h, "Derinlik", fs=6.0, fw="bold", fc="#F4F4F4")
+                    draw_cell(hx[3] + water_w, y, water_w, row_h, "Tarih", fs=6.0, fw="bold", fc="#F4F4F4")
+                    draw_cell(hx[3] + water_w * 2, y, water_w, row_h, "Açıklama", fs=6.0, fw="bold", fc="#F4F4F4")
 
                 if idx in (2, 3, 4, 5):
                     text = l3 if idx in (2, 4) else (v3 or l3)
-                    fs = 6.1 if idx in (2, 4) else 7.0
+                    fs = 7.3 if idx in (2, 4) else 8.2
                     draw_cell(hx[4], y, c5 + c6, row_h, text, fs=fs, fw="bold", ha="center")
                 elif idx < 2:
                     draw_label_value(hx[4], y, c5, c6, l3, val(v3), fs=5.9)
@@ -365,22 +368,22 @@ class GeoEngineLogMixin:
                     draw_cell(hx[4], y, c5 + c6, row_h, "", fs=5.8)
 
             y -= row_h
-            draw_cell(hx[0], y - row_h, c1, row_h * 2, "Koordinatlar", fs=6.5, fw="bold", fc="#F4F4F4")
+            draw_cell(hx[0], y - row_h, c1, row_h * 2, "Koordinatlar", fs=7.4, fw="bold", fc="#F4F4F4")
             coord_label_w = c2 * 0.22
-            draw_cell(hx[1], y, coord_label_w, row_h, "X", fs=6.2, fw="bold", fc="#F4F4F4")
-            draw_cell(hx[1] + coord_label_w, y, c2 - coord_label_w, row_h, val(sondaj.get("x"), "-"), fs=6.2, ha="left")
-            draw_cell(hx[1], y - row_h, coord_label_w, row_h, "Y", fs=6.2, fw="bold", fc="#F4F4F4")
-            draw_cell(hx[1] + coord_label_w, y - row_h, c2 - coord_label_w, row_h, val(sondaj.get("y"), "-"), fs=6.2, ha="left")
+            draw_cell(hx[1], y, coord_label_w, row_h, "X", fs=7.3, fw="bold", fc="#F4F4F4")
+            draw_cell(hx[1] + coord_label_w, y, c2 - coord_label_w, row_h, val(sondaj.get("x"), "-"), fs=7.3, ha="left")
+            draw_cell(hx[1], y - row_h, coord_label_w, row_h, "Y", fs=7.3, fw="bold", fc="#F4F4F4")
+            draw_cell(hx[1] + coord_label_w, y - row_h, c2 - coord_label_w, row_h, val(sondaj.get("y"), "-"), fs=7.3, ha="left")
             water_w = c4 / 3
-            draw_cell(hx[3], y, water_w, row_h, val(sondaj.get("yass_d1"), "-"), fs=5.8)
-            draw_cell(hx[3] + water_w, y, water_w, row_h, val(sondaj.get("yass_t1"), "-"), fs=5.2)
-            draw_cell(hx[3] + water_w * 2, y, water_w, row_h, "", fs=5.2)
-            draw_cell(hx[3], y - row_h, water_w, row_h, val(sondaj.get("yass_d2"), "-"), fs=5.8)
-            draw_cell(hx[3] + water_w, y - row_h, water_w, row_h, val(sondaj.get("yass_t2"), "-"), fs=5.2)
-            draw_cell(hx[3] + water_w * 2, y - row_h, water_w, row_h, "", fs=5.2)
+            draw_cell(hx[3], y, water_w, row_h, val(sondaj.get("yass_d1"), "-"), fs=6.6)
+            draw_cell(hx[3] + water_w, y, water_w, row_h, val(sondaj.get("yass_t1"), "-"), fs=6.0)
+            draw_cell(hx[3] + water_w * 2, y, water_w, row_h, "", fs=6.0)
+            draw_cell(hx[3], y - row_h, water_w, row_h, val(sondaj.get("yass_d2"), "-"), fs=6.6)
+            draw_cell(hx[3] + water_w, y - row_h, water_w, row_h, val(sondaj.get("yass_t2"), "-"), fs=6.0)
+            draw_cell(hx[3] + water_w * 2, y - row_h, water_w, row_h, "", fs=6.0)
             draw_cell(hx[4], y, c5 + c6, row_h * 2, "", fs=5.8)
 
-            ratios = [0.046, 0.034, 0.046, 0.06, 0.055, 0.145, 0.085, 0.169, 0.064, 0.214, 0.042]
+            ratios = [4.79, 2.34, 4.79, 6.25, 5.73, 16.0, 8.85, 22.2, 6.67, 18.0, 4.38]
             ratio_sum = sum(ratios)
             widths = [page_w * r / ratio_sum for r in ratios]
             cols = [page_x0]
@@ -416,7 +419,7 @@ class GeoEngineLogMixin:
             draw_cell(cols[6] + pmt_w, body_top, pmt_w, (col_header_top - body_top) * 0.5, "Pl\n(kg/cm2)", fs=4.6, fw="bold", fc="#F4F4F4")
 
             rock_w = (cols[8] - cols[7]) / 6
-            draw_cell(cols[7], body_top + (col_header_top - body_top) * 0.5, cols[8] - cols[7], (col_header_top - body_top) * 0.5, "Kaya Özellikleri", fs=5.4, fw="bold", fc="#F4F4F4")
+            draw_cell(cols[7], body_top + (col_header_top - body_top) * 0.5, cols[8] - cols[7], (col_header_top - body_top) * 0.5, "Kaya Özellikleri", fs=6.2, fw="bold", fc="#F4F4F4")
             for r_idx, title in enumerate(["TCR %", "SCR %", "RQD %", "Ayrışma\nDerecesi", "Çatlak\nSıklığı", "Dayanım"]):
                 draw_cell(
                     cols[7] + r_idx * rock_w,
@@ -424,7 +427,7 @@ class GeoEngineLogMixin:
                     rock_w,
                     (col_header_top - body_top) * 0.5,
                     title,
-                    fs=3.9,
+                    fs=4.5,
                     fw="bold",
                     rotation=90 if r_idx >= 3 else 0,
                     fc="#F4F4F4",
@@ -478,8 +481,8 @@ class GeoEngineLogMixin:
                     ax.add_patch(desc_rect)
                     layer_h = y_top - y_bot
                     if desc and layer_h > 0.01:
-                        wrap_chars = 28 if layer_h > 0.035 else 22
-                        fs = 6.3 if layer_h > 0.04 else max(4.8, 5.7 - (0.035 - layer_h) * 25)
+                        wrap_chars = 24 if layer_h > 0.035 else 18
+                        fs = 7.3 if layer_h > 0.04 else max(5.8, 6.7 - (0.035 - layer_h) * 25)
                         text = "\n".join(textwrap.wrap(desc, wrap_chars)) or desc
                         txt = ax.text(
                             cols[9] + (cols[10] - cols[9]) / 2,
@@ -517,7 +520,7 @@ class GeoEngineLogMixin:
                 d_mid = test_row_depth(raw_depth)
                 if not (z_start <= d_mid < z_end):
                     continue
-                ax.text((cols[2] + cols[3]) / 2, d2y(d_mid), label, ha="center", va="center", fontsize=5.0, fontweight="bold", zorder=9)
+                ax.text((cols[2] + cols[3]) / 2, d2y(d_mid), label, ha="center", va="center", fontsize=5.6, fontweight="bold", zorder=9)
 
             for spt in spt_list:
                 row = spt_values(spt)
@@ -533,7 +536,7 @@ class GeoEngineLogMixin:
                         value,
                         ha="center",
                         va="center",
-                        fontsize=5.8,
+                        fontsize=6.4,
                         fontweight="bold" if idx == 3 else "normal",
                         zorder=9,
                     )
@@ -563,7 +566,7 @@ class GeoEngineLogMixin:
                         y_top = min(body_top, y_mid + 0.012)
                         y_bot = max(body_bottom, y_mid - 0.012)
                     for idx, value in enumerate(list(rock[1:7])[:6]):
-                        clipped_text(cols[7] + idx * rock_w, y_bot, rock_w, y_top - y_bot, value, fs=5.25 if idx < 3 else 5.0, zorder=9)
+                        clipped_text(cols[7] + idx * rock_w, y_bot, rock_w, y_top - y_bot, value, fs=6.2 if idx < 3 else 5.7, zorder=9)
                 except Exception:
                     pass
 

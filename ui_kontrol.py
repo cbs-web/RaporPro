@@ -48,10 +48,13 @@ class KontrolPaneliMixin:
         kaya_count = sum(len(s.get("kaya", [])) for s in sondajlar)
         layer_count = sum(len(s.get("layers", [])) for s in ss_list)
 
-        self._ozet_set("proje", kunye.get("sahibi") or "Adsız proje")
+        proje_adi = str(kunye.get("sahibi") or "").strip()
+        self._ozet_set("proje", proje_adi or "Adsız proje", ok=bool(proje_adi))
         konum_parts = [kunye.get("il"), kunye.get("ilce"), kunye.get("mah")]
-        self._ozet_set("konum", " / ".join([p for p in konum_parts if p]) or "Konum girilmemiş")
-        self._ozet_set("sondaj", f"{len(sondajlar)} adet, toplam {total_depth:.2f} m")
+        konum_text = " / ".join([str(p).strip() for p in konum_parts if str(p or "").strip()])
+        konum_ok = bool(str(kunye.get("il") or "").strip() and str(kunye.get("ilce") or "").strip())
+        self._ozet_set("konum", konum_text or "Konum girilmemiş", ok=konum_ok)
+        self._ozet_set("sondaj", f"{len(sondajlar)} adet, toplam {total_depth:.2f} m", ok=len(sondajlar) > 0 and total_depth > 0)
         self._ozet_set("litoloji", f"{lit_count}/{len(sondajlar)} sondajda litoloji var", ok=lit_count == len(sondajlar) and len(sondajlar) > 0)
         self._ozet_set("deney", f"SPT: {spt_count} | PMT: {pmt_count} | Kaya: {kaya_count}", ok=(spt_count + pmt_count + kaya_count) > 0)
         self._ozet_set("jeofizik", f"SS: {len(ss_list)} | MT: {len(mt_list)} | Tabaka: {layer_count}", ok=(len(ss_list) + len(mt_list)) > 0)
@@ -76,7 +79,13 @@ class KontrolPaneliMixin:
             "img_yer": "yer", "img_tkgm": "tkgm", "img_pga": "pga", "img_mjh": "mjh",
             "word_img_sondaj": "sondaj_img", "word_img_jeofizik": "jeo_img",
         }
+        lab_sheet_ready = self._lab_sheet_ready()
         for raw_key, path in file_map.items():
+            if raw_key == "lab_excel_path" and lab_sheet_ready:
+                rows = self.veri.get("lab_sheet", {}).get("rows", [])
+                status = f"LAB Sheet hazır: {len(rows)} satır"
+                self._ozet_file_set(label_keys[raw_key], status, True)
+                continue
             status, ok = self._dosya_durumu(path)
             self._ozet_file_set(label_keys[raw_key], status, ok)
 
@@ -88,13 +97,51 @@ class KontrolPaneliMixin:
 
     def _ozet_set(self, key, text, ok=True):
         label = self.ozet_metric_labels.get(key)
+        color = COLOR_SUCCESS if ok else COLOR_WARNING
+        bg = "#F3FBF6" if ok else "#FFF4E5"
+        card = getattr(self, "ozet_metric_cards", {}).get(key)
+        title = getattr(self, "ozet_metric_title_labels", {}).get(key)
+        if card:
+            card.config(bg=bg, highlightbackground=color, highlightcolor=color, highlightthickness=1)
+        if title:
+            title.config(bg=bg, fg=COLOR_PRIMARY)
         if label:
-            label.config(text=text, fg=COLOR_SUCCESS if ok else COLOR_WARNING)
+            label.config(text=text, fg=color, bg=bg)
 
     def _ozet_file_set(self, key, text, ok=True):
         label = self.ozet_file_labels.get(key)
+        display_text = self._ozet_file_text_compact(text)
+        if ok:
+            color = COLOR_SUCCESS
+            bg = "#F3FBF6"
+        elif str(text).startswith("Bulunamadı"):
+            color = COLOR_DANGER
+            bg = "#FDEDEC"
+        else:
+            color = COLOR_WARNING
+            bg = "#FFF4E5"
+        card = getattr(self, "ozet_file_cards", {}).get(key)
+        title = getattr(self, "ozet_file_title_labels", {}).get(key)
+        if card:
+            card.config(bg=bg, highlightbackground=color, highlightcolor=color, highlightthickness=1)
+        if title:
+            title.config(bg=bg, fg=COLOR_PRIMARY)
         if label:
-            label.config(text=text, fg=COLOR_SUCCESS if ok else COLOR_DANGER)
+            label.config(text=display_text, fg=color, bg=bg)
+
+    def _ozet_file_text_compact(self, text, max_name_len=36):
+        text = str(text or "")
+        for prefix in ("Hazır: ", "Bulunamadı: ", "HazÄ±r: ", "BulunamadÄ±: "):
+            if text.startswith(prefix):
+                name = text[len(prefix):]
+                if len(name) > max_name_len:
+                    name = name[: max_name_len - 3] + "..."
+                return prefix + name
+        return text
+
+    def _lab_sheet_ready(self):
+        rows = self.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(self, "veri", None), dict) else []
+        return any(any(str(cell).strip() for cell in row) for row in rows or [])
 
     def _dosya_durumu(self, path):
         if path and os.path.exists(path):
@@ -239,8 +286,31 @@ class KontrolPaneliMixin:
         if not hasattr(self, "ozet_preflight_text"):
             return
         if self.last_preflight_report:
+            errors = len(self.last_preflight_report.get("errors", []) or [])
+            warnings = len(self.last_preflight_report.get("warnings", []) or [])
+            infos = len(self.last_preflight_report.get("info", []) or [])
+            if errors:
+                summary = f"{errors} hata, {warnings} uyarı"
+                color = COLOR_DANGER
+                role = "danger"
+            elif warnings:
+                summary = f"0 hata, {warnings} uyarı"
+                color = COLOR_WARNING
+                role = "warning"
+            else:
+                summary = f"Temiz | {infos} bilgi"
+                color = COLOR_SUCCESS
+                role = "success"
+            if hasattr(self, "ozet_preflight_summary_label"):
+                self.ozet_preflight_summary_label.config(text=summary, fg=color)
+            if hasattr(self, "ozet_preflight_action_button"):
+                self.configure_modern_button(self.ozet_preflight_action_button, text="Yenile", role=role, outline=True)
             self._insert_clickable_report(self.ozet_preflight_text, self.last_preflight_report)
         else:
+            if hasattr(self, "ozet_preflight_summary_label"):
+                self.ozet_preflight_summary_label.config(text="Ön kontrol bekliyor", fg="#555555")
+            if hasattr(self, "ozet_preflight_action_button"):
+                self.configure_modern_button(self.ozet_preflight_action_button, text="Çalıştır", role="warning", outline=True)
             self.ozet_preflight_text.config(state="normal")
             self.ozet_preflight_text.delete("1.0", tk.END)
             self.ozet_preflight_text.insert("1.0", "Ön kontrol henüz çalıştırılmadı.")
@@ -289,11 +359,12 @@ class KontrolPaneliMixin:
             "rapor", "Rapor sekmesinden Word şablonu seçin.",
         )
 
+        lab_sheet_ok = self._lab_sheet_ready()
         lab_ok = bool(self.lab_excel_path and os.path.exists(self.lab_excel_path))
         self.final_kontrol_satir_ekle(
-            items, "1. Proje ve şablon", "Laboratuvar dosyası", lab_ok,
-            os.path.basename(self.lab_excel_path) if lab_ok else "Lab Excel bağlı değil",
-            "rapor", "Laboratuvar verisi kullanılacaksa Rapor sekmesinden Lab Excel seçin.", warning=True,
+            items, "1. Proje ve şablon", "Laboratuvar dosyası", lab_ok or lab_sheet_ok,
+            "LAB Sheet hazır" if lab_sheet_ok else (os.path.basename(self.lab_excel_path) if lab_ok else "Lab Excel bağlı değil"),
+            "rapor", "Laboratuvar verisi kullanılacaksa Rapor sekmesinden LAB Sheet doldurun veya Lab Excel seçin.", warning=True,
         )
 
         jeo_excel_ok = bool(self.jeo_excel_path and os.path.exists(self.jeo_excel_path))

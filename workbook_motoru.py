@@ -9,12 +9,12 @@ WORKBOOK_SHEET_DEFS = {
     "sondajlar": {
         "title": "Sondajlar",
         "columns": [
-            ("SondajNo", "no"), ("Derinlik", "der"), ("Tur", "sondaj_turu"), ("DelgiCapi", "delgi_capi"),
+            ("SondajNo", "no"), ("Derinlik", "der"),
             ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"),
             ("Bas.Tarih", "bas_tar"), ("Bit.Tarih", "bit_tar"), ("YASS Ilk", "yass_d1"),
             ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")
         ],
-        "widths": [110, 85, 80, 90, 130, 130, 80, 110, 110, 85, 110, 85, 110],
+        "widths": [110, 85, 130, 130, 80, 110, 110, 85, 110, 85, 110],
     },
     "litoloji": {
         "title": "Litoloji",
@@ -49,7 +49,7 @@ def yeni_sondaj_sablonu(idx):
     bugun_str = bugun.strftime("%d.%m.%Y")
     t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
     return {
-        "no": f"SK-{idx + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": "76mm", "y": "", "x": "", "k": "",
+        "no": f"SK-{idx + 1}", "der": "15.0", "y": "", "x": "", "k": "",
         "bas_tar": bugun_str, "bit_tar": bugun_str,
         "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
         "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
@@ -72,6 +72,13 @@ def sondaj_delgi_capi_degeri(sondaj, fallback="76mm"):
     if text.lower() in ("89", "89mm"):
         return "89mm"
     return "76mm"
+
+
+def proje_sondaj_turu_degeri(veri):
+    text = str(((veri or {}).get("ayarlar", {}) or {}).get("sondaj_turu") or "Zemin").strip().lower()
+    if text in ("kaya", "rock"):
+        return "Kaya"
+    return "Zemin"
 
 
 def sondaj_sayfa_degeri(sondaj, col_key, default_delgi_capi="76mm"):
@@ -330,9 +337,9 @@ def apply_rows_to_veri(current_veri, rows_by_sheet, source_nos=None):
         sondaj = source.copy()
         sondaj.update(values)
         sondaj["no"] = no
-        sondaj["sondaj_turu"] = sondaj_turu_degeri(sondaj)
+        sondaj["sondaj_turu"] = proje_sondaj_turu_degeri(current_veri)
         sondaj["delgi_capi"] = sondaj_delgi_capi_degeri(
-            sondaj,
+            {},
             (current_veri.get("ayarlar", {}) or {}).get("delgi_capi", "76mm"),
         )
         if old_no and old_no != no:

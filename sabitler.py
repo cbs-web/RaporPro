@@ -48,15 +48,16 @@ HARITA_PAFTA_LAYOUT = {
 
 # --- VERİTABANI ---
 LEJANTLAR = [
-    {"kod": "bt", "ad": "Bitkisel Toprak", "zemin": "#F2F3F4", "sembol": "#000000", "desen": "ot"},
-    {"kod": "kl", "ad": "Kil", "zemin": "#FFFFFF", "sembol": "#BDBDBD", "desen": "kesikli"},
-    {"kod": "s", "ad": "Silt", "zemin": "#E5E7E9", "sembol": "#808080", "desen": "noktali_kesikli"},
-    {"kod": "kit", "ad": "Kiltaşı", "zemin": "#D7DBDD", "sembol": "#505050", "desen": "kesikli"}, 
-    {"kod": "k", "ad": "Kum", "zemin": "#FFFFFF", "sembol": "#FFD700", "desen": "nokta"},
-    {"kod": "c", "ad": "Çakıl", "zemin": "#FFFFFF", "sembol": "#FFC300", "desen": "cakil_daire"},
-    {"kod": "mlz", "ad": "Moloz", "zemin": "#F7F7F7", "sembol": "#555555", "desen": "moloz_parca"},
-    {"kod": "kt", "ad": "Kumtaşı", "zemin": "#F5CBA7", "sembol": "#D2691E", "desen": "kumtasi_yatay"},
-    {"kod": "ct", "ad": "Çakıltaşı", "zemin": "#EDBB99", "sembol": "#A04000", "desen": "cakil_oval_cizgili"},
+    {"kod": "bt", "ad": "Bitkisel Toprak", "zemin": "#FFFFFF", "sembol": "#111111", "desen": "ot"},
+    {"kod": "kl", "ad": "Kil", "zemin": "#FFFFFF", "sembol": "#9A9A9A", "desen": "kesikli"},
+    {"kod": "s", "ad": "Silt", "zemin": "#FFFFFF", "sembol": "#6F6F6F", "desen": "noktali_kesikli"},
+    {"kod": "kit", "ad": "Kiltaşı", "zemin": "#FFFFFF", "sembol": "#4F4F4F", "desen": "kiltasi_cizgili_noktali"},
+    {"kod": "k", "ad": "Kum", "zemin": "#FFFFFF", "sembol": "#D9D400", "desen": "nokta"},
+    {"kod": "c", "ad": "Çakıl", "zemin": "#FFFFFF", "sembol": "#D4A000", "desen": "cakil_daire"},
+    {"kod": "mlz", "ad": "Moloz", "zemin": "#FFFFFF", "sembol": "#B9955B", "desen": "moloz_parca"},
+    {"kod": "kt", "ad": "Kumtaşı", "zemin": "#FFFFFF", "sembol": "#C98A00", "desen": "kumtasi_yatay"},
+    {"kod": "ct", "ad": "Çakıltaşı", "zemin": "#FFFFFF", "sembol": "#B36B00", "desen": "cakil_oval_cizgili"},
+    {"kod": "dg", "ad": "Dolgu", "zemin": "#FFFFFF", "sembol": "#6E6255", "desen": "dolgu_karisik"},
     {"kod": "tanimsiz", "ad": "Tanımsız Birim", "zemin": "#FFFFFF", "sembol": "#000000", "desen": ""} 
 ]
 
@@ -66,6 +67,7 @@ KELIME_HARITASI = {
     "kiltasi": "kit", "kum": "k", "kumlu": "k",
     "cakil": "c", "cakilli": "c",
     "moloz": "mlz", "molozlu": "mlz",
+    "dolgu": "dg", "dolgulu": "dg", "dolgusu": "dg",
     "kumtasi": "kt",
     "cakiltasi": "ct", "konglomera": "ct", "bres": "ct"
 }

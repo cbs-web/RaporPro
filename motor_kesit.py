@@ -46,7 +46,7 @@ class GeoEngineKesitMixin:
             value = options.get(name, default)
             return str(value).lower() not in ("0", "false", "no", "off", "hayir", "hayır")
 
-        TARAMA_SIKLIGI_KESIT = safe_float(options.get("section_pattern_density", 6.0)) or 6.0
+        TARAMA_SIKLIGI_KESIT = safe_float(options.get("section_pattern_density", 10.0)) or 10.0
         TARAMA_SIKLIGI_LEJANT = safe_float(options.get("legend_pattern_density", 6.0)) or 6.0
         MARGIN = safe_float(options.get("plot_margin", 10.0)) or 10.0
         dx_default = safe_float(options.get("dx_default", 25.0)) or 25.0
@@ -94,6 +94,8 @@ class GeoEngineKesitMixin:
             code = str(code or "").lower()
             if not legend:
                 override_key = {
+                    "kl": "clay_pattern_density",
+                    "s": "silt_pattern_density",
                     "k": "sand_pattern_density",
                     "c": "gravel_pattern_density",
                 }.get(code)
@@ -306,16 +308,23 @@ class GeoEngineKesitMixin:
             layer_height = abs(high_y - low_y)
             if layer_height <= 0:
                 return []
-            pad = min(0.25, layer_height * 0.18)
-            usable_high = high_y - pad
-            usable_low = low_y + pad
+            top_pad = min(0.42, max(0.16, layer_height * 0.16))
+            bottom_pad = min(0.28, max(0.10, layer_height * 0.12))
+            if layer_height < 0.70:
+                top_pad = layer_height * 0.22
+                bottom_pad = layer_height * 0.16
+            usable_high = high_y - top_pad
+            usable_low = low_y + bottom_pad
             if usable_high < usable_low:
                 usable_high = high_y
                 usable_low = low_y
 
             positioned = []
             for record in sorted(records, key=lambda item: item.get("depth", 0)):
-                y = top_elevation - safe_float(record.get("depth"))
+                if record.get("source") == "fallback":
+                    y = usable_high
+                else:
+                    y = top_elevation - safe_float(record.get("depth"))
                 y = max(usable_low, min(usable_high, y))
                 positioned.append({"label": record["label"], "y": y, "source": record.get("source", "spt")})
 
@@ -661,6 +670,29 @@ class GeoEngineKesitMixin:
             allowed_h = abs(p1[1] - p0[1])
             if allowed_w <= 0 or allowed_h <= 0:
                 return txt
+            allowed_x0, allowed_x1 = sorted((p0[0], p1[0]))
+            allowed_y0, allowed_y1 = sorted((p0[1], p1[1]))
+
+            def nudge_label_inside():
+                try:
+                    bbox = txt.get_window_extent(renderer=renderer)
+                except Exception:
+                    return
+                dx = 0.0
+                dy = 0.0
+                if bbox.x0 < allowed_x0:
+                    dx += allowed_x0 - bbox.x0
+                if bbox.x1 > allowed_x1:
+                    dx -= bbox.x1 - allowed_x1
+                if bbox.y0 < allowed_y0:
+                    dy += allowed_y0 - bbox.y0
+                if bbox.y1 > allowed_y1:
+                    dy -= bbox.y1 - allowed_y1
+                if abs(dx) < 0.1 and abs(dy) < 0.1:
+                    return
+                anchor = ax.transData.transform(txt.get_position())
+                new_x, new_y = ax.transData.inverted().transform((anchor[0] + dx, anchor[1] + dy))
+                txt.set_position((float(new_x), float(new_y)))
 
             fs = preferred_fs
             while fs >= consistency_font_min:
@@ -670,9 +702,11 @@ class GeoEngineKesitMixin:
                 except Exception:
                     break
                 if bbox.width <= allowed_w * 0.98 and bbox.height <= allowed_h * 0.98:
+                    nudge_label_inside()
                     return txt
                 fs -= 0.35
             txt.set_fontsize(consistency_font_min)
+            nudge_label_inside()
             return txt
         
         for idx, s in enumerate(sondajlar):
@@ -903,11 +937,28 @@ class GeoEngineKesitMixin:
         def is_lens_candidate(layer):
             code = str(layer.get("code") or "")
             thickness = abs(safe_float(layer.get("bot")) - safe_float(layer.get("top")))
-            if code in ("", "tanimsiz"):
+            if code in ("", "tanimsiz", "bt"):
                 return False
             if thickness <= 0.05:
                 return False
             return lens_max_thickness <= 0 or thickness <= lens_max_thickness
+
+        def adjacent_layer_linked(well_idx, layer_idx, neighbor_idx):
+            if neighbor_idx < 0 or neighbor_idx >= len(sondajlar):
+                return False
+            pair_idx = min(well_idx, neighbor_idx)
+            if pair_idx < 0 or pair_idx >= len(pair_links):
+                return False
+            link = pair_links[pair_idx]
+            if well_idx == pair_idx:
+                return (
+                    layer_idx in link.get("matches_s1", {})
+                    or layer_idx in link.get("facies_s1", {})
+                )
+            return (
+                layer_idx in link.get("matches_s2", {})
+                or layer_idx in link.get("facies_s2", {})
+            )
 
         def neighbor_has_same_code_overlap(center_s, neighbor_s, layer):
             code = layer.get("code")
@@ -933,8 +984,14 @@ class GeoEngineKesitMixin:
                 for layer_idx, layer in enumerate(sondajlar[well_idx].get('merged_layers', [])):
                     if not is_lens_candidate(layer):
                         continue
-                    has_left_same_unit = neighbor_has_same_code_overlap(center_s, left_s, layer)
-                    has_right_same_unit = neighbor_has_same_code_overlap(center_s, right_s, layer)
+                    has_left_same_unit = (
+                        neighbor_has_same_code_overlap(center_s, left_s, layer)
+                        or adjacent_layer_linked(well_idx, layer_idx, well_idx - 1)
+                    )
+                    has_right_same_unit = (
+                        neighbor_has_same_code_overlap(center_s, right_s, layer)
+                        or adjacent_layer_linked(well_idx, layer_idx, well_idx + 1)
+                    )
                     if not has_left_same_unit and not has_right_same_unit:
                         lens_layer_keys.add((well_idx, layer_idx))
 
@@ -990,6 +1047,8 @@ class GeoEngineKesitMixin:
                 neighbor_s = sondajlar[neighbor_idx]
                 for idx, layer in enumerate(source_s.get('merged_layers', [])):
                     if not is_lens_candidate(layer):
+                        continue
+                    if adjacent_layer_linked(well_idx, idx, neighbor_idx):
                         continue
                     if not neighbor_has_same_code_overlap(source_s, neighbor_s, layer):
                         half_lens_layer_keys[(well_idx, idx)] = direction

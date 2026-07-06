@@ -1,6 +1,5 @@
 ﻿import datetime
 import os
-import threading
 import tkinter as tk
 from tkinter import Canvas, Frame, Scrollbar, Toplevel, filedialog, messagebox, ttk
 
@@ -9,7 +8,7 @@ import matplotlib.pyplot as plt
 
 from cizim import VeriGirisPenceresi
 from motor import GeoEngine
-from performans import log_exception, perf_tracked
+from performans import perf_tracked
 from sabitler import *
 from karot_motoru import derinlik_baslangic
 from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
@@ -74,7 +73,7 @@ class SondajMixin:
         self.sondaj_scroll_frame = ttk.Frame(canvas); self.sondaj_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.sondaj_scroll_frame, anchor="nw"); canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
         scrollbar_y.pack(side="right", fill="y"); scrollbar_x.pack(side="bottom", fill="x"); canvas.pack(side="left", fill="both", expand=True)
-        self.sondaj_headers = [("Sondaj No", "no"), ("Derinlik", "der"), ("Tür", "sondaj_turu"), ("Delgi Çapı", "delgi_capi"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"), ("Baş. Tarihi", "bas_tar"), ("Bit. Tarihi", "bit_tar"), ("YASS İlk", "yass_d1"), ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")]
+        self.sondaj_headers = [("Sondaj No", "no"), ("Derinlik", "der"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"), ("Baş. Tarihi", "bas_tar"), ("Bit. Tarihi", "bit_tar"), ("YASS İlk", "yass_d1"), ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")]
         self.sondaj_tablosunu_ciz()
 
     @perf_tracked("sondaj.table_redraw")
@@ -181,7 +180,8 @@ class SondajMixin:
         return "break"
 
     def sondaj_turu_degeri(self, sondaj):
-        text = str((sondaj or {}).get("sondaj_turu", "")).strip().lower()
+        ayarlar = self.veri.get("ayarlar", {}) if hasattr(self, "veri") else {}
+        text = str(ayarlar.get("sondaj_turu") or (sondaj or {}).get("sondaj_turu", "")).strip().lower()
         if text in ("kaya", "rock"):
             return "Kaya"
         if text in ("zemin", "soil"):
@@ -190,7 +190,7 @@ class SondajMixin:
 
     def sondaj_delgi_capi_degeri(self, sondaj):
         ayarlar = self.veri.get("ayarlar", {}) if hasattr(self, "veri") else {}
-        text = str((sondaj or {}).get("delgi_capi") or ayarlar.get("delgi_capi") or "76mm").strip().replace(" ", "")
+        text = str(ayarlar.get("delgi_capi") or (sondaj or {}).get("delgi_capi") or "76mm").strip().replace(" ", "")
         if text.lower() in ("76", "76mm"):
             return "76mm"
         if text.lower() in ("89", "89mm"):
@@ -359,12 +359,6 @@ class SondajMixin:
             if not sondaj.get("no"):
                 sondaj["no"] = f"SK-{idx + 1}"
                 changed += 1
-            if not sondaj.get("sondaj_turu"):
-                sondaj["sondaj_turu"] = self.sondaj_turu_degeri(sondaj)
-                changed += 1
-            if not sondaj.get("delgi_capi"):
-                sondaj["delgi_capi"] = self.sondaj_delgi_capi_degeri(sondaj)
-                changed += 1
             if not sondaj.get("litoloji"):
                 sondaj["litoloji"] = [[0, f"{depth:.2f}", "Kil"]]
                 changed += 1
@@ -396,7 +390,7 @@ class SondajMixin:
         focused_cell = {"row": 0, "col": 0}
         table_rows = []
         widths = {
-            "no": 10, "der": 9, "sondaj_turu": 9, "delgi_capi": 10, "y": 14, "x": 14, "k": 9,
+            "no": 10, "der": 9, "y": 14, "x": 14, "k": 9,
             "bas_tar": 12, "bit_tar": 12, "yass_d1": 9, "yass_t1": 12,
             "yass_d2": 9, "yass_t2": 12,
         }
@@ -422,7 +416,7 @@ class SondajMixin:
             bugun_str = bugun.strftime("%d.%m.%Y")
             t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
             return {
-                "no": f"SK-{idx+1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": self.sondaj_delgi_capi_degeri({}), "y": "", "x": "", "k": "",
+                "no": f"SK-{idx+1}", "der": "15.0", "y": "", "x": "", "k": "",
                 "bas_tar": bugun_str, "bit_tar": bugun_str,
                 "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
                 "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
@@ -759,8 +753,18 @@ class SondajMixin:
             "total": total,
         }
         self.set_status(f"Toplu log kaydı başlatıldı: {total} sondaj", level="info")
-        worker = threading.Thread(target=self.toplu_log_kaydet_threaded, args=(sondajlar, config, progress, cancel_state), daemon=True)
-        worker.start()
+        self.arka_plan_gorevi_baslat(
+            "Toplu Log Kaydet",
+            self.toplu_log_kaydet_threaded,
+            sondajlar,
+            config,
+            progress,
+            cancel_state,
+            status_start="Toplu log kaydı arka planda başlatıldı.",
+            status_success="Toplu log kaydı işlemi bitti.",
+            status_error="Toplu log kaydı tamamlanamadı: {error}",
+            on_error=lambda exc: self._toplu_log_progress_bitti(progress, str(exc), "error"),
+        )
 
     def _toplu_log_progress_guncelle(self, progress, done, text):
         if not progress:
@@ -896,7 +900,7 @@ class SondajMixin:
         bugun_str = bugun.strftime("%d.%m.%Y")
         t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
         self.veri["sondaj"].append({
-            "no": f"SK-{len(self.veri['sondaj']) + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": self.sondaj_delgi_capi_degeri({}), "y": "", "x": "", "k": "",
+            "no": f"SK-{len(self.veri['sondaj']) + 1}", "der": "15.0", "y": "", "x": "", "k": "",
             "bas_tar": bugun_str, "bit_tar": bugun_str, "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str, 
             "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
         })

@@ -1,5 +1,7 @@
 # Dosya: RaporPro/arayuz_proje.py
 import datetime
+import copy
+import hashlib
 import json
 import os
 import tkinter as tk
@@ -30,6 +32,67 @@ RECENT_PROJECTS_PATH = os.path.join(APP_DIR, "recent_projects.json")
 
 
 class ArayuzProjeMixin:
+    def proje_kayit_imzasi(self, veri=None):
+        payload = veri if veri is not None else self.veri
+        try:
+            text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            text = repr(payload)
+        return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+    def kayit_imzasi_guncelle(self, collect=False):
+        if collect and hasattr(self, "e_kunye"):
+            try:
+                self.guncelle_veri_objesi(silent=True)
+            except Exception as exc:
+                log_exception("project.signature.collect", exc_value=exc)
+        self._son_kayit_imzasi = self.proje_kayit_imzasi()
+        return self._son_kayit_imzasi
+
+    def proje_degisti_mi(self):
+        if getattr(self, "_son_kayit_imzasi", None) is None:
+            return True
+        try:
+            if hasattr(self, "e_kunye"):
+                self.guncelle_veri_objesi(silent=True)
+        except Exception as exc:
+            log_exception("project.dirty.collect", exc_value=exc)
+        return self.proje_kayit_imzasi() != getattr(self, "_son_kayit_imzasi", None)
+
+    def proje_kaydedilmemis_yeni_mi(self):
+        if self.aktif_dosya_yolu:
+            return False
+        try:
+            varsayilan = self.varsayilan_veri_olustur()
+            current = copy.deepcopy(self.veri)
+            self.veri_eksikleri_tamamla(current, varsayilan)
+            return self.proje_kayit_imzasi(current) != self.proje_kayit_imzasi(varsayilan)
+        except Exception:
+            return True
+
+    def kaydedilmemis_degisiklik_onayi(self):
+        if not self.proje_degisti_mi():
+            return True
+        if self.proje_kilitli_mi():
+            msg = (
+                "Projede kaydedilmemiş değişiklikler var ancak proje kilitli olduğu için kaydedilemez.\n\n"
+                "Kaydetmeden çıkılsın mı?"
+            )
+            return bool(messagebox.askyesno("Kaydedilmemiş Değişiklikler", msg))
+        secim = messagebox.askyesnocancel(
+            "Kaydedilmemiş Değişiklikler",
+            "Projede kaydedilmemiş değişiklikler var.\n\n"
+            "Program kapanmadan önce kaydedilsin mi?\n\n"
+            "Evet: Kaydet ve çık\n"
+            "Hayır: Kaydetmeden çık\n"
+            "İptal: Programa dön",
+        )
+        if secim is None:
+            return False
+        if secim is False:
+            return True
+        return bool(self.veri_kaydet())
+
     def recent_projects_yukle(self):
         try:
             if not os.path.exists(RECENT_PROJECTS_PATH):
@@ -89,6 +152,7 @@ class ArayuzProjeMixin:
             self.veri = yuklenen_veri
             self.aktif_dosya_yolu = dosya_yolu
             self.doldur_arayuz()
+            self.kayit_imzasi_guncelle(collect=True)
         self.proje_baslik_guncelle()
         self.recent_project_ekle(dosya_yolu)
         self.set_status(f"Proje açıldı: {dosya_yolu}", level="success")
@@ -197,6 +261,7 @@ class ArayuzProjeMixin:
             "sondaj": [],
             "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
             "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
+            "lab_sheet": {"rows": []},
             "kesit_ayarlari": {},
             "ek_icerikleri": {"normal": {}, "arazi_deneyli": {}},
             "proje_durumu": {"tamamlandi": False, "kilitli": False, "tamamlanma_tarihi": "", "arsiv_notu": ""},
@@ -209,6 +274,7 @@ class ArayuzProjeMixin:
                 "sondor_belge": "Murat Ercelik 3629",
                 "makine_metodu": "Rotary / Burgusuz",
                 "spt_sahmerdan": "Otomatik",
+                "sondaj_turu": "Zemin",
                 "delgi_capi": "76mm",
                 "varsayilan_word_path": "",
                 "varsayilan_cikti_klasor": "",
@@ -219,7 +285,7 @@ class ArayuzProjeMixin:
                 "cikti_merkezi_klasor": "",
                 "cikti_merkezi_format": "JPG",
                 "cikti_merkezi_dpi": "300",
-                "taahhut_excel_sablon_path": "",
+                "rapor_buyuk_baslik_yeni_sayfa": "1",
                 "taahhut_ilgili_idare": "",
                 "taahhut_tarih": "",
                 "ek_tutanak_path": "",
@@ -439,24 +505,27 @@ class ArayuzProjeMixin:
         if self.proje_kilitli_mi() and not getattr(self, "_kilitli_kayda_izin_ver", False):
             messagebox.showwarning("Proje Kilitli", "Bu proje tamamlandı olarak kilitli. Kaydetmek için önce Proje > Proje Kilidini Kaldır komutunu kullanın.")
             self.set_save_indicator("Kilitli: kaydedilmedi", "warning")
-            return
+            return False
         if self.aktif_dosya_yolu:
             try:
                 backup_path, backup_error = backup_project_file(self.aktif_dosya_yolu, keep=self.get_yedek_sayisi())
                 if backup_error:
                     self.set_status(f"Yedekleme uyarısı: {backup_error}", level="warning")
                 atomic_json_dump(self.veri, self.aktif_dosya_yolu, indent=4, ensure_ascii=False)
+                self.kayit_imzasi_guncelle()
                 self.set_status(f"Kaydedildi: {os.path.basename(self.aktif_dosya_yolu)}", level="success")
                 self.last_save_time = datetime.datetime.now()
                 self.set_save_indicator(f"Son kayıt: {self.last_save_time.strftime('%H:%M')}", "success")
                 self.recent_project_ekle(self.aktif_dosya_yolu)
                 if backup_path:
                     self.set_status(f"Yedek oluşturuldu: {os.path.basename(backup_path)}", level="info")
+                return True
             except Exception as e:
                 self.set_status(f"Kayıt Hatası: {str(e)}", level="error")
                 self.set_save_indicator("Kayıt hatası", "error")
+                return False
         else:
-            self.proje_farkli_kaydet()
+            return self.proje_farkli_kaydet()
 
     @perf_tracked("project.save_as")
     def proje_farkli_kaydet(self):
@@ -464,7 +533,7 @@ class ArayuzProjeMixin:
         if self.proje_kilitli_mi() and not getattr(self, "_kilitli_kayda_izin_ver", False):
             messagebox.showwarning("Proje Kilitli", "Bu proje kilitli. Farklı kaydetmek için önce kilidi kaldırın.")
             self.set_save_indicator("Kilitli: farklı kaydedilmedi", "warning")
-            return
+            return False
         proje_adi = self.veri["kunye"].get("sahibi", "Yeni_Proje")
         if not proje_adi: proje_adi = "Zemin_Etud_Projesi"
         varsayilan_isim = f"{proje_adi}.json"
@@ -483,15 +552,19 @@ class ArayuzProjeMixin:
                 atomic_json_dump(self.veri, dosya_yolu, indent=4, ensure_ascii=False)
                 self.aktif_dosya_yolu = dosya_yolu
                 self.root.title(f"Zemin Rapor Pro - {os.path.basename(dosya_yolu)}")
+                self.kayit_imzasi_guncelle()
                 self.set_status(f"Yeni proje olarak kaydedildi: {dosya_yolu}", level="success")
                 self.last_save_time = datetime.datetime.now()
                 self.set_save_indicator(f"Son kayıt: {self.last_save_time.strftime('%H:%M')}", "success")
                 self.recent_project_ekle(dosya_yolu)
                 if backup_path:
                     self.set_status(f"Yedek oluşturuldu: {os.path.basename(backup_path)}", level="info")
+                return True
             except Exception as e:
                 messagebox.showerror("Hata", f"Dosya kaydedilemedi:\n{str(e)}")
                 self.set_save_indicator("Kayıt hatası", "error")
+                return False
+        return False
 
     @perf_tracked("project.open")
     def proje_ac(self):

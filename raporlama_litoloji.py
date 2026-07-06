@@ -5,7 +5,12 @@ import unicodedata
 from yardimcilar import safe_float
 from raporlama_deger import clean_val
 
-IRI_DANELILER = ['Killi Kum', 'Kum', 'Kumlu', 'Siltli Killi Çakıl', 'Siltli Kum', 'Çakıllı Killi Kum', 'Çakıllı Kum', 'Çakıllı Siltli Kum', 'Kumlu Siltli Killi Çakıl', 'Çakıl']
+IRI_DANELILER = [
+    'Killi Kum', 'Kum', 'Kumlu',
+    'Çakıl', 'Siltli Çakıl', 'Killi Çakıl', 'Siltli Killi Çakıl',
+    'Kumlu Killi Çakıl', 'Kumlu Siltli Çakıl', 'Kumlu Siltli Killi Çakıl',
+    'Siltli Kum', 'Çakıllı Killi Kum', 'Çakıllı Kum', 'Çakıllı Siltli Kum',
+]
 INCE_DANELILER = ['Kil', 'Kumlu Kil', 'Çakıllı Kil', 'Siltli Kil', 'Kumlu Silt', 'Silt']
 LITOLOJI_DAGILIM_BIRIMLERI = [
     "Çakıl",

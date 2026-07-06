@@ -3,10 +3,12 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
+from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD, PROJE_KLASORU
 from performans import perf_tracked
 from harita_referans import kml_koordinatlari_oku
+from harita_resim_cache import display_image_read
 from resim_isaretleyici import ResimIsaretleyici
+from tkgm_kml import tkgm_parsel_kml_olustur
 from yerbuldurur_motoru import YerbuldururMotoru
 
 
@@ -30,6 +32,8 @@ class HaritalarSekmesiMixin:
         self.lbl_harita_kml_detay = ttk.Label(kml_row, text="-", foreground="#555555")
         self.lbl_harita_kml_detay.pack(side="left", fill="x", expand=True)
         self.modern_button(kml_row, text="KML Seç", command=self.kml_sec, role="neutral", outline=True, width=16).pack(side="right")
+
+        self.modern_button(kml_row, text="TKGM'den Al", command=self.tkgm_kml_al, role="accent", outline=True, width=16).pack(side="right", padx=(0, 6))
 
         form_frame = ttk.Frame(setup)
         form_frame.pack(fill="x", pady=4)
@@ -98,6 +102,92 @@ class HaritalarSekmesiMixin:
             if hasattr(self, attr):
                 getattr(self, attr).config(text=ok_text if ok else empty_text, foreground=COLOR_SUCCESS if ok else COLOR_WARNING)
 
+    def tkgm_kml_al(self):
+        self.guncelle_veri_objesi()
+        kunye = dict(self.veri.get("kunye", {}))
+        missing = []
+        if not (kunye.get("il") or "").strip():
+            missing.append("İl")
+        if not (kunye.get("ilce") or "").strip():
+            missing.append("İlçe")
+        if not (kunye.get("mah") or "").strip():
+            missing.append("Mahalle/Köy")
+        if not (kunye.get("par") or "").strip():
+            missing.append("Parsel")
+        if missing:
+            messagebox.showwarning(
+                "TKGM KML",
+                "TKGM'den KML alabilmek için Künye sekmesinde şu alanlar dolu olmalı:\n- "
+                + "\n- ".join(missing),
+            )
+            return
+
+        output_dir = self._tkgm_kml_output_dir()
+        progress = tk.Toplevel(self.root)
+        self.pencere_hazirla(progress, "TKGM KML", "380x130", (360, 120), modal=False)
+        ttk.Label(progress, text="TKGM Parsel Sorgu'dan KML alınıyor...", font=FONT_BOLD).pack(anchor="w", padx=14, pady=(14, 6))
+        ttk.Label(progress, text=f"{kunye.get('il', '')} / {kunye.get('ilce', '')} / {kunye.get('mah', '')}", foreground="#555555").pack(anchor="w", padx=14, pady=(0, 8))
+        bar = ttk.Progressbar(progress, mode="indeterminate")
+        bar.pack(fill="x", padx=14, pady=(0, 12))
+        bar.start(12)
+
+        def worker():
+            return tkgm_parsel_kml_olustur(kunye, output_dir)
+
+        def success(result):
+            if progress.winfo_exists():
+                progress.destroy()
+            self._tkgm_kml_sonuc_isle(result)
+
+        def error(exc):
+            if progress.winfo_exists():
+                progress.destroy()
+            messagebox.showerror("TKGM KML", f"KML alınamadı:\n{exc}")
+
+        self.arka_plan_gorevi_baslat(
+            "TKGM KML al",
+            worker,
+            status_start="TKGM KML alınıyor.",
+            status_success="TKGM KML alındı.",
+            status_error="TKGM KML alınamadı: {error}",
+            on_success=success,
+            on_error=error,
+        )
+
+    def _tkgm_kml_output_dir(self):
+        active_path = getattr(self, "aktif_dosya_yolu", None)
+        if active_path:
+            return os.path.join(os.path.dirname(active_path), "03_Haritalar")
+        return os.path.join(PROJE_KLASORU, "TKGM_KML")
+
+    def _tkgm_kml_sonuc_isle(self, result):
+        path = result.get("path")
+        if not path:
+            messagebox.showerror("TKGM KML", "TKGM KML dosya yolu oluşturulamadı.")
+            return
+
+        self.kml_path = path
+        self.veri.setdefault("dosyalar", {})["kml_path"] = path
+
+        center = result.get("center")
+        if center and hasattr(self, "e_arazi"):
+            lat, lon = center
+            for key, value in (("alan_y", lat), ("alan_x", lon)):
+                entry = self.e_arazi.get(key)
+                if entry is not None and not entry.get().strip():
+                    entry.delete(0, tk.END)
+                    entry.insert(0, f"{value:.8f}")
+                    self.veri.setdefault("arazi", {})[key] = f"{value:.8f}"
+
+        self.kml_etiket_guncelle()
+        self.harita_durum_yenile()
+        if hasattr(self, "ozet_yenile"):
+            self.ozet_yenile(collect=False)
+        if hasattr(self, "otomatik_kaydet"):
+            self.otomatik_kaydet()
+        self.set_status(f"TKGM KML bağlandı: {os.path.basename(path)}", level="success")
+        messagebox.showinfo("TKGM KML", f"KML oluşturuldu ve projeye bağlandı:\n{path}")
+
     @perf_tracked("map.image_marker_open")
     def harita_cizici_ac(self, harita_tipi):
         self.guncelle_veri_objesi()
@@ -123,7 +213,24 @@ class HaritalarSekmesiMixin:
 
         if img_path:
             formasyon_kod = self.cmb_formasyon.get().split(" ")[0]
-            kml_points = kml_koordinatlari_oku(getattr(self, "kml_path", None))
+            self.harita_altlik_hazirla_ve_ac(harita_tipi, img_path, map_data, formasyon_kod, harita_data)
+
+    def harita_altlik_hazirla_ve_ac(self, harita_tipi, img_path, map_data, formasyon_kod, harita_data):
+        progress = tk.Toplevel(self.root)
+        self.pencere_hazirla(progress, "Harita Altlığı", "360x120", (340, 110), modal=False)
+        ttk.Label(progress, text="Harita altlığı hazırlanıyor...", font=FONT_BOLD).pack(anchor="w", padx=14, pady=(14, 6))
+        ttk.Label(progress, text=os.path.basename(img_path), foreground="#555555").pack(anchor="w", padx=14, pady=(0, 8))
+        bar = ttk.Progressbar(progress, mode="indeterminate")
+        bar.pack(fill="x", padx=14, pady=(0, 12))
+        bar.start(12)
+
+        def worker():
+            display_image_read(img_path)
+            return kml_koordinatlari_oku(getattr(self, "kml_path", None))
+
+        def open_marker(kml_points):
+            if progress.winfo_exists():
+                progress.destroy()
             ResimIsaretleyici(
                 self.root,
                 img_path=img_path,
@@ -135,6 +242,21 @@ class HaritalarSekmesiMixin:
                 save_callback=lambda data: self.harita_cizim_kaydet(harita_tipi, data),
                 saved_state=harita_data,
             )
+
+        def show_error(exc):
+            if progress.winfo_exists():
+                progress.destroy()
+            messagebox.showerror("Harita Altlığı", f"Harita altlığı hazırlanamadı:\n{exc}")
+
+        self.arka_plan_gorevi_baslat(
+            "Harita altlığı hazırla",
+            worker,
+            status_start="Harita altlığı arka planda hazırlanıyor.",
+            status_success="Harita altlığı hazırlandı.",
+            status_error="Harita altlığı hazırlanamadı: {error}",
+            on_success=open_marker,
+            on_error=show_error,
+        )
 
     def harita_cizim_kaydet(self, harita_tipi, data):
         if "harita_cizimleri" not in self.veri:

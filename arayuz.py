@@ -1,51 +1,23 @@
 ﻿# Dosya: RaporPro/arayuz.py
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, Canvas, Scrollbar, Listbox, Toplevel, Frame
+from tkinter import messagebox, ttk, Canvas
 import datetime
 import json
 import os
-import threading
 
-from harita_cikti import eski_paylasimli_temp_harita_yolu_mu
 from sabitler import *
 from yardimcilar import *
-from performans import ERROR_LOG_PATH, PERF_LOG_PATH, log_exception, perf_timer, perf_tracked
-from proje_motoru import (
-    format_hesap_ozeti,
-    hesap_ozeti,
-    proje_saglik_ozeti,
-    rapor_onizleme_metni,
-)
-from proje_arsiv import (
-    arsiv_kaydi_ekle,
-    arsiv_kaydi_sil,
-    arsiv_kayitlari_yukle,
-    biten_isler_kml_yaz,
-    proje_merkez_koordinati,
-)
-from raporlama import raporla
-from workbook_motoru import (
-    WORKBOOK_SHEET_DEFS,
-    build_initial_rows as wb_build_initial_rows,
-    yeni_sondaj_sablonu as wb_yeni_sondaj_sablonu,
-)
+from performans import log_exception, perf_tracked
+from task_engine import TkTaskEngine
 from widgets import UndoRedoEntry
 
-from harita_motoru import TopluHarita
-from kalite_kontrol import (
-    analyze_word_template,
-    backup_project_file,
-    build_preflight_report,
-    format_preflight_report,
-    format_template_analysis,
-    get_supported_tags,
-)
 from ui_cikti import CiktiMerkeziMixin
 from ui_haritalar import HaritalarSekmesiMixin
 from ui_jeofizik import JeofizikMixin
 from ui_karot_tcr import KarotTCRMixin
 from ui_kesit import KesitCizimMixin
 from ui_kontrol import KontrolPaneliMixin
+from ui_lab_sheet import LabSheetMixin
 from ui_rapor import RaporSekmesiMixin
 from ui_spt_okuma import SPTOkumaMixin
 from ui_sondaj import SondajMixin
@@ -61,7 +33,7 @@ AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "raporpro_autosave.json")
 RECENT_PROJECTS_PATH = os.path.join(APP_DIR, "recent_projects.json")
 # ============================================================================
 # ÖZEL SPT VERİ GİRİŞ PENCERESİ (OTOMATİK HESAPLAMA VE DERİNLİK ARTIŞI)
-class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, ArayuzAraclarMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
+class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, ArayuzAraclarMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
     @perf_tracked("ui.__init__")
     def __init__(self, root):
         self.root = root
@@ -90,7 +62,15 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
         self._closing = False
         self._kilitli_kayda_izin_ver = False
         self.last_save_time = None
+        self._son_kayit_imzasi = None
         self.autosave_status_var = tk.StringVar(value="Kayıt durumu: bekleniyor")
+        self.task_status_var = tk.StringVar(value="İşlem: hazır")
+        self.task_engine = TkTaskEngine(
+            self.root,
+            status_callback=self.set_status,
+            state_callback=self._task_engine_state_changed,
+            max_workers=2,
+        )
         self.recent_projects = self.recent_projects_yukle()
         
         self.root.bind_all("<Button-1>", self.track_focus, add="+")
@@ -98,6 +78,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
         self.kur_arayuz()
         self.kur_kisayollar()
         self.doldur_arayuz()
+        self.kayit_imzasi_guncelle(collect=True)
         
         if self.aktif_dosya_yolu:
             self.root.title(f"Zemin Rapor Pro - {os.path.basename(self.aktif_dosya_yolu)}")
@@ -161,8 +142,15 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
                 pass
 
     def uygulamayi_kapat(self):
+        if not self.kaydedilmemis_degisiklik_onayi():
+            return
         self._closing = True
         self.autosave_zamanlayici_iptal()
+        try:
+            if hasattr(self, "task_engine"):
+                self.task_engine.shutdown(wait=False)
+        except Exception:
+            pass
         try:
             self.root.destroy()
         except tk.TclError:
@@ -210,7 +198,9 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             self.veri = veri
             self.aktif_dosya_yolu = payload.get("active_path")
             self.doldur_arayuz()
+            self._son_kayit_imzasi = None
             self.set_status(f"Otomatik kayıt yüklendi: {payload.get('saved_at', '-')}", level="success")
+            self.set_save_indicator("Kurtarma yüklendi: kaydedilmedi", "warning")
         except Exception as exc:
             log_exception("autosave.restore", exc_value=exc)
             messagebox.showerror("Kurtarma", f"Otomatik kayıt yüklenemedi:\n{exc}")
@@ -272,6 +262,9 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
         self.autosave_status_label = tk.Label(toolbar, textvariable=self.autosave_status_var, bg="#E9EEF2", fg="#333333", font=("Arial", 8, "bold"))
         self.autosave_status_label.pack(side="right", padx=10)
         self.tooltip_ekle(self.autosave_status_label, "Otomatik kayıt ve proje kayıt durumunu gösterir")
+        self.task_status_label = tk.Label(toolbar, textvariable=self.task_status_var, bg="#E9EEF2", fg="#333333", font=("Arial", 8, "bold"))
+        self.task_status_label.pack(side="right", padx=10)
+        self.tooltip_ekle(self.task_status_label, "Arka planda çalışan uzun işlemleri gösterir")
         
         main_splitter = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashwidth=4, bg=COLOR_BG)
         main_splitter.pack(fill="both", expand=True)
@@ -644,6 +637,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             self.lbl_sab.config(text=os.path.basename(self.word_path) if self.word_path else "Henüz seçilmedi...", foreground=COLOR_SUCCESS if self.word_path else "red")
         if hasattr(self, 'lbl_lab'):
             self.lbl_lab.config(text=os.path.basename(self.lab_excel_path) if self.lab_excel_path else "Henüz laboratuvar dosyası seçilmedi", foreground=COLOR_SUCCESS if self.lab_excel_path else "red")
+            if hasattr(self, "_lab_label_guncelle"):
+                self._lab_label_guncelle()
         if hasattr(self, 'lbl_jeo_excel'):
             self.lbl_jeo_excel.config(text=os.path.basename(self.jeo_excel_path) if self.jeo_excel_path else "Henüz jeofizik dosyası seçilmedi", foreground=COLOR_SUCCESS if self.jeo_excel_path else "red")
         if hasattr(self, 'lbl_yer'):

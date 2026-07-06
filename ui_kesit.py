@@ -1,12 +1,10 @@
-import os
 import tkinter as tk
-from tkinter import Listbox, Toplevel, filedialog, messagebox, ttk
+from tkinter import Listbox, Toplevel, messagebox, ttk
 
 from harita_referans import kml_koordinatlari_oku
 from kesit_kalite import build_section_quality_report, format_section_quality_report
 from ui_kesit_yardimci import kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kesit_onizleme import KesitOnizlemeMixin
-from performans import perf_tracked
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
 from yardimcilar import safe_float
 
@@ -171,17 +169,22 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         ttk.Label(opt, text="Lejant ölçeği / kolon").grid(row=9, column=0, sticky="e", padx=5, pady=4)
         e_legend_scale = ttk.Entry(opt, width=7); e_legend_scale.insert(0, saved_kesit.get("legend_scale", "1.0")); e_legend_scale.grid(row=9, column=1, sticky="w", padx=5, pady=4)
         e_legend_cols = ttk.Entry(opt, width=5); e_legend_cols.insert(0, saved_kesit.get("legend_columns", "0")); e_legend_cols.grid(row=9, column=1, sticky="w", padx=(70, 5), pady=4)
-        ttk.Label(opt, text="Tarama").grid(row=10, column=0, sticky="e", padx=5, pady=4)
+        ttk.Label(opt, text="Tarama sıklığı").grid(row=10, column=0, sticky="e", padx=5, pady=4)
         pattern_frame = ttk.Frame(opt)
         pattern_frame.grid(row=10, column=1, sticky="w", padx=5, pady=4)
-        ttk.Label(pattern_frame, text="Genel").pack(side="left")
-        e_pattern_density = ttk.Entry(pattern_frame, width=5); e_pattern_density.insert(0, saved_kesit.get("section_pattern_density", "6.0")); e_pattern_density.pack(side="left", padx=(2, 5))
-        ttk.Label(pattern_frame, text="Kum").pack(side="left")
-        e_sand_pattern = ttk.Entry(pattern_frame, width=5); e_sand_pattern.insert(0, saved_kesit.get("sand_pattern_density", "")); e_sand_pattern.pack(side="left", padx=(2, 5))
-        ttk.Label(pattern_frame, text="Çakıl").pack(side="left")
-        e_gravel_pattern = ttk.Entry(pattern_frame, width=5); e_gravel_pattern.insert(0, saved_kesit.get("gravel_pattern_density", "")); e_gravel_pattern.pack(side="left", padx=(2, 5))
-        ttk.Label(pattern_frame, text="Lej.").pack(side="left")
-        e_legend_pattern = ttk.Entry(pattern_frame, width=5); e_legend_pattern.insert(0, saved_kesit.get("legend_pattern_density", "6.0")); e_legend_pattern.pack(side="left", padx=(2, 0))
+        def add_pattern_entry(row, col, label, key, default=""):
+            ttk.Label(pattern_frame, text=label).grid(row=row, column=col * 2, sticky="e", padx=(0 if col == 0 else 8, 2), pady=1)
+            entry = ttk.Entry(pattern_frame, width=5)
+            entry.insert(0, saved_kesit.get(key, default))
+            entry.grid(row=row, column=col * 2 + 1, sticky="w", padx=(0, 4), pady=1)
+            return entry
+
+        e_pattern_density = add_pattern_entry(0, 0, "Genel", "section_pattern_density", "10.0")
+        e_clay_pattern = add_pattern_entry(0, 1, "Kil", "clay_pattern_density", "")
+        e_silt_pattern = add_pattern_entry(0, 2, "Silt", "silt_pattern_density", "")
+        e_sand_pattern = add_pattern_entry(1, 0, "Kum", "sand_pattern_density", "")
+        e_gravel_pattern = add_pattern_entry(1, 1, "Çakıl", "gravel_pattern_density", "")
+        e_legend_pattern = add_pattern_entry(1, 2, "Lej.", "legend_pattern_density", "6.0")
         ttk.Label(opt, text="Export DPI").grid(row=11, column=0, sticky="e", padx=5, pady=4)
         e_export_dpi = ttk.Entry(opt, width=12); e_export_dpi.insert(0, saved_kesit.get("export_dpi", "300")); e_export_dpi.grid(row=11, column=1, sticky="w", padx=5, pady=4)
         title_mode_var = tk.StringVar(value=saved_kesit.get("title_mode", "full"))
@@ -243,7 +246,9 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             set_entry(e_well_width, preset.get("well_width", "2.0"))
             set_entry(e_legend_scale, preset.get("legend_scale", "1.0"))
             set_entry(e_legend_cols, preset.get("legend_columns", "0"))
-            set_entry(e_pattern_density, preset.get("section_pattern_density", "6.0"))
+            set_entry(e_pattern_density, preset.get("section_pattern_density", "10.0"))
+            set_entry(e_clay_pattern, preset.get("clay_pattern_density", ""))
+            set_entry(e_silt_pattern, preset.get("silt_pattern_density", ""))
             set_entry(e_sand_pattern, preset.get("sand_pattern_density", ""))
             set_entry(e_gravel_pattern, preset.get("gravel_pattern_density", ""))
             set_entry(e_legend_pattern, preset.get("legend_pattern_density", "6.0"))
@@ -474,6 +479,8 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "legend_scale": e_legend_scale.get(),
                 "legend_columns": e_legend_cols.get(),
                 "section_pattern_density": e_pattern_density.get(),
+                "clay_pattern_density": e_clay_pattern.get(),
+                "silt_pattern_density": e_silt_pattern.get(),
                 "sand_pattern_density": e_sand_pattern.get(),
                 "gravel_pattern_density": e_gravel_pattern.get(),
                 "legend_pattern_density": e_legend_pattern.get(),
@@ -575,7 +582,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             elif quality_report.get("warnings"):
                 self.set_status(f"Kesit kalite kontrol {len(quality_report['warnings'])} uyarı buldu.", level="warning")
             self._kesit_ayarlari_kaydet(options.copy())
-            self.kesit_onizle(selected_sondajlar, options)
+            self.kesit_onizle_async(selected_sondajlar, options)
             win.destroy()
 
         def ayari_kaydet():

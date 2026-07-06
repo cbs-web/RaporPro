@@ -135,6 +135,7 @@ def zemin_sinifi_cevir(orijinal_sinif):
     harita = {
         'GW': 'Çakıl', 'GP': 'Çakıl', 'GrP': 'Çakıl', 'GrW': 'Çakıl', 'GM': 'Siltli Çakıl', 'GC': 'Killi Çakıl',
         'grSaP': 'Çakıllı Kum', 'grSaW': 'Çakıllı Kum', 'grSaM': 'Çakıllı Kum',
+        'siGrP': 'Siltli Çakıl', 'siGrW': 'Siltli Çakıl', 'siGrM': 'Siltli Çakıl',
         'grclSa': 'Çakıllı Killi Kum',
         'grsiSaP': 'Çakıllı Siltli Kum', 'grsiSaW': 'Çakıllı Siltli Kum', 'grsiSaM': 'Çakıllı Siltli Kum',
         'siSaP': 'Siltli Kum', 'siSaW': 'Siltli Kum', 'siSaM': 'Siltli Kum',
@@ -143,7 +144,12 @@ def zemin_sinifi_cevir(orijinal_sinif):
         'saCIL': 'Kumlu Kil', 'saCIM': 'Kumlu Kil', 'saCIH': 'Kumlu Kil', 'saCI': 	'Kumlu Kil',
        	'saClH': 	'Kumlu Kil', 	'saCIH':'Kumlu Kil','saCIM':'Kumlu Kil','saClM':'Kumlu Kil','saClL':'Kumlu Kil',
         'grCl': 'Çakıllı Kil', 'grCL': 'Çakıllı Kil', 'grCH': 'Çakıllı Kil', 'grClH': 'Çakıllı Kil', 'grCIH': 'Çakıllı Kil', 'grCIL': 'Çakıllı Kil', 'grCIM': 'Çakıllı Kil',
-        'saSi': 'Kumlu Silt', 'sasiclGr': 'Kumlu Siltli Killi Çakıl', 'saSiClGr': 'Kumlu Siltli Killi Çakıl', 'sasiclgr': 'Kumlu Siltli Killi Çakıl'
+        'saSi': 'Kumlu Silt',
+        'sasiGrP': 'Kumlu Siltli Çakıl', 'sasiGrW': 'Kumlu Siltli Çakıl', 'sasiGrM': 'Kumlu Siltli Çakıl',
+        'saclGr': 'Kumlu Killi Çakıl',
+        'clGr': 'Killi Çakıl',
+        'siclGr': 'Siltli Killi Çakıl',
+        'sasiclGr': 'Kumlu Siltli Killi Çakıl', 'saSiClGr': 'Kumlu Siltli Killi Çakıl', 'sasiclgr': 'Kumlu Siltli Killi Çakıl'
     }
     for k, v in harita.items():
         if k.lower() == kod.lower(): return v

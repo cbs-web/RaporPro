@@ -1,6 +1,5 @@
 # Dosya: RaporPro/ui_spt_okuma_pro.py
 import os
-import threading
 from tkinter import Toplevel, messagebox, ttk
 
 from spt_okuma_motoru import (
@@ -70,10 +69,14 @@ def reread_selected_with_pro(app, win, selected_record, update_selected_from_for
         status_var.set("Seçili satır Gemini Pro ile tekrar okundu.")
 
     def worker():
-        try:
-            raw_items = yapay_zeka_ile_spt_oku(source_path, ayarlar=ayarlar, motor_zorla="gemini_pro", timeout=60)
-            app.root.after(0, lambda: finish(raw_items=raw_items))
-        except Exception as exc:
-            app.root.after(0, lambda: finish(hata=exc))
+        return yapay_zeka_ile_spt_oku(source_path, ayarlar=ayarlar, motor_zorla="gemini_pro", timeout=60)
 
-    threading.Thread(target=worker, daemon=True).start()
+    app.arka_plan_gorevi_baslat(
+        "SPT Pro tekrar oku",
+        worker,
+        status_start="Seçili SPT satırı Pro ile arka planda okunuyor.",
+        status_success="Seçili SPT satırı Pro ile okundu.",
+        status_error="SPT Pro tekrar okuma tamamlanamadı: {error}",
+        on_success=lambda raw_items: finish(raw_items=raw_items),
+        on_error=lambda exc: finish(hata=exc),
+    )

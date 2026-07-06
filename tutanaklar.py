@@ -178,8 +178,9 @@ def _ud_numune_sayisi(sondaj):
     return count
 
 
-def _sondaj_turu(sondaj):
-    text = _clean((sondaj or {}).get("sondaj_turu")).lower()
+def _sondaj_turu(veri, sondaj):
+    ayarlar = (veri or {}).get("ayarlar", {})
+    text = _clean(ayarlar.get("sondaj_turu") or (sondaj or {}).get("sondaj_turu")).lower()
     if text in ("kaya", "rock"):
         return "Kaya"
     if text in ("zemin", "soil"):
@@ -189,7 +190,7 @@ def _sondaj_turu(sondaj):
 
 def _delgi_capi(veri, sondaj):
     ayarlar = (veri or {}).get("ayarlar", {})
-    text = _clean((sondaj or {}).get("delgi_capi") or ayarlar.get("delgi_capi"), "76mm").replace(" ", "")
+    text = _clean(ayarlar.get("delgi_capi") or (sondaj or {}).get("delgi_capi"), "76mm").replace(" ", "")
     if text.lower() in ("76", "76mm"):
         return "76mm"
     if text.lower() in ("89", "89mm"):
@@ -224,7 +225,7 @@ def _fill_sondaj_table(table, veri, sondaj):
     _set_row_value(table, 1, _project_name(veri), col_start=1)
     _set_row_value(table, 2, _clean(sondaj.get("no"), "SK-"), col_start=2)
     _set_row_value(table, 3, _clean(sondaj.get("k"), "-"), col_start=2)
-    _set_row_value(table, 4, _sondaj_turu(sondaj), col_start=2)
+    _set_row_value(table, 4, _sondaj_turu(veri, sondaj), col_start=2)
     _set_row_value(table, 5, _clean(ayarlar.get("tutanak_uygulama_sekli"), "Burgusuz/Sulu"), col_start=2)
     _set_row_value(table, 6, _clean(ayarlar.get("tutanak_sondaj_makinesi"), "SMK-500"), col_start=2)
     _set_row_value(table, 7, _clean(sondaj.get("bas_tar"), "-"), col_start=2)

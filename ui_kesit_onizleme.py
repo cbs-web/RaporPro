@@ -1,4 +1,5 @@
 # Dosya: RaporPro/ui_kesit_onizleme.py
+import copy
 import tkinter as tk
 from tkinter import Frame, Listbox, Toplevel, filedialog, messagebox, ttk
 
@@ -13,8 +14,7 @@ from yardimcilar import safe_float
 
 
 class KesitOnizlemeMixin:
-    @perf_tracked("section.preview")
-    def kesit_onizle(self, sondajlar, options=None):
+    def kesit_onizle_options_hazirla(self, sondajlar, options=None):
         options = dict(options or {})
         if not options.get("selected_sondajlar"):
             options["selected_sondajlar"] = [s.get("no", "") for s in sondajlar or []]
@@ -25,6 +25,71 @@ class KesitOnizlemeMixin:
             options["manual_edits"] = active_manual_edits
         else:
             options.pop("manual_edits", None)
+        return options
+
+    @perf_tracked("section.preview.prepare")
+    def kesit_onizle_figuru_uret(self, sondajlar, options):
+        warnings = []
+
+        def collect_warning(msg, level="info"):
+            warnings.append((msg, level))
+
+        GeoEngine.reset_warnings()
+        fig, result = GeoEngine.kesit_ciz_interaktif(sondajlar, log_callback=collect_warning, options=options)
+        quality_report = build_section_quality_report(sondajlar, options)
+        return {
+            "sondajlar": sondajlar,
+            "options": options,
+            "fig": fig,
+            "result": result,
+            "warnings": warnings,
+            "quality_report": quality_report,
+        }
+
+    def kesit_onizle_async(self, sondajlar, options=None, parent=None):
+        options = self.kesit_onizle_options_hazirla(sondajlar, options)
+        worker_sondajlar = copy.deepcopy(list(sondajlar or []))
+        worker_options = copy.deepcopy(options)
+        parent = parent or self.root
+        progress = Toplevel(parent)
+        self.pencere_hazirla(progress, "Kesit Önizleme", "380x130", (360, 120), modal=False)
+        ttk.Label(progress, text="Kesit çizimi hazırlanıyor...", font=FONT_BOLD).pack(anchor="w", padx=14, pady=(14, 6))
+        ttk.Label(progress, text="Büyük kesitlerde bu işlem birkaç saniye sürebilir.", foreground="#555555").pack(anchor="w", padx=14)
+        bar = ttk.Progressbar(progress, mode="indeterminate")
+        bar.pack(fill="x", padx=14, pady=(10, 12))
+        bar.start(12)
+
+        def done(result):
+            if progress.winfo_exists():
+                progress.destroy()
+            for msg, level in result.get("warnings", []):
+                self.set_status(msg, level=level)
+            self.kesit_onizle(
+                result["sondajlar"],
+                result["options"],
+                prebuilt=(result["fig"], result.get("result"), result.get("quality_report")),
+            )
+
+        def failed(exc):
+            if progress.winfo_exists():
+                progress.destroy()
+            messagebox.showerror("Kesit", f"Kesit çizimi hazırlanamadı:\n{exc}")
+
+        self.arka_plan_gorevi_baslat(
+            "Kesit önizleme hazırla",
+            self.kesit_onizle_figuru_uret,
+            worker_sondajlar,
+            worker_options,
+            status_start="Kesit önizleme arka planda hazırlanıyor.",
+            status_success="Kesit önizleme hazırlandı.",
+            status_error="Kesit önizleme hazırlanamadı: {error}",
+            on_success=done,
+            on_error=failed,
+        )
+
+    @perf_tracked("section.preview")
+    def kesit_onizle(self, sondajlar, options=None, prebuilt=None):
+        options = self.kesit_onizle_options_hazirla(sondajlar, options)
         win = Toplevel(self.root)
         self.pencere_hazirla(win, "Kesit Önizleme", "1200x800", (980, 640))
         f = Frame(win)
@@ -37,10 +102,14 @@ class KesitOnizlemeMixin:
             self.root.after(0, lambda: self.set_status(msg, level))
 
         GeoEngine.reset_warnings()
-        fig, _ = GeoEngine.kesit_ciz_interaktif(sondajlar, log_callback=on_draw_warning, options=options)
+        if prebuilt:
+            fig = prebuilt[0]
+            quality_report = prebuilt[2] if len(prebuilt) > 2 and prebuilt[2] else build_section_quality_report(sondajlar, options)
+        else:
+            fig, _ = GeoEngine.kesit_ciz_interaktif(sondajlar, log_callback=on_draw_warning, options=options)
+            quality_report = build_section_quality_report(sondajlar, options)
         chart = FigureCanvasTkAgg(fig, master=f)
         chart.get_tk_widget().pack(fill="both", expand=True)
-        quality_report = build_section_quality_report(sondajlar, options)
         if quality_report.get("errors"):
             self.set_status(f"Kesit kalite kontrol: {len(quality_report.get('errors', []))} hata var.", level="error")
         elif quality_report.get("warnings"):
@@ -579,7 +648,9 @@ class KesitOnizlemeMixin:
                 ("Kuyu genişliği", "well_width", "2.0"),
                 ("Mercek max. kalınlık", "lens_max_thickness", "2.0"),
                 ("Mercek kapanma", "lens_closure_ratio", "0.58"),
-                ("Genel tarama", "section_pattern_density", "6.0"),
+                ("Genel tarama", "section_pattern_density", "10.0"),
+                ("Kil tarama", "clay_pattern_density", ""),
+                ("Silt tarama", "silt_pattern_density", ""),
                 ("Kum tarama", "sand_pattern_density", ""),
                 ("Çakıl tarama", "gravel_pattern_density", ""),
                 ("Lejant tarama", "legend_pattern_density", "6.0"),
@@ -628,7 +699,7 @@ class KesitOnizlemeMixin:
                 self._kesit_ayarlari_kaydet(new_options.copy())
                 dialog.destroy()
                 win.destroy()
-                self.kesit_onizle(sondajlar, new_options)
+                self.kesit_onizle_async(sondajlar, new_options)
 
             buttons = ttk.Frame(body)
             buttons.pack(fill="x", pady=(10, 0))

@@ -1,7 +1,6 @@
 import datetime
 import os
 import shutil
-import threading
 import tkinter as tk
 from tkinter import Toplevel, filedialog, messagebox, ttk
 
@@ -171,8 +170,17 @@ class CiktiMerkeziMixin:
             "total": total,
         }
         self.set_status("Çıktı Merkezi başlatıldı.", level="info")
-        worker = threading.Thread(target=self.cikti_merkezi_threaded, args=(config, progress, cancel_state), daemon=True)
-        worker.start()
+        self.arka_plan_gorevi_baslat(
+            "Çıktı Merkezi",
+            self.cikti_merkezi_threaded,
+            config,
+            progress,
+            cancel_state,
+            status_start="Çıktı Merkezi arka planda başlatıldı.",
+            status_success="Çıktı Merkezi işlemi bitti.",
+            status_error="Çıktı Merkezi tamamlanamadı: {error}",
+            on_error=lambda exc: self.cikti_merkezi_bitti(progress, str(exc), "error"),
+        )
 
     def cikti_merkezi_progress(self, progress, done, text):
         def apply_update():

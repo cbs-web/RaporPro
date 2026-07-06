@@ -536,7 +536,11 @@ def build_preflight_report(app_instance):
 
     if any(tag in tags for tag in ["[LAB_FIZIK]", "[LAB_MEKANIK]", "[ZEMIN_OZET]"]):
         path = getattr(app_instance, "lab_excel_path", None)
-        if is_blank(path):
+        lab_rows = app_instance.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(app_instance, "veri", None), dict) else []
+        lab_sheet_ready = any(any(str(cell).strip() for cell in row) for row in lab_rows or [])
+        if lab_sheet_ready:
+            pass
+        elif is_blank(path):
             report["warnings"].append("Laboratuvar tabloları için Lab Excel seçilmemiş.")
         elif not os.path.exists(path):
             report["warnings"].append(f"Lab Excel dosyası bulunamadı: {path}")

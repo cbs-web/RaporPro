@@ -60,18 +60,22 @@ def start_photo_reading(app, win, paths, target_var, status_var, project_spt_set
         add_result(sonuc, "Fotoğraf Okuma", append=True)
 
     def worker():
-        try:
-            settings = project_spt_settings()
-            sonuc = fotograflardan_spt_oku(
-                paths,
-                default_sondaj_no=target_var.get(),
-                ayarlar=ayarlar,
-                progress_callback=progress_callback,
-                stop_event=stop_event,
-                auto_pro=settings["auto_pro"],
-            )
-            app.root.after(0, lambda: finish(sonuc=sonuc))
-        except Exception as exc:
-            app.root.after(0, lambda: finish(hata=exc))
+        settings = project_spt_settings()
+        return fotograflardan_spt_oku(
+            paths,
+            default_sondaj_no=target_var.get(),
+            ayarlar=ayarlar,
+            progress_callback=progress_callback,
+            stop_event=stop_event,
+            auto_pro=settings["auto_pro"],
+        )
 
-    threading.Thread(target=worker, daemon=True).start()
+    app.arka_plan_gorevi_baslat(
+        "SPT fotoğraf okuma",
+        worker,
+        status_start="SPT fotoğraf okuma arka planda başlatıldı.",
+        status_success="SPT fotoğraf okuma işlemi bitti.",
+        status_error="SPT fotoğraf okuma tamamlanamadı: {error}",
+        on_success=lambda sonuc: finish(sonuc=sonuc),
+        on_error=lambda exc: finish(hata=exc),
+    )

@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from sabitler import *
+from ui_icons import IconManager
 
 
 class ArayuzTemelMixin:
@@ -12,6 +13,7 @@ class ArayuzTemelMixin:
         self.bootstrap_theme_active = False
         self.bootstrap_theme_name = "classic"
         self._bootstrap_module = None
+        self.ui_icons = IconManager(getattr(self, "root", None))
         try:
             import ttkbootstrap as tb
             self._bootstrap_module = tb
@@ -78,17 +80,91 @@ class ArayuzTemelMixin:
         style = role_map.get(role, "secondary")
         return f"{style}-outline" if outline else style
 
+    def _button_icon_color(self, role="neutral", outline=False):
+        if outline or role in ("neutral", "secondary", None):
+            return "#111111"
+        return "white"
+
+    def _button_icon_image(self, text, role="neutral", outline=False, icon=None, size=16):
+        if icon is False:
+            return None
+        manager = getattr(self, "ui_icons", None)
+        if manager is None:
+            return None
+        key = icon or manager.guess_key(text)
+        if not key:
+            return None
+        color = self._button_icon_color(role, outline)
+        return manager.get(key, color=color, size=size)
+
+    def _attach_button_icon(self, widget, image):
+        if image is None:
+            return widget
+        try:
+            widget.configure(image=image, compound="left")
+            widget._ui_icon_image = image
+        except Exception:
+            pass
+        return widget
+
+    def configure_modern_button(self, widget, text=None, command=None, role=None, outline=False, icon=None):
+        options = {}
+        if text is not None:
+            options["text"] = text
+        if command is not None:
+            options["command"] = command
+        if options:
+            try:
+                widget.configure(**options)
+            except Exception:
+                pass
+        if role is not None:
+            if getattr(self, "bootstrap_theme_active", False) and self._bootstrap_module is not None:
+                try:
+                    widget.configure(bootstyle=self._button_bootstyle(role, outline))
+                except Exception:
+                    pass
+            else:
+                palette = {
+                    "primary": (COLOR_PRIMARY, "white"),
+                    "success": (COLOR_SUCCESS, "white"),
+                    "warning": (COLOR_WARNING, "white"),
+                    "danger": (COLOR_DANGER, "white"),
+                    "accent": (COLOR_ACCENT, "white"),
+                    "neutral": ("#ECF0F1", "#111111"),
+                    "secondary": ("#ECF0F1", "#111111"),
+                }
+                bg, fg = palette.get(role, palette["neutral"])
+                try:
+                    widget.configure(bg=bg, fg=fg)
+                except Exception:
+                    pass
+        label = text
+        if label is None:
+            try:
+                label = widget.cget("text")
+            except Exception:
+                label = ""
+        image = self._button_icon_image(label, role=role or "neutral", outline=outline, icon=icon, size=16)
+        return self._attach_button_icon(widget, image)
+
     def modern_button(self, parent, text, command=None, role="neutral", outline=False, **kwargs):
+        icon = kwargs.pop("icon", None)
+        icon_size = kwargs.pop("icon_size", 16)
+        image = self._button_icon_image(text, role=role, outline=outline, icon=icon, size=icon_size)
         if getattr(self, "bootstrap_theme_active", False) and self._bootstrap_module is not None:
             tb_kwargs = {"text": text, "command": command, "bootstyle": self._button_bootstyle(role, outline)}
             for key in ("width", "state", "takefocus"):
                 if key in kwargs:
                     tb_kwargs[key] = kwargs[key]
+            if image is not None:
+                tb_kwargs["image"] = image
+                tb_kwargs["compound"] = "left"
             padx = kwargs.get("padx", 10)
             pady = kwargs.get("pady", 5)
             tb_kwargs.setdefault("padding", (padx, pady))
             try:
-                return self._bootstrap_module.Button(parent, **tb_kwargs)
+                return self._attach_button_icon(self._bootstrap_module.Button(parent, **tb_kwargs), image)
             except Exception:
                 pass
         palette = {
@@ -105,7 +181,10 @@ class ArayuzTemelMixin:
         kwargs.setdefault("fg", fg)
         kwargs.setdefault("font", FONT_BOLD)
         kwargs.setdefault("relief", "flat")
-        return tk.Button(parent, text=text, command=command, **kwargs)
+        if image is not None:
+            kwargs["image"] = image
+            kwargs["compound"] = "left"
+        return self._attach_button_icon(tk.Button(parent, text=text, command=command, **kwargs), image)
 
     def set_status(self, msg, level="info"):
         if getattr(self, "_closing", False):
@@ -144,6 +223,24 @@ class ArayuzTemelMixin:
                 "error": COLOR_DANGER,
             }.get(level, "#333333")
             self.autosave_status_label.config(fg=color)
+
+    def _task_engine_state_changed(self, snapshot):
+        if getattr(self, "_closing", False):
+            return
+        try:
+            active = int(getattr(snapshot, "active_count", 0))
+        except Exception:
+            active = 0
+        if hasattr(self, "task_status_var"):
+            self.task_status_var.set(f"İşlem: {active} görev çalışıyor" if active else "İşlem: hazır")
+        if hasattr(self, "task_status_label"):
+            self.task_status_label.config(fg=COLOR_WARNING if active else "#333333")
+
+    def arka_plan_gorevi_baslat(self, ad, func, *args, **kwargs):
+        engine = getattr(self, "task_engine", None)
+        if engine is None:
+            return func(*args, **kwargs)
+        return engine.run(ad, func, *args, **kwargs)
 
     def _geometry_parcala(self, geometry):
         if not geometry:
@@ -338,18 +435,24 @@ class ArayuzTemelMixin:
 
     def toolbar_menu(self, parent, title, commands, bg="#ECF0F1", fg="#111111", tooltip=None, role=None):
         role = role or self._role_from_color(bg)
+        image = self._button_icon_image(title, role=role, outline=True, size=16)
+        menu_images = []
         if getattr(self, "bootstrap_theme_active", False) and self._bootstrap_module is not None:
             try:
-                btn = self._bootstrap_module.Menubutton(
-                    parent,
-                    text=f"{title} ▾",
-                    bootstyle=self._button_bootstyle(role, outline=True),
-                    padding=(10, 4),
-                )
+                kwargs = {
+                    "text": f"{title} ▾",
+                    "bootstyle": self._button_bootstyle(role, outline=True),
+                    "padding": (10, 4),
+                }
+                if image is not None:
+                    kwargs["image"] = image
+                    kwargs["compound"] = "left"
+                btn = self._bootstrap_module.Menubutton(parent, **kwargs)
             except Exception:
                 btn = tk.Menubutton(parent, text=f"{title} ▾", bg=bg, fg=fg, font=FONT_BOLD, relief="raised", padx=10, pady=3)
         else:
             btn = tk.Menubutton(parent, text=f"{title} ▾", bg=bg, fg=fg, font=FONT_BOLD, relief="raised", padx=10, pady=3)
+        self._attach_button_icon(btn, image)
         menu = tk.Menu(btn, tearoff=0)
         btn.configure(menu=menu)
         for item in commands:
@@ -357,8 +460,17 @@ class ArayuzTemelMixin:
                 menu.add_separator()
                 continue
             label, command = item
-            menu.add_command(label=label, command=command)
+            item_image = self._button_icon_image(label, role="secondary", outline=True, size=16)
+            if item_image is not None:
+                menu_images.append(item_image)
+                try:
+                    menu.add_command(label=label, image=item_image, compound="left", command=command)
+                except Exception:
+                    menu.add_command(label=label, command=command)
+            else:
+                menu.add_command(label=label, command=command)
         btn.pack(side="left", padx=3, pady=5)
+        btn._ui_icon_image = image
+        btn._ui_menu_icon_images = menu_images
         self.tooltip_ekle(btn, tooltip or f"{title} komutları")
         return btn
-

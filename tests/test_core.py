@@ -1,17 +1,31 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 
 from openpyxl import load_workbook
 
+from ai_motoru import belediye_duzeltme_analiz_et, duzeltme_metnini_kural_ile_analiz_et, duzeltme_yonlendirmeleri_olustur
+from arayuz_proje import ArayuzProjeMixin
 from karot_motoru import derinlik_araligi_coz, derinlik_orta, standart_karot_araliklari, tcr_hesapla
 from motor import GeoEngine, log_ornek_derinligi_formatla
+from rapor_metin_revizyon import (
+    metin_revizyon_kural_analiz_et,
+    metin_revizyonlari_uygula,
+    word_metin_birimleri_oku,
+)
+from rapor_revizyon import docx_bolumlerini_degistir, revizyon_etiketi_var_mi, revizyon_isaretleri_ekle
 from raporlama import (
     bina_bilgileri_tablolari_olustur,
     bina_bloklari_rapor,
+    buyuk_basliklari_yeni_sayfaya_al,
+    duzeltme_etiket_sablonu_olustur,
+    duzeltme_etiketleri_temizle,
     jeo_parametre_degeri_formatla,
     jeofizik_vp_layers_sadelestir,
+    lab_sheet_satirlari,
+    lab_sheet_verisi_var_mi,
     litoloji_dagilim_birimi,
     litoloji_dagilim_paragraflari,
 )
@@ -23,9 +37,13 @@ from spt_okuma_motoru import (
     kayit_normalize_et,
     n30_hesapla,
     normalize_sondaj_no,
+    openai_model_sec,
+    spt_ayarlarini_kaydet,
+    spt_ayarlarini_yukle,
 )
 from ui_spt_okuma_yardimci import collect_image_paths, duplicate_keys as spt_duplicate_keys, record_quality as spt_record_quality
 from taahhutname import taahhutname_context, taahhutname_olustur, taahhutname_yapi_adresi
+from tkgm_kml import geojson_kml_olustur, konum_adi_normalize_et
 from tutanaklar import tutanaklari_olustur
 from ekler import (
     EK_SET_NORMAL,
@@ -47,10 +65,67 @@ from proje_arsiv import (
     kml_sinir_koordinatlari_oku,
     proje_merkez_koordinati,
 )
-from yardimcilar import atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float
+from yardimcilar import atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
 from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import validate_rows as wb_validate_rows
+from workbook_motoru import WORKBOOK_SHEET_DEFS
+from task_engine import TkTaskEngine
+
+
+class _ImmediateTkRoot:
+    def after(self, _delay, callback):
+        callback()
+
+
+class TaskEngineTestleri(unittest.TestCase):
+    def test_basari_sayacini_ve_callbacki_gunceller(self):
+        done = threading.Event()
+        results = []
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1)
+        try:
+            engine.run("deneme", lambda: 42, on_success=lambda result: (results.append(result), done.set()))
+            self.assertTrue(done.wait(2))
+            snap = engine.snapshot()
+            self.assertEqual(results, [42])
+            self.assertEqual(snap.active_count, 0)
+            self.assertEqual(snap.completed_count, 1)
+            self.assertEqual(snap.failed_count, 0)
+        finally:
+            engine.shutdown(wait=True)
+
+    def test_hata_sayacini_ve_callbacki_gunceller(self):
+        done = threading.Event()
+        errors = []
+
+        def fail():
+            raise RuntimeError("kontrollu hata")
+
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1)
+        try:
+            engine.run("hata", fail, on_error=lambda exc: (errors.append(str(exc)), done.set()))
+            self.assertTrue(done.wait(2))
+            snap = engine.snapshot()
+            self.assertEqual(errors, ["kontrollu hata"])
+            self.assertEqual(snap.active_count, 0)
+            self.assertEqual(snap.completed_count, 0)
+            self.assertEqual(snap.failed_count, 1)
+        finally:
+            engine.shutdown(wait=True)
+
+
+class ProjeKayitDurumuTestleri(unittest.TestCase):
+    def test_proje_degisti_mi_imza_ile_anlar(self):
+        app = ArayuzProjeMixin()
+        app.veri = {"kunye": {"sahibi": "İlk"}, "sondaj": []}
+        app.aktif_dosya_yolu = None
+        app._son_kayit_imzasi = None
+
+        app.kayit_imzasi_guncelle()
+        self.assertFalse(app.proje_degisti_mi())
+
+        app.veri["kunye"]["sahibi"] = "Son"
+        self.assertTrue(app.proje_degisti_mi())
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
@@ -80,6 +155,196 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         self.assertEqual(safe_float("12,5"), 12.5)
         self.assertEqual(safe_float(""), 0.0)
 
+    def test_lab_sheet_satirlari_temizlenir_ve_algilanir(self):
+        app = type("App", (), {})()
+        app.veri = {"lab_sheet": {"rows": [["Sondaj No", "", ""], ["SK-1", "CL", ""], ["", "", ""]]}}
+        self.assertTrue(lab_sheet_verisi_var_mi(app))
+        self.assertEqual(lab_sheet_satirlari(app), [["Sondaj No"], ["SK-1", "CL"]])
+
+    def test_buyuk_basliklar_yeni_sayfaya_alinir(self):
+        from docx import Document
+
+        doc = Document()
+        doc.add_paragraph("Kapak")
+        heading = doc.add_paragraph("1. GENEL BİLGİLER")
+        normal = doc.add_paragraph("Bu normal bir paragraftır.")
+        styled = doc.add_paragraph("İKİNCİ BÜYÜK BAŞLIK")
+        styled.style = "Heading 1"
+
+        count = buyuk_basliklari_yeni_sayfaya_al(doc)
+
+        self.assertEqual(count, 2)
+        self.assertTrue(heading.paragraph_format.page_break_before)
+        self.assertFalse(bool(normal.paragraph_format.page_break_before))
+        self.assertTrue(styled.paragraph_format.page_break_before)
+
+    def test_duzeltme_etiket_sablonu_secili_etiketleri_yazar(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "duzeltme.docx")
+            selected = duzeltme_etiket_sablonu_olustur(["[SPT]", " [PMT] ", "[SPT]"], path)
+
+            self.assertEqual(selected, ["[SPT]", "[PMT]"])
+            self.assertEqual(duzeltme_etiketleri_temizle(["", "[SPT]", "[SPT]"]), ["[SPT]"])
+
+            doc = Document(path)
+            text = "\n".join(p.text for p in doc.paragraphs)
+            self.assertIn("RAPOR DÜZELTME ETİKET ÇIKTISI", text)
+            self.assertIn("SPT tablosu", text)
+            self.assertIn("[SPT]", text)
+            self.assertIn("[PMT]", text)
+
+    def test_belediye_duzeltme_kural_analizi_sondaj_etiketi_onerir(self):
+        metin = "Fotoğraf kayıtlarında SK-15 görünen kuyu aslında SK-13 tür. Sondajlar başlığı altında açıklama eklensin."
+        result = duzeltme_metnini_kural_ile_analiz_et(metin)
+
+        self.assertEqual(result["source"], "kural")
+        self.assertIn("[Sondaj]", result["tags"])
+        self.assertTrue(result["items"])
+
+    def test_belediye_duzeltme_asistani_ai_kapatilinca_kural_kullanir(self):
+        metin = "SPT tablosu ve litoloji dağılımında Çakıllı Siltli Kum birimi kontrol edilsin."
+        result = belediye_duzeltme_analiz_et(metin, ai_kullan=False)
+
+        self.assertEqual(result["source"], "kural")
+        self.assertIn("[SPT]", result["tags"])
+        self.assertIn("[LITOLOJI_DAGILIM]", result["tags"])
+
+    def test_belediye_duzeltme_yonlendirmesi_ek_sondaj_ve_lab_algilar(self):
+        sondaj = duzeltme_yonlendirmeleri_olustur("Belediye ek sondaj yapılmasını istedi.")
+        self.assertTrue(any(item["id"] == "ek_sondaj" and item["action_key"] == "sondaj_hizli" for item in sondaj))
+
+        lab = duzeltme_yonlendirmeleri_olustur("Ek laboratuvar deneyi yükle ve rapora işle.")
+        self.assertTrue(any(item["id"] == "ek_laboratuvar" and item["action_key"] == "lab_excel" for item in lab))
+
+    def test_belediye_duzeltme_yonlendirmesi_lab_notunda_sadece_lab_onerir(self):
+        metin = (
+            "5-) Lab deneyleri; 24.00 ile 28.50m arasi deney yok. "
+            "2m de bir deney olmasi gerekmektedir. Dolayisiyla 25.50, 27.00 ve 30.00m "
+            "seviyelerinde deney eklenmesi gerekmektedir."
+        )
+        items = duzeltme_yonlendirmeleri_olustur(metin)
+        ids = [item["id"] for item in items]
+
+        self.assertEqual(ids, ["ek_laboratuvar"])
+        self.assertIn("24.00", items[0]["source_text"])
+        self.assertIn("deney", [kw.lower() for kw in items[0]["matched_keywords"]])
+
+    def test_rapor_revizyon_isaretli_bolumu_degistirir(self):
+        from docx import Document
+
+        target = Document()
+        target.add_paragraph("Önce")
+        target_p = target.add_paragraph("[SPT]")
+        target.add_paragraph("Sonra")
+        revizyon_isaretleri_ekle(target, {"[SPT]": target_p})
+        target_p.text = "Eski SPT tablosu"
+
+        source = Document()
+        source_p = source.add_paragraph("[SPT]")
+        revizyon_isaretleri_ekle(source, {"[SPT]": source_p})
+        source_p.text = "Yeni SPT tablosu"
+
+        self.assertTrue(revizyon_etiketi_var_mi(target, "[SPT]"))
+        updated, missing = docx_bolumlerini_degistir(target, source, ["[SPT]"])
+
+        text = "\n".join(paragraph.text for paragraph in target.paragraphs)
+        self.assertEqual(updated, ["[SPT]"])
+        self.assertEqual(missing, [])
+        self.assertIn("Yeni SPT tablosu", text)
+        self.assertNotIn("Eski SPT tablosu", text)
+
+    def test_rapor_metin_revizyonu_sondaj_ifadesini_bulup_uygular(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = os.path.join(tmp, "rapor.docx")
+            output_path = os.path.join(tmp, "rapor_revize.docx")
+
+            doc = Document()
+            doc.add_paragraph("Sondaj fotoğraflarında SK-15 olarak görülen kuyu rapora işlenmiştir.")
+            doc.save(source_path)
+
+            units = word_metin_birimleri_oku(source_path)
+            result = metin_revizyon_kural_analiz_et(
+                "SK-15 olarak görünen kuyu aslında SK-13 tür.",
+                units,
+            )
+
+            self.assertEqual(result["source"], "kural")
+            self.assertTrue(result["items"])
+            self.assertEqual(result["items"][0]["old_text"], "SK-15")
+            self.assertEqual(result["items"][0]["new_text"], "SK-13")
+
+            info = metin_revizyonlari_uygula(source_path, result["items"], output_path)
+            self.assertTrue(info["success"])
+
+            revised = Document(output_path)
+            text = "\n".join(p.text for p in revised.paragraphs)
+            self.assertIn("SK-13 olarak görülen", text)
+            self.assertNotIn("SK-15", text)
+
+    def test_rapor_metin_revizyonu_tablo_hucresini_okur(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = os.path.join(tmp, "rapor.docx")
+            output_path = os.path.join(tmp, "rapor_revize.docx")
+            doc = Document()
+            table = doc.add_table(rows=1, cols=1)
+            table.cell(0, 0).text = "Kontrol notu: eski ifade"
+            doc.save(source_path)
+
+            units = word_metin_birimleri_oku(source_path)
+            self.assertTrue(any(unit["kind"] == "table" and "eski ifade" in unit["text"] for unit in units))
+
+            result = metin_revizyon_kural_analiz_et('"eski ifade" yerine "yeni ifade" yazılsın', units)
+            revisions = [dict(item, unit_id="p:999") for item in result["items"]]
+            info = metin_revizyonlari_uygula(source_path, revisions, output_path)
+            self.assertTrue(info["success"])
+
+            revised = Document(output_path)
+            self.assertIn("yeni ifade", revised.tables[0].cell(0, 0).text)
+
+    def test_zemin_sinifi_yeni_cakil_kisaltmalarini_cevirir(self):
+        self.assertEqual(zemin_sinifi_cevir("sasiGrP"), "Kumlu Siltli Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("sasiGrW"), "Kumlu Siltli Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("sasiGrM"), "Kumlu Siltli Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("siGrP"), "Siltli Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("siGrW"), "Siltli Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("siGrM"), "Siltli Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("siclGr"), "Siltli Killi Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("saclGr"), "Kumlu Killi Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("clGr"), "Killi Çakıl")
+        self.assertEqual(zemin_sinifi_cevir("grCIL"), "Çakıllı Kil")
+        self.assertEqual(zemin_sinifi_cevir("grCIH"), "Çakıllı Kil")
+        self.assertEqual(zemin_sinifi_cevir("grCIM"), "Çakıllı Kil")
+        self.assertEqual(zemin_sinifi_cevir("siSaP"), "Siltli Kum")
+        self.assertEqual(zemin_sinifi_cevir("siSaW"), "Siltli Kum")
+        self.assertEqual(zemin_sinifi_cevir("siSaM"), "Siltli Kum")
+
+    def test_tkgm_konum_adi_normalizasyonu_turkce_ekleri_temizler(self):
+        self.assertEqual(konum_adi_normalize_et("Arslanca Mahallesi"), "arslanca")
+        self.assertEqual(konum_adi_normalize_et("ÇANAKKALE"), "canakkale")
+
+    def test_tkgm_geojson_polygon_kml_koordinati_uretir(self):
+        geometry = {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [26.0, 40.0],
+                    [26.1, 40.0],
+                    [26.1, 40.1],
+                    [26.0, 40.1],
+                    [26.0, 40.0],
+                ]
+            ],
+        }
+        kml = geojson_kml_olustur(geometry, name="Deneme Parsel")
+        self.assertIn("<Placemark>", kml)
+        self.assertIn("26.00000000,40.00000000,0.00", kml)
+
     def test_litoloji_yazim_uyarisi_yakin_hatalari_bulur(self):
         self.assertTrue(any("kumlu" in item for item in litoloji_yazim_uyarilari("Killi kumluu")))
         self.assertFalse(litoloji_yazim_uyarilari("Az killi kum"))
@@ -96,18 +361,20 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         result = wb_validate_rows(rows)
         self.assertIn(("litoloji", 0, "tanim"), result["warnings"])
 
-    def test_workbook_sondaj_turu_ve_delgi_capi_tasir(self):
+    def test_workbook_sondaj_turu_ve_delgi_capi_proje_ayarindan_gelir(self):
         veri = {
-            "ayarlar": {"delgi_capi": "89mm"},
+            "ayarlar": {"sondaj_turu": "Kaya", "delgi_capi": "89mm"},
             "sondaj": [{"no": "SK-1", "der": "12", "kaya": []}],
         }
         initial, source_nos = wb_build_initial_rows(veri)
+        columns = [key for _, key in WORKBOOK_SHEET_DEFS["sondajlar"]["columns"]]
+        self.assertNotIn("sondaj_turu", columns)
+        self.assertNotIn("delgi_capi", columns)
         headers = initial["sondajlar"][0]
-        self.assertEqual(headers[2], "Zemin")
-        self.assertEqual(headers[3], "89mm")
+        self.assertEqual(len(headers), len(columns))
 
         rows = {
-            "sondajlar": [{"no": "SK-1", "der": "12", "sondaj_turu": "Kaya", "delgi_capi": "76mm"}],
+            "sondajlar": [{"no": "SK-1", "der": "12"}],
             "litoloji": [],
             "spt": [],
             "pmt": [],
@@ -117,7 +384,7 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         sondajlar, warnings = wb_apply_rows_to_veri(veri, rows, source_nos)
         self.assertFalse(warnings)
         self.assertEqual(sondajlar[0]["sondaj_turu"], "Kaya")
-        self.assertEqual(sondajlar[0]["delgi_capi"], "76mm")
+        self.assertEqual(sondajlar[0]["delgi_capi"], "89mm")
 
     def test_spt_helper_klasorden_resimleri_toplar(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -555,6 +822,22 @@ class SPTMotorTestleri(unittest.TestCase):
         self.assertEqual(removed_by_sequence, 2)
         self.assertEqual(merged_by_location, 0)
 
+    def test_openai_model_ayarlari_ayri_secilir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ayarlar.json")
+            ayarlar = spt_ayarlarini_yukle(path)
+            self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-4o-mini")
+            self.assertEqual(openai_model_sec(ayarlar, "revizyon"), "gpt-5.5")
+            self.assertEqual(openai_model_sec({"openai_model": "", "revizyon_openai_model": "  "}, "revizyon"), "gpt-5.5")
+
+            spt_ayarlarini_kaydet(
+                {"openai_model": "gpt-4o-mini-test", "revizyon_openai_model": "gpt-5.5-test"},
+                path,
+            )
+            ayarlar = spt_ayarlarini_yukle(path)
+            self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-4o-mini-test")
+            self.assertEqual(openai_model_sec(ayarlar, "revizyon"), "gpt-5.5-test")
+
 
 class LitolojiDagilimTestleri(unittest.TestCase):
     def test_litoloji_birimi_son_ana_birime_gore_ayrilir(self):
@@ -842,7 +1125,7 @@ class TaahhutnameTestleri(unittest.TestCase):
         self.assertEqual(ctx["yapi_adresi"], "Namık Kemal Mah. Merkez Çanakkale")
         self.assertEqual(ctx["yapi_sahibi_adresi"], "Namık Kemal Mah. Merkez Çanakkale")
 
-    def test_excel_sablonuna_adres_ve_baski_alani_yazilir(self):
+    def test_excel_sablonsuz_adres_ve_baski_alani_uretilir(self):
         veri = {
             "kunye": {
                 "sahibi": "Cahit SARACOGLU ve Hiss.",
@@ -860,14 +1143,26 @@ class TaahhutnameTestleri(unittest.TestCase):
             taahhutname_olustur(veri, "jeoloji", path)
             wb = load_workbook(path, data_only=False)
             ws = wb["tahhütname"]
-            self.assertEqual(ws["M14"].value, "Namik Kemal Mah. Merkez Canakkale")
-            self.assertEqual(ws["M16"].value, "Namik Kemal Mah. Merkez Canakkale")
-            self.assertIn("müellifliğini üstlenmemde", ws["J19"].value)
-            self.assertEqual(ws.print_area, "'tahhütname'!$J$1:$R$48")
-            self.assertEqual(ws["J4"].border.left.style, "thin")
-            self.assertIsNone(getattr(ws["J19"].border.top, "style", None))
-            self.assertEqual(ws["O30"].border.right.style, "thin")
-            self.assertIsNone(getattr(ws["M20"].border.left, "style", None))
+            self.assertEqual(ws["D14"].value, "Namik Kemal Mah. Merkez Canakkale")
+            self.assertEqual(ws["D16"].value, "Namik Kemal Mah. Merkez Canakkale")
+            self.assertIn("JEOLOJİ", ws["C5"].value)
+            self.assertIn("müellifliğini üstlenmemde", ws["A20"].value)
+            self.assertEqual(ws.print_area, "'tahhütname'!$A$1:$I$47")
+            self.assertEqual(ws.page_setup.paperSize, 9)
+            self.assertEqual(ws.page_setup.orientation, "portrait")
+            self.assertIsNone(ws.page_setup.fitToWidth)
+            self.assertIsNone(ws.page_setup.fitToHeight)
+            self.assertAlmostEqual(ws.column_dimensions["A"].width, 12.44140625)
+            self.assertAlmostEqual(ws.column_dimensions["B"].width, 6.33203125)
+            self.assertAlmostEqual(ws.column_dimensions["I"].width, 8.6640625)
+            self.assertEqual(ws.sheet_format.defaultRowHeight, 14.4)
+            self.assertIsNone(ws.row_dimensions[20].height)
+            self.assertEqual(ws["A4"].border.left.style, "thin")
+            self.assertEqual(ws["A20"].border.top.style, "thin")
+            self.assertIn("Gerçeğe aykırı beyanda", ws["A44"].value)
+            self.assertEqual(ws["F30"].alignment.horizontal, "center")
+            self.assertEqual(ws["F30"].border.right.style, "thin")
+            self.assertIsNone(getattr(ws["D20"].border.left, "style", None))
 
 
 class EklerTestleri(unittest.TestCase):
@@ -949,7 +1244,7 @@ class TutanakTestleri(unittest.TestCase):
 
         veri = {
             "kunye": {"mah": "Namık Kemal", "ada": "463", "par": "105", "sahibi": "Test Proje"},
-            "ayarlar": {"firma_adi": "UB ZEMİN MÜHENDİSLİK", "delgi_capi": "89mm"},
+            "ayarlar": {"firma_adi": "UB ZEMİN MÜHENDİSLİK", "sondaj_turu": "Kaya", "delgi_capi": "89mm"},
             "sondaj": [
                 {
                     "no": "SK-1",
@@ -984,7 +1279,7 @@ class TutanakTestleri(unittest.TestCase):
             doc = Document(output_path)
             self.assertEqual(doc.tables[0].rows[2].cells[2].text, "SK-1")
             self.assertEqual(doc.tables[0].rows[4].cells[2].text, "Kaya")
-            self.assertEqual(doc.tables[0].rows[11].cells[2].text, "76mm")
+            self.assertEqual(doc.tables[0].rows[11].cells[2].text, "89mm")
             self.assertEqual(doc.tables[0].rows[12].cells[2].text, "10")
             self.assertEqual(doc.tables[0].rows[13].cells[2].text, "2")
             self.assertEqual(doc.tables[0].rows[14].cells[2].text, "1")

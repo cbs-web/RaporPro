@@ -1,6 +1,5 @@
 # Dosya: RaporPro/ui_spt_okuma_dialogs.py
 import os
-import threading
 import tkinter as tk
 from tkinter import Toplevel, filedialog, messagebox, ttk
 
@@ -337,18 +336,22 @@ def open_spt_crop_dialog(app, parent, initial_dir, target_var, project_spt_setti
             add_result(sonuc, "Kırpılmış Fotoğraf", append=True)
 
         def worker():
-            try:
-                sonuc = fotograflardan_spt_oku(
-                    [cropped_path],
-                    default_sondaj_no=target_var.get(),
-                    ayarlar=ayarlar,
-                    auto_pro=project_spt_settings()["auto_pro"],
-                )
-                app.root.after(0, lambda sonuc=sonuc: finish(sonuc=sonuc))
-            except Exception as exc:
-                app.root.after(0, lambda hata=exc: finish(hata=hata))
+            return fotograflardan_spt_oku(
+                [cropped_path],
+                default_sondaj_no=target_var.get(),
+                ayarlar=ayarlar,
+                auto_pro=project_spt_settings()["auto_pro"],
+            )
 
-        threading.Thread(target=worker, daemon=True).start()
+        app.arka_plan_gorevi_baslat(
+            "Kırpılmış SPT oku",
+            worker,
+            status_start="Kırpılmış SPT alanı arka planda okunuyor.",
+            status_success="Kırpılmış SPT alanı okundu.",
+            status_error="Kırpılmış SPT okuma tamamlanamadı: {error}",
+            on_success=lambda sonuc: finish(sonuc=sonuc),
+            on_error=lambda exc: finish(hata=exc),
+        )
 
     btns = ttk.Frame(crop_win, padding=8)
     btns.pack(fill="x")
@@ -360,7 +363,7 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
     ayarlar = spt_ayarlarini_yukle()
     project = app.veri.setdefault("ayarlar", {})
     popup = Toplevel(parent)
-    app.pencere_hazirla(popup, "SPT Okuma Ayarları", "520x430", (480, 390), modal=True)
+    app.pencere_hazirla(popup, "SPT Okuma Ayarları", "560x520", (520, 480), modal=True)
     body = ttk.Frame(popup, padding=12)
     body.pack(fill="both", expand=True)
     ttk.Label(body, text="Aktif Motor", font=FONT_BOLD).grid(row=0, column=0, sticky="w", pady=5)
@@ -377,25 +380,37 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
         ent.insert(0, ayarlar.get(key, ""))
         ent.grid(row=row, column=1, sticky="ew", pady=5)
         key_entries[key] = ent
-    ttk.Label(body, text="Düşük Güven Eşiği").grid(row=4, column=0, sticky="w", pady=5)
+    model_entries = {}
+    for row, (label, key, default) in enumerate([
+        ("OpenAI SPT Modeli", "openai_model", "gpt-4o-mini"),
+        ("Rapor Revizyon Modeli", "revizyon_openai_model", "gpt-5.5"),
+    ], start=4):
+        ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=5)
+        ent = ttk.Entry(body)
+        ent.insert(0, ayarlar.get(key, default) or default)
+        ent.grid(row=row, column=1, sticky="ew", pady=5)
+        model_entries[key] = ent
+    ttk.Label(body, text="Düşük Güven Eşiği").grid(row=6, column=0, sticky="w", pady=5)
     guven_entry = ttk.Entry(body, width=10)
     guven_entry.insert(0, project.get("spt_guven_esigi", "90"))
-    guven_entry.grid(row=4, column=1, sticky="w", pady=5)
+    guven_entry.grid(row=6, column=1, sticky="w", pady=5)
     popup_auto_pro_var = tk.BooleanVar(value=bool(auto_pro_var.get()))
-    ttk.Checkbutton(body, text="Düşük güvende Gemini Pro ile tekrar oku", variable=popup_auto_pro_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=8)
+    ttk.Checkbutton(body, text="Düşük güvende Gemini Pro ile tekrar oku", variable=popup_auto_pro_var).grid(row=7, column=0, columnspan=2, sticky="w", pady=8)
     path_text = f"Ayar dosyası: {SPT_AYARLAR_PATH}"
-    ttk.Label(body, text=path_text, foreground="#555555", wraplength=460).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 2))
+    ttk.Label(body, text=path_text, foreground="#555555", wraplength=500).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 2))
     state_text = "Anahtar durumu: " + ", ".join(
         f"{name} {'var' if ayarlar.get(key) else 'yok'}"
         for name, key in [("OpenAI", "openai_api_key"), ("Gemini", "gemini_api_key"), ("Groq", "groq_api_key")]
     )
-    ttk.Label(body, text=state_text, foreground="#1F618D", wraplength=460).grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 8))
+    ttk.Label(body, text=state_text, foreground="#1F618D", wraplength=500).grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 8))
     body.columnconfigure(1, weight=1)
 
     def save_settings():
         new_settings = {
             "aktif_motor": motor_var.get().strip(),
             "openai_api_key": key_entries["openai_api_key"].get().strip(),
+            "openai_model": model_entries["openai_model"].get().strip() or "gpt-4o-mini",
+            "revizyon_openai_model": model_entries["revizyon_openai_model"].get().strip() or "gpt-5.5",
             "gemini_api_key": key_entries["gemini_api_key"].get().strip(),
             "groq_api_key": key_entries["groq_api_key"].get().strip(),
         }
@@ -424,6 +439,11 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
         problems = []
         if not api_key:
             problems.append(f"{name} API anahtarı boş.")
+        if motor == "openai":
+            if not model_entries["openai_model"].get().strip():
+                problems.append("OpenAI SPT modeli boş.")
+            if not model_entries["revizyon_openai_model"].get().strip():
+                problems.append("Rapor revizyon modeli boş.")
         try:
             import requests  # noqa: F401
         except Exception as exc:
@@ -442,7 +462,7 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
             )
 
     btns = ttk.Frame(body)
-    btns.grid(row=8, column=0, columnspan=2, sticky="e", pady=(16, 0))
+    btns.grid(row=10, column=0, columnspan=2, sticky="e", pady=(16, 0))
     tk.Button(btns, text="Kaydet", command=save_settings, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
     tk.Button(btns, text="Ayar Kontrolü", command=check_settings, bg="#D6EAF8", fg="#111", font=FONT_BOLD).pack(side="right", padx=4)
     tk.Button(btns, text="Kapat", command=popup.destroy, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="right", padx=4)

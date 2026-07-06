@@ -31,12 +31,12 @@ class WorkbookEskiMixin:
             "sondajlar": {
                 "title": "Sondajlar",
                 "columns": [
-                    ("SondajNo", "no"), ("Derinlik", "der"), ("Tur", "sondaj_turu"), ("DelgiCapi", "delgi_capi"),
+                    ("SondajNo", "no"), ("Derinlik", "der"),
                     ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"),
                     ("Baş.Tarih", "bas_tar"), ("Bit.Tarih", "bit_tar"), ("YASS İlk", "yass_d1"),
                     ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")
                 ],
-                "widths": {"no": 11, "der": 9, "sondaj_turu": 9, "delgi_capi": 10, "y": 14, "x": 14, "k": 9, "bas_tar": 12, "bit_tar": 12, "yass_d1": 9, "yass_t1": 12, "yass_d2": 9, "yass_t2": 12},
+                "widths": {"no": 11, "der": 9, "y": 14, "x": 14, "k": 9, "bas_tar": 12, "bit_tar": 12, "yass_d1": 9, "yass_t1": 12, "yass_d2": 9, "yass_t2": 12},
             },
             "litoloji": {
                 "title": "Litoloji",
@@ -86,7 +86,7 @@ class WorkbookEskiMixin:
             bugun_str = bugun.strftime("%d.%m.%Y")
             t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
             return {
-                "no": f"SK-{idx + 1}", "der": "15.0", "sondaj_turu": "Zemin", "delgi_capi": "76mm", "y": "", "x": "", "k": "",
+                "no": f"SK-{idx + 1}", "der": "15.0", "y": "", "x": "", "k": "",
                 "bas_tar": bugun_str, "bit_tar": bugun_str,
                 "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
                 "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []

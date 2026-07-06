@@ -4,6 +4,11 @@ from collections import Counter
 from yardimcilar import safe_float
 
 
+def lab_sheet_ready(veri):
+    rows = veri.get("lab_sheet", {}).get("rows", []) if isinstance(veri, dict) else []
+    return any(any(str(cell).strip() for cell in row) for row in rows or [])
+
+
 def proje_saglik_ozeti(veri, dosya_durumlari=None):
     dosya_durumlari = dosya_durumlari or {}
     items = []
@@ -81,6 +86,9 @@ def proje_saglik_ozeti(veri, dosya_durumlari=None):
         ("word_img_sondaj", "Sondaj haritası"), ("word_img_jeofizik", "Jeofizik haritası"),
     ]:
         path = dosya_durumlari.get(key)
+        if key == "lab_excel_path" and lab_sheet_ready(veri):
+            add(label, True, "LAB Sheet hazır", "rapor", "Rapor sekmesinden LAB Sheet'i açıp düzenleyebilirsiniz.")
+            continue
         if key == "kml_path":
             target = "haritalar"
             suggestion = "Üst araç çubuğundan KML sınır dosyasını seçin."
@@ -183,5 +191,8 @@ def rapor_onizleme_metni(veri, dosya_durumlari=None, saglik=None, hesap=None):
         ("word_img_sondaj", "Sondaj haritasi"), ("word_img_jeofizik", "Jeofizik haritasi"),
     ]:
         path = dosya_durumlari.get(key)
-        lines.append(f"- {label}: {os.path.basename(path) if path else '-'}")
+        if key == "lab_excel_path" and lab_sheet_ready(veri):
+            lines.append(f"- {label}: LAB Sheet hazır")
+        else:
+            lines.append(f"- {label}: {os.path.basename(path) if path else '-'}")
     return "\n".join(lines)

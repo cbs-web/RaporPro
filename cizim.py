@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import Toplevel, Canvas, ttk, Scrollbar, messagebox
 import numpy as np
 import matplotlib.patches as mpatches
+from matplotlib.collections import LineCollection, PatchCollection
 from matplotlib.legend_handler import HandlerPatch
 
 from yardimcilar import safe_float, litoloji_cozumle, litoloji_yazim_uyarilari
@@ -10,6 +11,39 @@ from sabitler import LEJANTLAR, COLOR_BG, COLOR_ACCENT, COLOR_SUCCESS, FONT_BOLD
 
 class GeoEngineDraw:
     """Cizim yardimci fonksiyonlari"""
+    @staticmethod
+    def _add_line_collection(ax, segments, color, linewidth, clip, zorder, alpha=None, dashes=None):
+        if not segments:
+            return None
+        collection = LineCollection(
+            segments,
+            colors=color,
+            linewidths=linewidth,
+            zorder=zorder,
+            alpha=alpha,
+        )
+        if dashes:
+            collection.set_linestyle(dashes)
+        collection.set_clip_path(clip)
+        ax.add_collection(collection)
+        return collection
+
+    @staticmethod
+    def _add_patch_collection(ax, patches, color, linewidth, clip, zorder):
+        if not patches:
+            return None
+        collection = PatchCollection(
+            patches,
+            match_original=False,
+            facecolors="none",
+            edgecolors=color,
+            linewidths=linewidth,
+            zorder=zorder,
+        )
+        collection.set_clip_path(clip)
+        ax.add_collection(collection)
+        return collection
+
     @staticmethod
     def _shared_segment(a1, a2, b1, b2, tol):
         a1 = np.asarray(a1, dtype=float)
@@ -143,24 +177,38 @@ class GeoEngineDraw:
             else: return []
 
         z_pattern = 21
-        STEP_X_DOT = 0.025 * density_scale; STEP_Y_DOT = 0.025 * density_scale
-        STEP_X_GRAVEL = 0.05 * density_scale; STEP_Y_GRAVEL = 0.05 * density_scale
-        STEP_Y_LINE = 0.03 * density_scale
+        STEP_X_DOT = max(0.011, 0.025 * density_scale); STEP_Y_DOT = max(0.011, 0.025 * density_scale)
+        STEP_X_GRAVEL = max(0.026, 0.05 * density_scale); STEP_Y_GRAVEL = max(0.026, 0.05 * density_scale)
+        STEP_Y_LINE = max(0.019, 0.03 * density_scale)
 
         if style_code == "nokta":
-            xs = np.arange(x_min, x_max, STEP_X_DOT); ys = np.arange(y_min, y_max, STEP_Y_DOT)
-            gx, gy = np.meshgrid(xs, ys)
-            dots, = ax.plot(gx.flatten(), gy.flatten(), '.', color=color, markersize=1.2, zorder=z_pattern); dots.set_clip_path(clip); artists.append(dots)
+            ys = np.arange(y_min + STEP_Y_DOT * 0.45, y_max, STEP_Y_DOT)
+            for row_idx, yy in enumerate(ys):
+                offset = STEP_X_DOT * (0.25 if row_idx % 2 else 0.70)
+                xs = np.arange(x_min + offset, x_max, STEP_X_DOT * 1.25)
+                if not len(xs):
+                    continue
+                dots, = ax.plot(xs, np.full_like(xs, yy), '.', color=color, markersize=1.2, zorder=z_pattern)
+                dots.set_clip_path(clip)
+                artists.append(dots)
         elif style_code == "cakil_daire":
-            xs = np.arange(x_min, x_max + STEP_X_GRAVEL/2, STEP_X_GRAVEL); ys = np.arange(y_min, y_max + STEP_Y_GRAVEL/2, STEP_Y_GRAVEL)
-            gx, gy = np.meshgrid(xs, ys)
-            dots, = ax.plot(gx.flatten(), gy.flatten(), 'o', color=color, markersize=3.0, fillstyle='none', markeredgewidth=0.5, zorder=z_pattern); dots.set_clip_path(clip); artists.append(dots)
+            ys = np.arange(y_min + STEP_Y_GRAVEL * 0.50, y_max + STEP_Y_GRAVEL/2, STEP_Y_GRAVEL)
+            for row_idx, yy in enumerate(ys):
+                offset = STEP_X_GRAVEL * (0.25 if row_idx % 2 else 0.75)
+                xs = np.arange(x_min + offset, x_max + STEP_X_GRAVEL/2, STEP_X_GRAVEL * 1.12)
+                xs = xs[xs < x_max]
+                if not len(xs):
+                    continue
+                dots, = ax.plot(xs, np.full_like(xs, yy), 'o', color=color, markersize=3.0, fillstyle='none', markeredgewidth=0.5, zorder=z_pattern)
+                dots.set_clip_path(clip)
+                artists.append(dots)
         elif style_code == "moloz_parca":
             step_x = max(0.012, 0.045 * density_scale)
             step_y = max(0.012, 0.040 * density_scale)
             base_size = max(0.004, min(step_x, step_y) * 0.34)
             xs = np.arange(x_min + step_x * 0.35, x_max, step_x)
             ys = np.arange(y_min + step_y * 0.35, y_max, step_y)
+            pieces = []
             for row_idx, yy in enumerate(ys):
                 for col_idx, xx in enumerate(xs):
                     if (row_idx + col_idx) % 4 == 0:
@@ -176,31 +224,148 @@ class GeoEngineDraw:
                         pts = [(cx - size * 0.9, cy), (cx - size * 0.1, cy + size), (cx + size, cy + size * 0.2), (cx + size * 0.35, cy - size * 0.85)]
                     else:
                         pts = [(cx - size, cy - size), (cx + size * 0.9, cy - size * 0.25), (cx - size * 0.25, cy + size)]
-                    piece = mpatches.Polygon(pts, closed=True, facecolor='none', edgecolor=color, linewidth=0.55, zorder=z_pattern)
-                    piece.set_clip_path(clip)
-                    ax.add_patch(piece)
-                    artists.append(piece)
+                    pieces.append(mpatches.Polygon(pts, closed=True))
+            collection = GeoEngineDraw._add_patch_collection(ax, pieces, color, 0.55, clip, z_pattern)
+            if collection:
+                artists.append(collection)
         elif style_code == "kesikli":
-            for yl in np.arange(y_min, y_max, STEP_Y_LINE):
-                line, = ax.plot([x_min, x_max], [yl, yl], color=color, lw=0.8, zorder=z_pattern); line.set_dashes([3, 2]); line.set_clip_path(clip); artists.append(line)
+            dash_len = max(0.014, 0.040 * density_scale)
+            gap_len = max(0.007, 0.018 * density_scale)
+            segments = []
+            for row_idx, yl in enumerate(np.arange(y_min, y_max, STEP_Y_LINE)):
+                start = x_min + (dash_len + gap_len) * (0.55 if row_idx % 2 else 0.05)
+                for x0 in np.arange(start, x_max, dash_len + gap_len):
+                    x1 = min(x0 + dash_len, x_max)
+                    segments.append([(x0, yl), (x1, yl)])
+            collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.8, clip, z_pattern)
+            if collection:
+                artists.append(collection)
         elif style_code == "noktali_kesikli":
-            for yl in np.arange(y_min, y_max, STEP_Y_LINE):
-                line, = ax.plot([x_min, x_max], [yl, yl], color=color, lw=0.8, zorder=z_pattern); line.set_dashes([3, 2, 1, 2]); line.set_clip_path(clip); artists.append(line)
+            dash_len = max(0.018, 0.045 * density_scale)
+            gap_len = max(0.010, 0.024 * density_scale)
+            segments = []
+            all_dot_xs = []
+            all_dot_ys = []
+            for row_idx, yl in enumerate(np.arange(y_min, y_max, STEP_Y_LINE)):
+                start = x_min + (dash_len + gap_len) * (0.50 if row_idx % 2 else 0.05)
+                for x0 in np.arange(start, x_max, dash_len + gap_len):
+                    x1 = min(x0 + dash_len, x_max)
+                    segments.append([(x0, yl), (x1, yl)])
+                    dot_x = x1 + gap_len * 0.45
+                    if dot_x < x_max:
+                        all_dot_xs.append(dot_x)
+                        all_dot_ys.append(yl)
+            collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.75, clip, z_pattern)
+            if collection:
+                artists.append(collection)
+            if all_dot_xs:
+                dots, = ax.plot(all_dot_xs, all_dot_ys, '.', color=color, markersize=1.0, zorder=z_pattern)
+                dots.set_clip_path(clip)
+                artists.append(dots)
+        elif style_code == "kiltasi_cizgili_noktali":
+            segments = [[(x_min, yl), (x_max, yl)] for yl in np.arange(y_min, y_max, STEP_Y_LINE * 0.9)]
+            collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.75, clip, z_pattern, dashes=[(0, (5, 2))])
+            if collection:
+                artists.append(collection)
+            xs = np.arange(x_min + STEP_X_DOT, x_max, STEP_X_DOT * 2.2)
+            ys = np.arange(y_min + STEP_Y_DOT, y_max, STEP_Y_DOT * 1.8)
+            if len(xs) and len(ys):
+                gx, gy = np.meshgrid(xs, ys)
+                dots, = ax.plot(gx.flatten(), gy.flatten(), '.', color=color, markersize=0.95, zorder=z_pattern)
+                dots.set_clip_path(clip)
+                artists.append(dots)
         elif style_code == "ot":
             area_factor = 200 / (density_scale**2); num = int((x_max-x_min)*(y_max-y_min)*area_factor)
             if num > 0:
                 rx = np.random.uniform(x_min, x_max, num); ry = np.random.uniform(y_min, y_max, num)
-                for i in range(len(rx)):
-                    line, = ax.plot([rx[i], rx[i]+0.01*density_scale, rx[i]+0.02*density_scale], [ry[i]+0.015*density_scale, ry[i], ry[i]+0.015*density_scale], color=color, lw=0.5, zorder=z_pattern); line.set_clip_path(clip); artists.append(line)
+                segments = [
+                    [
+                        (rx[i], ry[i] + 0.015 * density_scale),
+                        (rx[i] + 0.01 * density_scale, ry[i]),
+                        (rx[i] + 0.02 * density_scale, ry[i] + 0.015 * density_scale),
+                    ]
+                    for i in range(len(rx))
+                ]
+                collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.5, clip, z_pattern)
+                if collection:
+                    artists.append(collection)
         elif style_code == "kumtasi_yatay":
-            for yl in np.arange(y_min, y_max, STEP_Y_LINE):
-                line, = ax.plot([x_min, x_max], [yl, yl], color=color, lw=0.5, alpha=0.7, zorder=z_pattern); line.set_clip_path(clip); artists.append(line)
-            xs = np.arange(x_min, x_max, STEP_X_DOT*1.5); ys = np.arange(y_min, y_max, STEP_Y_DOT*1.5)
-            gx, gy = np.meshgrid(xs, ys)
-            dots, = ax.plot(gx.flatten(), gy.flatten(), '.', color=color, markersize=1, zorder=z_pattern); dots.set_clip_path(clip); artists.append(dots)
+            segments = [[(x_min, yl), (x_max, yl)] for yl in np.arange(y_min, y_max, STEP_Y_LINE)]
+            collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.5, clip, z_pattern, alpha=0.7)
+            if collection:
+                artists.append(collection)
+            ys = np.arange(y_min + STEP_Y_DOT, y_max, STEP_Y_DOT * 1.7)
+            for row_idx, yy in enumerate(ys):
+                offset = STEP_X_DOT * (0.45 if row_idx % 2 else 1.05)
+                xs = np.arange(x_min + offset, x_max, STEP_X_DOT * 1.7)
+                if not len(xs):
+                    continue
+                dots, = ax.plot(xs, np.full_like(xs, yy), '.', color=color, markersize=1, zorder=z_pattern)
+                dots.set_clip_path(clip)
+                artists.append(dots)
         elif style_code == "cakil_oval_cizgili":
-            for yl in np.arange(y_min, y_max, STEP_Y_LINE*2):
-                line, = ax.plot([x_min, x_max], [yl, yl], color=color, lw=0.5, zorder=z_pattern); line.set_dashes([6, 2]); line.set_clip_path(clip); artists.append(line)
+            segments = [[(x_min, yl), (x_max, yl)] for yl in np.arange(y_min, y_max, STEP_Y_LINE*2)]
+            collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.5, clip, z_pattern, dashes=[(0, (6, 2))])
+            if collection:
+                artists.append(collection)
+            xs = np.arange(x_min + STEP_X_GRAVEL * 0.45, x_max, STEP_X_GRAVEL * 1.25)
+            ys = np.arange(y_min + STEP_Y_GRAVEL * 0.55, y_max, STEP_Y_GRAVEL * 1.15)
+            for row_idx, yy in enumerate(ys):
+                row_offset = (STEP_X_GRAVEL * 0.55) if row_idx % 2 else 0.0
+                row_xs = xs + row_offset
+                row_xs = row_xs[row_xs < x_max]
+                if not len(row_xs):
+                    continue
+                rings, = ax.plot(
+                    row_xs,
+                    np.full_like(row_xs, yy),
+                    'o',
+                    color=color,
+                    markersize=3.1,
+                    fillstyle='none',
+                    markeredgewidth=0.55,
+                    zorder=z_pattern
+                )
+                rings.set_clip_path(clip)
+                artists.append(rings)
+        elif style_code == "dolgu_karisik":
+            diag_step = max(0.015, 0.055 * density_scale)
+            span_x = max(abs(x_max - x_min), diag_step)
+            span_y = max(abs(y_max - y_min), diag_step)
+            segments = []
+            for offset in np.arange(y_min - span_y, y_max + span_y, diag_step):
+                segments.append([
+                    (x_min - span_x * 0.15, offset),
+                    (x_max + span_x * 0.15, offset + span_y * 0.65),
+                ])
+            collection = GeoEngineDraw._add_line_collection(ax, segments, color, 0.55, clip, z_pattern, alpha=0.75)
+            if collection:
+                artists.append(collection)
+            step_x = max(0.018, 0.060 * density_scale)
+            step_y = max(0.018, 0.052 * density_scale)
+            base_size = max(0.004, min(step_x, step_y) * 0.25)
+            xs = np.arange(x_min + step_x * 0.45, x_max, step_x)
+            ys = np.arange(y_min + step_y * 0.45, y_max, step_y)
+            pieces = []
+            for row_idx, yy in enumerate(ys):
+                for col_idx, xx in enumerate(xs):
+                    if (row_idx + col_idx) % 3 == 0:
+                        continue
+                    jitter_x = ((row_idx * 13 + col_idx * 5) % 7 - 3) * step_x * 0.045
+                    jitter_y = ((row_idx * 7 + col_idx * 11) % 7 - 3) * step_y * 0.045
+                    cx = xx + jitter_x
+                    cy = yy + jitter_y
+                    size = base_size * (0.85 + ((row_idx + col_idx) % 2) * 0.25)
+                    pts = [
+                        (cx - size, cy - size * 0.35),
+                        (cx - size * 0.15, cy + size * 0.9),
+                        (cx + size * 0.9, cy + size * 0.2),
+                        (cx + size * 0.35, cy - size * 0.8),
+                    ]
+                    pieces.append(mpatches.Polygon(pts, closed=True))
+            collection = GeoEngineDraw._add_patch_collection(ax, pieces, color, 0.5, clip, z_pattern)
+            if collection:
+                artists.append(collection)
 
         if patch_obj:
             patch_obj._geo_pattern_artists = artists

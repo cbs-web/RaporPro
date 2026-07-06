@@ -31,6 +31,8 @@ SPT_LOG_DIR = Path(__file__).resolve().parent / "logs"
 SPT_GECMIS_PATH = SPT_LOG_DIR / "spt_okuma_gecmisi.jsonl"
 SPT_OGRENME_DIR = Path(__file__).resolve().parent / "spt_ogrenme_verisi"
 SPT_CROP_DIR = SPT_LOG_DIR / "spt_kirpilanlar"
+DEFAULT_SPT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_REVIZYON_OPENAI_MODEL = "gpt-5.5"
 
 
 @dataclass
@@ -331,6 +333,8 @@ def spt_ayarlarini_yukle(path=None):
     ayarlar = {
         "aktif_motor": "openai",
         "openai_api_key": "",
+        "openai_model": DEFAULT_SPT_OPENAI_MODEL,
+        "revizyon_openai_model": DEFAULT_REVIZYON_OPENAI_MODEL,
         "gemini_api_key": "",
         "groq_api_key": "",
     }
@@ -346,6 +350,8 @@ def spt_ayarlarini_yukle(path=None):
 
     env_map = {
         "openai_api_key": ("RAPORPRO_SPT_OPENAI_API_KEY", "OPENAI_API_KEY"),
+        "openai_model": ("RAPORPRO_SPT_OPENAI_MODEL", "RAPORPRO_OPENAI_MODEL", "OPENAI_MODEL"),
+        "revizyon_openai_model": ("RAPORPRO_REVIZYON_OPENAI_MODEL", "RAPORPRO_RAPOR_OPENAI_MODEL"),
         "gemini_api_key": ("RAPORPRO_SPT_GEMINI_API_KEY", "GEMINI_API_KEY"),
         "groq_api_key": ("RAPORPRO_SPT_GROQ_API_KEY", "GROQ_API_KEY"),
         "aktif_motor": ("RAPORPRO_SPT_MOTOR",),
@@ -357,6 +363,19 @@ def spt_ayarlarini_yukle(path=None):
                 ayarlar[key] = val.strip()
                 break
     return ayarlar
+
+
+def openai_model_sec(ayarlar=None, amac="spt"):
+    """SPT ve rapor revizyonu icin OpenAI modelini ayarlardan sec."""
+    ayarlar = ayarlar or spt_ayarlarini_yukle()
+    if str(amac or "").strip().lower() in ("revizyon", "rapor", "duzeltme", "metin"):
+        model = str(ayarlar.get("revizyon_openai_model") or "").strip()
+        if model:
+            return model
+        model = str(ayarlar.get("openai_model") or "").strip()
+        return model or DEFAULT_REVIZYON_OPENAI_MODEL
+    model = str(ayarlar.get("openai_model") or "").strip()
+    return model or DEFAULT_SPT_OPENAI_MODEL
 
 
 def spt_ayarlarini_kaydet(ayarlar, path=None):
@@ -371,7 +390,7 @@ def spt_ayarlarini_kaydet(ayarlar, path=None):
                 mevcut.update(loaded)
         except Exception:
             mevcut = {}
-    for key in ("aktif_motor", "openai_api_key", "gemini_api_key", "groq_api_key"):
+    for key in ("aktif_motor", "openai_api_key", "openai_model", "revizyon_openai_model", "gemini_api_key", "groq_api_key"):
         if key in ayarlar:
             mevcut[key] = ayarlar.get(key, "")
     atomic_json_dump(mevcut, path, ensure_ascii=False, indent=2)
@@ -595,7 +614,7 @@ def yapay_zeka_ile_spt_oku(resim_yolu, ayarlar=None, motor_zorla=None, timeout=4
         is_openai = aktif == "openai"
         url = "https://api.openai.com/v1/chat/completions" if is_openai else "https://api.groq.com/openai/v1/chat/completions"
         api_key = ayarlar["openai_api_key"] if is_openai else ayarlar["groq_api_key"]
-        model_name = "gpt-4o-mini" if is_openai else "meta-llama/llama-4-scout-17b-16e-instruct"
+        model_name = openai_model_sec(ayarlar, "spt") if is_openai else "meta-llama/llama-4-scout-17b-16e-instruct"
         payload = {
             "model": model_name,
             "messages": [{
