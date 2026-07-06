@@ -26,7 +26,9 @@ HEDEF_DERINLIK_ARALIKLARI = [
 ]
 
 SPT_OKUMA_KLASORU = Path.home() / "Desktop" / "SPT Okuma"
-SPT_AYARLAR_PATH = SPT_OKUMA_KLASORU / "ayarlar.json"
+LEGACY_SPT_AYARLAR_PATH = SPT_OKUMA_KLASORU / "ayarlar.json"
+RAPORPRO_CONFIG_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "RaporPro"
+SPT_AYARLAR_PATH = RAPORPRO_CONFIG_DIR / "ayarlar.json"
 SPT_LOG_DIR = Path(__file__).resolve().parent / "logs"
 SPT_GECMIS_PATH = SPT_LOG_DIR / "spt_okuma_gecmisi.jsonl"
 SPT_OGRENME_DIR = Path(__file__).resolve().parent / "spt_ogrenme_verisi"
@@ -338,7 +340,14 @@ def spt_ayarlarini_yukle(path=None):
         "gemini_api_key": "",
         "groq_api_key": "",
     }
+    varsayilan_yol = path is None
     path = Path(path) if path else SPT_AYARLAR_PATH
+    if varsayilan_yol and not path.exists() and LEGACY_SPT_AYARLAR_PATH.exists():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(LEGACY_SPT_AYARLAR_PATH, path)
+        except Exception:
+            path = LEGACY_SPT_AYARLAR_PATH
     if path.exists():
         try:
             with path.open("r", encoding="utf-8") as f:
@@ -588,11 +597,11 @@ def _select_spt_records_for_batch(records_by_path, paths):
 
 def _api_key_kontrol(aktif, ayarlar):
     if aktif == "openai" and not ayarlar.get("openai_api_key"):
-        raise RuntimeError("OpenAI API anahtarı bulunamadı. SPT Okuma/ayarlar.json veya OPENAI_API_KEY kontrol edilmeli.")
+        raise RuntimeError("OpenAI API anahtarı bulunamadı. RaporPro ayarları veya OPENAI_API_KEY kontrol edilmeli.")
     if aktif in ("gemini", "gemini_pro") and not ayarlar.get("gemini_api_key"):
-        raise RuntimeError("Gemini API anahtarı bulunamadı. SPT Okuma/ayarlar.json veya GEMINI_API_KEY kontrol edilmeli.")
+        raise RuntimeError("Gemini API anahtarı bulunamadı. RaporPro ayarları veya GEMINI_API_KEY kontrol edilmeli.")
     if aktif == "groq" and not ayarlar.get("groq_api_key"):
-        raise RuntimeError("Groq API anahtarı bulunamadı. SPT Okuma/ayarlar.json veya GROQ_API_KEY kontrol edilmeli.")
+        raise RuntimeError("Groq API anahtarı bulunamadı. RaporPro ayarları veya GROQ_API_KEY kontrol edilmeli.")
 
 
 def yapay_zeka_ile_spt_oku(resim_yolu, ayarlar=None, motor_zorla=None, timeout=45):

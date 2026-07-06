@@ -1,11 +1,13 @@
 import json
 import os
+from pathlib import Path
 import tempfile
 import threading
 import unittest
 
 from openpyxl import load_workbook
 
+import spt_okuma_motoru as spt_motoru
 from ai_motoru import belediye_duzeltme_analiz_et, duzeltme_metnini_kural_ile_analiz_et, duzeltme_yonlendirmeleri_olustur
 from arayuz_proje import ArayuzProjeMixin
 from karot_motoru import derinlik_araligi_coz, derinlik_orta, standart_karot_araliklari, tcr_hesapla
@@ -837,6 +839,30 @@ class SPTMotorTestleri(unittest.TestCase):
             ayarlar = spt_ayarlarini_yukle(path)
             self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-4o-mini-test")
             self.assertEqual(openai_model_sec(ayarlar, "revizyon"), "gpt-5.5-test")
+
+    def test_eski_spt_ayar_dosyasi_merkezi_ayara_tasinir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            eski_yol = spt_motoru.LEGACY_SPT_AYARLAR_PATH
+            yeni_yol = spt_motoru.SPT_AYARLAR_PATH
+            try:
+                spt_motoru.LEGACY_SPT_AYARLAR_PATH = Path(tmp) / "SPT Okuma" / "ayarlar.json"
+                spt_motoru.SPT_AYARLAR_PATH = Path(tmp) / "RaporPro" / "ayarlar.json"
+                spt_motoru.LEGACY_SPT_AYARLAR_PATH.parent.mkdir(parents=True, exist_ok=True)
+                atomic_json_dump(
+                    {"aktif_motor": "openai", "openai_api_key": "test-key", "revizyon_openai_model": "gpt-5.5-test"},
+                    spt_motoru.LEGACY_SPT_AYARLAR_PATH,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+
+                ayarlar = spt_motoru.spt_ayarlarini_yukle()
+
+                self.assertEqual(ayarlar["openai_api_key"], "test-key")
+                self.assertEqual(ayarlar["revizyon_openai_model"], "gpt-5.5-test")
+                self.assertTrue(spt_motoru.SPT_AYARLAR_PATH.exists())
+            finally:
+                spt_motoru.LEGACY_SPT_AYARLAR_PATH = eski_yol
+                spt_motoru.SPT_AYARLAR_PATH = yeni_yol
 
 
 class LitolojiDagilimTestleri(unittest.TestCase):
