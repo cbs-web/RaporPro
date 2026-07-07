@@ -35,6 +35,14 @@ from ekler import (
     uygun_ek_sablonu,
     uygun_ek_seti,
 )
+from yonetmelik_motoru import (
+    YONETMELIK_DIR,
+    duzeltme_yonetmelik_dayanaklari,
+    yonetmelik_ara,
+    yonetmelik_ekle,
+    yonetmelik_sil,
+    yonetmelikleri_listele,
+)
 
 
 class RaporSekmesiMixin:
@@ -256,6 +264,7 @@ class RaporSekmesiMixin:
             [
                 ("Final Kontrol", self.final_kontrol_penceresi),
                 ("Çıktı Merkezi", self.cikti_merkezi_penceresi),
+                ("Yönetmelik Merkezi", self.yonetmelik_merkezi_penceresi),
                 ("Rapor Revizyon Merkezi", self.rapor_revizyon_merkezi_birlesik_penceresi),
                 ("Düzeltme Etiketleri", self.duzeltme_etiketleri_penceresi),
                 ("Sadece Grafikleri Çıkar", self.grafikleri_kaydet),
@@ -1495,6 +1504,194 @@ class RaporSekmesiMixin:
     def rapor_metin_revizyon_uygula_worker(self, report_path, revisions, output_path):
         return metin_revizyonlari_uygula(report_path, revisions, output_path)
 
+    @perf_tracked("report.regulation_center_dialog")
+    def yonetmelik_merkezi_penceresi(self):
+        win = Toplevel(self.root)
+        self.pencere_hazirla(win, "Yönetmelik Merkezi", "1060x720", (820, 560), modal=False)
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+
+        status_var = tk.StringVar(value=f"Yönetmelik klasörü: {YONETMELIK_DIR}")
+
+        top = ttk.PanedWindow(body, orient="horizontal")
+        top.pack(fill="both", expand=True)
+        left = ttk.Frame(top, padding=(0, 0, 8, 0))
+        right = ttk.Frame(top, padding=(8, 0, 0, 0))
+        top.add(left, weight=2)
+        top.add(right, weight=3)
+
+        doc_box = ttk.LabelFrame(left, text="Kayıtlı Yönetmelikler", padding=8)
+        doc_box.pack(fill="both", expand=True)
+        doc_columns = ("title", "chunks", "chars", "added")
+        doc_tree = ttk.Treeview(doc_box, columns=doc_columns, show="headings", selectmode="browse", height=14)
+        for key, title, width, anchor in [
+            ("title", "Ad", 250, "w"),
+            ("chunks", "Parça", 60, "center"),
+            ("chars", "Karakter", 80, "e"),
+            ("added", "Eklenme", 130, "center"),
+        ]:
+            doc_tree.heading(key, text=title)
+            doc_tree.column(key, width=width, anchor=anchor)
+        doc_scroll = ttk.Scrollbar(doc_box, orient="vertical", command=doc_tree.yview)
+        doc_tree.configure(yscrollcommand=doc_scroll.set)
+        doc_scroll.pack(side="right", fill="y")
+        doc_tree.pack(side="left", fill="both", expand=True)
+
+        search_box = ttk.LabelFrame(right, text="Yönetmelikte Ara", padding=8)
+        search_box.pack(fill="both", expand=True)
+        search_row = ttk.Frame(search_box)
+        search_row.pack(fill="x", pady=(0, 8))
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_row, textvariable=search_var)
+        search_entry.pack(side="left", fill="x", expand=True)
+
+        result_columns = ("score", "doc", "section")
+        result_tree = ttk.Treeview(search_box, columns=result_columns, show="headings", selectmode="browse", height=8)
+        for key, title, width, anchor in [
+            ("score", "Skor", 50, "center"),
+            ("doc", "Yönetmelik", 190, "w"),
+            ("section", "Bölüm/Madde", 240, "w"),
+        ]:
+            result_tree.heading(key, text=title)
+            result_tree.column(key, width=width, anchor=anchor)
+        result_tree.pack(fill="x")
+
+        preview = tk.Text(search_box, wrap="word", height=13, font=("Consolas", 9))
+        preview.pack(fill="both", expand=True, pady=(8, 0))
+        preview.insert("1.0", "Arama sonucunu seçince ilgili yönetmelik parçası burada görünecek.")
+        preview.config(state="disabled")
+
+        results_by_iid = {}
+
+        def set_preview(text):
+            preview.config(state="normal")
+            preview.delete("1.0", "end")
+            preview.insert("1.0", text)
+            preview.config(state="disabled")
+
+        def refresh_docs():
+            for iid in doc_tree.get_children():
+                doc_tree.delete(iid)
+            for doc in yonetmelikleri_listele():
+                doc_tree.insert(
+                    "",
+                    "end",
+                    iid=doc.get("id"),
+                    values=(
+                        doc.get("title", ""),
+                        doc.get("chunk_count", 0),
+                        doc.get("char_count", 0),
+                        str(doc.get("added_at", ""))[:16],
+                    ),
+                )
+            status_var.set(f"{len(doc_tree.get_children())} yönetmelik kayıtlı. Klasör: {YONETMELIK_DIR}")
+
+        def add_done(records):
+            refresh_docs()
+            count = len(records or [])
+            status_var.set(f"{count} yönetmelik eklendi.")
+            self.set_status(f"Yönetmelik Merkezi: {count} dosya eklendi.", level="success")
+
+        def add_files():
+            paths = filedialog.askopenfilenames(
+                title="Yönetmelik dosyası seç",
+                filetypes=[
+                    ("Yönetmelik Dosyaları", "*.pdf;*.docx;*.txt;*.md"),
+                    ("PDF", "*.pdf"),
+                    ("Word", "*.docx"),
+                    ("Metin", "*.txt;*.md"),
+                ],
+                parent=win,
+            )
+            if not paths:
+                return
+
+            def worker():
+                records = []
+                for path in paths:
+                    records.append(yonetmelik_ekle(path))
+                return records
+
+            status_var.set("Yönetmelik dosyaları okunuyor ve indeksleniyor...")
+            self.arka_plan_gorevi_baslat(
+                "Yönetmelik ekle",
+                worker,
+                status_start="Yönetmelik dosyaları indeksleniyor.",
+                status_success="Yönetmelik dosyaları eklendi.",
+                status_error="Yönetmelik eklenemedi: {error}",
+                on_success=add_done,
+                on_error=lambda exc: messagebox.showerror("Yönetmelik Merkezi", str(exc), parent=win),
+            )
+
+        def remove_selected():
+            selected = doc_tree.selection()
+            if not selected:
+                messagebox.showwarning("Yönetmelik Merkezi", "Lütfen silinecek yönetmeliği seçin.", parent=win)
+                return
+            title = doc_tree.item(selected[0], "values")[0]
+            if not messagebox.askyesno("Yönetmelik Merkezi", f"'{title}' kaydı silinsin mi?", parent=win):
+                return
+            if yonetmelik_sil(selected[0]):
+                refresh_docs()
+                set_preview("Yönetmelik kaydı silindi.")
+                self.set_status("Yönetmelik kaydı silindi.", level="success")
+
+        def search():
+            query = search_var.get().strip()
+            for iid in result_tree.get_children():
+                result_tree.delete(iid)
+            results_by_iid.clear()
+            if not query:
+                set_preview("Aramak için bir ifade yazın.")
+                return
+            results = yonetmelik_ara(query, limit=12)
+            for idx, item in enumerate(results, start=1):
+                iid = f"r{idx}"
+                results_by_iid[iid] = item
+                result_tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    values=(item.get("score", 0), item.get("doc_title", ""), item.get("chunk_title", "")),
+                )
+            if results:
+                result_tree.selection_set("r1")
+                show_result()
+                status_var.set(f"{len(results)} eşleşme bulundu.")
+            else:
+                set_preview("Eşleşme bulunamadı.")
+                status_var.set("Yönetmelik aramasında eşleşme bulunamadı.")
+
+        def show_result(_event=None):
+            selected = result_tree.selection()
+            if not selected:
+                return
+            item = results_by_iid.get(selected[0])
+            if not item:
+                return
+            lines = [
+                f"Yönetmelik: {item.get('doc_title', '-')}",
+                f"Bölüm/Madde: {item.get('chunk_title', '-')}",
+                f"Skor: {item.get('score', 0)}",
+                "",
+                item.get("excerpt", ""),
+            ]
+            set_preview("\n".join(lines))
+
+        result_tree.bind("<<TreeviewSelect>>", show_result)
+        search_entry.bind("<Return>", lambda _event: search())
+
+        self.modern_button(search_row, text="Ara", command=search, role="primary").pack(side="left", padx=(8, 0))
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(10, 0))
+        self.modern_button(btns, text="Yönetmelik Ekle", command=add_files, role="success").pack(side="left")
+        self.modern_button(btns, text="Seçileni Sil", command=remove_selected, role="danger", outline=True).pack(side="left", padx=6)
+        ttk.Label(btns, textvariable=status_var, foreground="#555555").pack(side="left", fill="x", expand=True, padx=8)
+        self.modern_button(btns, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(side="right")
+
+        refresh_docs()
+
     @perf_tracked("report.unified_revision_dialog")
     def rapor_revizyon_merkezi_birlesik_penceresi(self):
         win = Toplevel(self.root)
@@ -1545,9 +1742,11 @@ class RaporSekmesiMixin:
         workflow_tab = ttk.Frame(notebook, padding=8)
         section_tab = ttk.Frame(notebook, padding=8)
         text_tab = ttk.Frame(notebook, padding=8)
+        regulation_tab = ttk.Frame(notebook, padding=8)
         notebook.add(workflow_tab, text="Yapılacak İşler")
         notebook.add(section_tab, text="Tablo / Bölüm")
         notebook.add(text_tab, text="Metin / Cümle")
+        notebook.add(regulation_tab, text="Yönetmelik Dayanağı")
 
         workflow_box = ttk.LabelFrame(workflow_tab, text="Veri girişi / işlem yönlendirmesi", padding=8)
         workflow_box.pack(fill="both", expand=True)
@@ -1602,6 +1801,16 @@ class RaporSekmesiMixin:
         preview_text.insert("1.0", "Henüz öneri seçilmedi.")
         preview_text.config(state="disabled")
 
+        regulation_box = ttk.LabelFrame(regulation_tab, text="Düzeltme talebiyle ilişkili yönetmelik maddeleri", padding=8)
+        regulation_box.pack(fill="both", expand=True)
+        regulation_text = tk.Text(regulation_box, wrap="word", height=16, font=("Consolas", 9))
+        regulation_scroll = ttk.Scrollbar(regulation_box, orient="vertical", command=regulation_text.yview)
+        regulation_text.configure(yscrollcommand=regulation_scroll.set)
+        regulation_scroll.pack(side="right", fill="y")
+        regulation_text.pack(side="left", fill="both", expand=True)
+        regulation_text.insert("1.0", "Yönetmelik Merkezi'ne dosya eklerseniz, analizden sonra ilgili dayanaklar burada görünecek.")
+        regulation_text.config(state="disabled")
+
         controls = ttk.Frame(body)
         controls.pack(fill="x", pady=(8, 0))
         motor_var = tk.StringVar(value="otomatik")
@@ -1626,6 +1835,12 @@ class RaporSekmesiMixin:
             workflow_text.delete("1.0", "end")
             workflow_text.insert("1.0", text)
             workflow_text.config(state="disabled")
+
+        def set_regulation_text(text):
+            regulation_text.config(state="normal")
+            regulation_text.delete("1.0", "end")
+            regulation_text.insert("1.0", text)
+            regulation_text.config(state="disabled")
 
         def run_guidance_action(action):
             key = (action or {}).get("action_key") or (action or {}).get("target")
@@ -1680,6 +1895,37 @@ class RaporSekmesiMixin:
                     outline=idx != 0,
                 )
                 btn.pack(side="left", padx=(0, 6), pady=2)
+
+        def set_regulation_result(result):
+            result = result or {}
+            items = list(result.get("items") or [])
+            warnings = list(result.get("warnings") or [])
+            docs = list(result.get("documents") or [])
+            lines = []
+            if docs:
+                lines.append(f"Kayıtlı yönetmelik: {len(docs)}")
+            else:
+                lines.append("Kayıtlı yönetmelik yok.")
+            if warnings:
+                lines.append("")
+                lines.extend(f"- {warning}" for warning in warnings)
+            if items:
+                lines.append("")
+                lines.append("Bulunan dayanaklar:")
+                lines.append("")
+                for idx, item in enumerate(items, start=1):
+                    lines.append(f"{idx}. {item.get('doc_title', '-')}")
+                    lines.append(f"   Bölüm/Madde: {item.get('chunk_title', '-')}")
+                    lines.append(f"   Skor: {item.get('score', 0)}")
+                    if item.get("source_text"):
+                        lines.append(f"   Kaynak düzeltme: {item.get('source_text')}")
+                    lines.append("   Alıntı/özet:")
+                    lines.append(f"   {item.get('excerpt', '')}")
+                    lines.append("")
+            elif docs and not warnings:
+                lines.append("")
+                lines.append("Bu düzeltme metniyle eşleşen yönetmelik maddesi bulunamadı.")
+            set_regulation_text("\n".join(lines).strip())
 
         def set_tags(tags):
             selected = set(tags or [])
@@ -1772,8 +2018,10 @@ class RaporSekmesiMixin:
             tag_result = result.get("tag_result") or {}
             text_result = result.get("text_result") or {}
             guidance = result.get("guidance") or []
+            regulation = result.get("regulation_result") or {}
             tags = tag_result.get("tags") or []
             text_items = text_result.get("items") or []
+            regulation_items = regulation.get("items") or []
             lines = [
                 f"Bölüm/etiket kaynağı: {tag_result.get('source', '-')}",
                 f"Metin düzeltme kaynağı: {text_result.get('source', '-')}",
@@ -1781,6 +2029,7 @@ class RaporSekmesiMixin:
                 f"Önerilen yapılacak iş: {len(guidance)}",
                 f"Programın önerdiği bölüm sayısı: {len(tags)}",
                 f"Programın bulduğu metin düzeltmesi: {len(text_items)}",
+                f"Bulunan yönetmelik dayanağı: {len(regulation_items)}",
             ]
             if guidance:
                 lines.append("Karar: Önce veri girişi/güncelleme gerektiren iş olabilir; Yapılacak İşler sekmesini kontrol et.")
@@ -1805,6 +2054,7 @@ class RaporSekmesiMixin:
                 for tag in tags:
                     lines.append(f"- {tag}")
             warnings = list(tag_result.get("warnings") or []) + list(text_result.get("warnings") or [])
+            warnings += list(regulation.get("warnings") or [])
             if warnings:
                 lines.append("")
                 lines.append("Uyarılar:")
@@ -1817,8 +2067,10 @@ class RaporSekmesiMixin:
             tag_result = result.get("tag_result") or {}
             text_result = result.get("text_result") or {}
             guidance = result.get("guidance") or []
+            regulation_result = result.get("regulation_result") or {}
             set_tags(tag_result.get("tags") or [])
             set_guidance(guidance)
+            set_regulation_result(regulation_result)
             clear_text_results()
             text_items = text_result.get("items") or []
             for index, item in enumerate(text_items, start=1):
@@ -1848,10 +2100,12 @@ class RaporSekmesiMixin:
                 notebook.select(workflow_tab)
             elif text_items:
                 notebook.select(text_tab)
+            elif regulation_result.get("items"):
+                notebook.select(regulation_tab)
             else:
                 notebook.select(section_tab)
             status_var.set(
-                f"Analiz tamamlandı. {len(guidance)} iş, {len(tag_result.get('tags') or [])} bölüm, {len(text_items)} metin düzeltmesi önerildi."
+                f"Analiz tamamlandı. {len(guidance)} iş, {len(tag_result.get('tags') or [])} bölüm, {len(text_items)} metin düzeltmesi, {len(regulation_result.get('items') or [])} yönetmelik dayanağı önerildi."
             )
 
         def analyze():
@@ -1866,6 +2120,7 @@ class RaporSekmesiMixin:
             set_summary("Analiz yapılıyor...")
             clear_text_results()
             set_guidance([])
+            set_regulation_result({"items": [], "documents": yonetmelikleri_listele(), "warnings": ["Analiz yapılıyor..."]})
             status_var.set("Belediye düzeltmesi tek merkezde analiz ediliyor.")
             motor = motor_var.get()
             self.arka_plan_gorevi_baslat(
@@ -1967,6 +2222,7 @@ class RaporSekmesiMixin:
             "tag_result": belediye_duzeltme_analiz_et(text, motor=motor, timeout=45, ai_kullan=motor != "kural"),
             "text_result": metin_revizyon_analiz_et(report_path, text, motor=motor, timeout=45, ai_kullan=motor != "kural"),
             "guidance": duzeltme_yonlendirmeleri_olustur(text),
+            "regulation_result": duzeltme_yonetmelik_dayanaklari(text),
         }
 
     @perf_tracked("report.unified_revision.apply")

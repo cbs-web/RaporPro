@@ -73,6 +73,7 @@ from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import validate_rows as wb_validate_rows
 from workbook_motoru import WORKBOOK_SHEET_DEFS
 from task_engine import TkTaskEngine
+from yonetmelik_motoru import duzeltme_yonetmelik_dayanaklari, yonetmelik_ara, yonetmelik_ekle, yonetmelikleri_listele
 
 
 class _ImmediateTkRoot:
@@ -863,6 +864,40 @@ class SPTMotorTestleri(unittest.TestCase):
             finally:
                 spt_motoru.LEGACY_SPT_AYARLAR_PATH = eski_yol
                 spt_motoru.SPT_AYARLAR_PATH = yeni_yol
+
+
+class YonetmelikMotorTestleri(unittest.TestCase):
+    def test_yonetmelik_eklenir_ve_duzeltme_dayanagi_bulunur(self):
+        metin = """
+        ZEMIN VE TEMEL ETUDU UYGULAMA ESASLARI
+
+        MADDE 1 - Sondajlar ve arazi calismalari
+        Sondaj derinligi, yapi ve zemin kosullarina gore yeterli olacak sekilde belirlenir.
+
+        MADDE 2 - Laboratuvar deneyleri
+        Laboratuvar deneyleri zemin birimlerini temsil edecek araliklarda yapilir.
+        Deney bulunmayan seviyeler icin ek laboratuvar deneyi istenebilir.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "yonetmelik.txt")
+            atomic_write_text(src, metin)
+
+            record = yonetmelik_ekle(src, title="Test Yönetmeliği", base_dir=tmp)
+            self.assertEqual(record["title"], "Test Yönetmeliği")
+            self.assertGreater(record["chunk_count"], 0)
+            self.assertEqual(len(yonetmelikleri_listele(tmp)), 1)
+
+            hits = yonetmelik_ara("25.50 seviyesinde ek laboratuvar deneyi isteniyor", base_dir=tmp)
+            self.assertTrue(hits)
+            self.assertEqual(hits[0]["doc_title"], "Test Yönetmeliği")
+            self.assertIn("Laboratuvar", hits[0]["chunk_title"])
+
+            result = duzeltme_yonetmelik_dayanaklari(
+                "Lab deneyleri eksik. 25.50 ve 27.00 m seviyelerinde deney eklenmesi gerekmektedir.",
+                base_dir=tmp,
+            )
+            self.assertTrue(result["items"])
+            self.assertFalse(result["warnings"])
 
 
 class LitolojiDagilimTestleri(unittest.TestCase):
