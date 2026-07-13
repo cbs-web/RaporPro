@@ -7,6 +7,7 @@ from sabitler import *
 from yardimcilar import *
 from performans import perf_tracked
 from harita_motoru import TopluHarita
+from harita_referans import ss_harita_etiketi
 from kalite_kontrol import analyze_word_template, format_template_analysis, get_supported_tags
 
 
@@ -48,7 +49,7 @@ class ArayuzAraclarMixin:
 
         map_data = {
             "sondaj": [s.get("no", f"SK-{i+1}") for i, s in enumerate(self.veri["sondaj"])],
-            "ss": [s.get("ad", f"SS-{i+1}") for i, s in enumerate(self.veri["jeofizik"]["ss_list"])],
+            "ss": [ss_harita_etiketi(s.get("ad", ""), i) for i, s in enumerate(self.veri["jeofizik"]["ss_list"])],
             "mt": [m.get("no", f"MT-{i+1}") for i, m in enumerate(self.veri["jeofizik"]["mt_list"])],
             "initial": initial,
         }

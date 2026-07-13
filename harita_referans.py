@@ -1,7 +1,16 @@
 import os
+import re
 import xml.etree.ElementTree as ET
 
 import numpy as np
+
+
+def ss_harita_etiketi(ad, index):
+    """Serim adini haritalarda kullanilan SS-N bicimine donusturur."""
+    text = str(ad or "").strip()
+    match = re.search(r"(?:serim|ss)\s*[-_:]?\s*(\d+)", text, flags=re.IGNORECASE)
+    number = int(match.group(1)) if match else int(index) + 1
+    return f"SS-{number}"
 
 
 def kml_koordinatlari_oku(path, max_points=200):

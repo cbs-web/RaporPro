@@ -24,6 +24,8 @@ class JeofizikMixin:
         # YENİ BUTON: Jeofizik Excel Yükle
         tk.Button(top, text="Jeofizik Excel'den Veri Al", command=self.jeo_excel_yukle_ve_onizle,
                   bg="#34495E", fg="white", font=("Arial", 9, "bold")).pack(side="left", padx=20)
+        tk.Button(top, text="Jeofizik Sheet", command=self.jeofizik_sheet_ac,
+                  bg="#1F618D", fg="white", font=("Arial", 9, "bold")).pack(side="left", padx=(0, 8))
 
         # ANA BÖLÜM (Sismik - MT - Detaylar ve Önizleme)
         pan_main = tk.PanedWindow(p, orient=tk.VERTICAL, bg=COLOR_BG, sashwidth=4)
@@ -135,6 +137,8 @@ class JeofizikMixin:
         self.jeo_excel_path = f
         if hasattr(self, 'lbl_jeo_excel'):
             self.lbl_jeo_excel.config(text=os.path.basename(f), foreground=COLOR_SUCCESS)
+            if hasattr(self, "_jeofizik_label_guncelle"):
+                self._jeofizik_label_guncelle()
         self.set_status(f"Jeofizik Excel yüklendi: {os.path.basename(f)}", level="success")
 
         # raporlama.py'deki mantığı kullanarak veriyi oku (Özet Mantık)

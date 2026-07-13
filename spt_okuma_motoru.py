@@ -10,7 +10,10 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
+from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
+from performans import log_exception
 from yardimcilar import atomic_json_dump, safe_float, temizle_baslik
+from uygulama_yollari import SOURCE_DIR, kullanici_veri_dizini, kullanici_yolu
 
 
 HEDEF_DERINLIKLER = [
@@ -27,14 +30,23 @@ HEDEF_DERINLIK_ARALIKLARI = [
 
 SPT_OKUMA_KLASORU = Path.home() / "Desktop" / "SPT Okuma"
 LEGACY_SPT_AYARLAR_PATH = SPT_OKUMA_KLASORU / "ayarlar.json"
-RAPORPRO_CONFIG_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "RaporPro"
+RAPORPRO_CONFIG_DIR = kullanici_veri_dizini()
 SPT_AYARLAR_PATH = RAPORPRO_CONFIG_DIR / "ayarlar.json"
-SPT_LOG_DIR = Path(__file__).resolve().parent / "logs"
-SPT_GECMIS_PATH = SPT_LOG_DIR / "spt_okuma_gecmisi.jsonl"
-SPT_OGRENME_DIR = Path(__file__).resolve().parent / "spt_ogrenme_verisi"
-SPT_CROP_DIR = SPT_LOG_DIR / "spt_kirpilanlar"
+SPT_LOG_DIR = Path(kullanici_yolu("logs"))
+SPT_GECMIS_PATH = Path(
+    kullanici_yolu(
+        "logs",
+        "spt_okuma_gecmisi.jsonl",
+        legacy=SOURCE_DIR / "logs" / "spt_okuma_gecmisi.jsonl",
+    )
+)
+SPT_OGRENME_DIR = Path(
+    kullanici_yolu("spt_ogrenme_verisi", legacy=SOURCE_DIR / "spt_ogrenme_verisi")
+)
+SPT_CROP_DIR = Path(kullanici_yolu("logs", "spt_kirpilanlar"))
 DEFAULT_SPT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_REVIZYON_OPENAI_MODEL = "gpt-5.5"
+SECRET_SETTING_KEYS = ("openai_api_key", "gemini_api_key", "groq_api_key")
 
 
 @dataclass
@@ -353,7 +365,23 @@ def spt_ayarlarini_yukle(path=None):
             with path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
+                secured_data = dict(data)
+                migrated = False
+                for key in SECRET_SETTING_KEYS:
+                    raw_value = str(data.get(key, "") or "")
+                    if not raw_value:
+                        continue
+                    try:
+                        data[key] = gizli_deger_coz(raw_value)
+                        if not gizli_deger_mi(raw_value):
+                            secured_data[key] = gizli_deger_sakla(raw_value)
+                            migrated = True
+                    except Exception as exc:
+                        data[key] = ""
+                        log_exception(f"spt.settings.decrypt.{key}", exc_value=exc)
                 ayarlar.update({key: str(value) for key, value in data.items() if value is not None})
+                if migrated:
+                    atomic_json_dump(secured_data, path, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
@@ -401,7 +429,8 @@ def spt_ayarlarini_kaydet(ayarlar, path=None):
             mevcut = {}
     for key in ("aktif_motor", "openai_api_key", "openai_model", "revizyon_openai_model", "gemini_api_key", "groq_api_key"):
         if key in ayarlar:
-            mevcut[key] = ayarlar.get(key, "")
+            value = ayarlar.get(key, "")
+            mevcut[key] = gizli_deger_sakla(value) if key in SECRET_SETTING_KEYS and value else value
     atomic_json_dump(mevcut, path, ensure_ascii=False, indent=2)
     return path
 

@@ -318,19 +318,15 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         line, = self.ax.plot([x1, x2], [y1, y2], 'r--', linewidth=2.5)
         m2, = self.ax.plot(x2, y2, 'ro', markersize=4)
         m1, = self.ax.plot(x1, y1, 'ro', markersize=4)
-        dx, dy = x2 - x1, y2 - y1
-        length = math.hypot(dx, dy) or 1
-        nx, ny = -dy / length, dx / length
-        offset = self.ax.get_xlim()[1] * 0.025
-        mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
+        text_x, text_y = self._ss_label_position(x1, y1)
         txt = self.ax.text(
-            mid_x + nx * offset,
-            mid_y + ny * offset,
+            text_x,
+            text_y,
             isim,
             fontsize=11,
             fontweight='bold',
             color='red',
-            ha='center',
+            ha='left',
             va='center',
         )
         self.drawn_objects["ss"][item_id] = {"markers": [m1, line, m2], "texts": [txt]}
@@ -338,6 +334,10 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.check_tree_item(item_id)
         self.set_mod_visibility("ss", self.mod_gorunur("ss"))
         return True
+
+    @staticmethod
+    def _ss_label_position(x1, y1):
+        return x1 + 15, y1 - 15
 
     def koordinattan_otomatik_yerlestir(self, overwrite=False):
         try:
@@ -417,13 +417,17 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         for item_id, props in objs.get("ss", {}).items():
             coords = props["coords"]
             x1, y1 = coords[0]; x2, y2 = coords[1]
-            tx, ty = props["x"], props["y"]
+            if props.get("label_anchor") == "start":
+                tx, ty = props["x"], props["y"]
+            else:
+                tx, ty = self._ss_label_position(x1, y1)
             
             line, = self.ax.plot([x1, x2], [y1, y2], 'r--', linewidth=2.5)
             m2, = self.ax.plot(x2, y2, 'ro', markersize=4)
             m1, = self.ax.plot(x1, y1, 'ro', markersize=4)
             
-            txt = self.ax.text(tx, ty, props["text"], fontsize=props["fontsize"], fontweight='bold', color=props["color"], ha='center', va='center')
+            isim = self.tree.item(item_id, 'text').replace(' (âœ“)', '') if self.tree.exists(item_id) else props["text"]
+            txt = self.ax.text(tx, ty, isim, fontsize=props["fontsize"], fontweight='bold', color=props["color"], ha='left', va='center')
             
             self.drawn_objects["ss"][item_id] = {"markers": [m1, line, m2], "texts": [txt]}
             self.coords_memory["ss"][item_id] = coords
@@ -452,7 +456,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             if not data["texts"]: continue
             t = data["texts"][0]
             tx, ty = t.get_position()
-            state["objects"]["ss"][item_id] = {"text": t.get_text(), "x": tx, "y": ty, "color": t.get_color(), "fontsize": t.get_fontsize(), "coords": self.coords_memory["ss"][item_id]}
+            state["objects"]["ss"][item_id] = {"text": t.get_text(), "x": tx, "y": ty, "color": t.get_color(), "fontsize": t.get_fontsize(), "coords": self.coords_memory["ss"][item_id], "label_anchor": "start"}
         return state
 
     def trigger_save_state(self):
@@ -571,12 +575,12 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             if item_id not in self.drawn_objects.get("ss", {}) or item_id not in self.coords_memory.get("ss", {}):
                 return
             coords = self.coords_memory["ss"][item_id]
-            mid = ((coords[0][0] + coords[1][0]) / 2, (coords[0][1] + coords[1][1]) / 2)
+            anchor = coords[0]
             elements = self.drawn_objects["ss"][item_id]
             text_offsets = []
             for txt in elements.get("texts", []):
                 tx, ty = txt.get_position()
-                text_offsets.append((txt, tx - mid[0], ty - mid[1]))
+                text_offsets.append((txt, tx - anchor[0], ty - anchor[1]))
             target["text_offsets"] = text_offsets
         self.dragging_object = target
         self.lbl_talimat.config(text="İşaret sürükleniyor. Bıraktığınız yerde manuel düzeltme kaydedilebilir.")
@@ -635,11 +639,10 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                 markers[2].set_data([x2], [y2])
             except Exception as exc:
                 log_exception("resim_isaretleyici.ss_artists_guncelle", exc_value=exc)
-        mid = ((x1 + x2) / 2, (y1 + y2) / 2)
         if text_offsets is None:
             text_offsets = []
         for txt, off_x, off_y in text_offsets:
-            txt.set_position((mid[0] + off_x, mid[1] + off_y))
+            txt.set_position((x1 + off_x, y1 + off_y))
 
     def get_clicked_text_target(self, event):
         for mod, items in self.drawn_objects.items():
@@ -733,14 +736,9 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                     m2, = self.ax.plot(x2, y2, 'ro', markersize=4)
                     m1, = self.ax.plot(x1, y1, 'ro', markersize=4)
                     
-                    dx, dy = x2 - x1, y2 - y1; length = math.hypot(dx, dy)
-                    if length == 0: length = 1
-                    nx, ny = -dy/length, dx/length
-                    offset = self.ax.get_xlim()[1] * 0.025
-                    mid_x, mid_y = (x1+x2)/2, (y1+y2)/2
-                    t2_x, t2_y = mid_x + (nx * offset), mid_y + (ny * offset)
+                    t2_x, t2_y = self._ss_label_position(x1, y1)
                     
-                    txt = self.ax.text(t2_x, t2_y, isim, fontsize=11, fontweight='bold', color='red', ha='center', va='center')
+                    txt = self.ax.text(t2_x, t2_y, isim, fontsize=11, fontweight='bold', color='red', ha='left', va='center')
                     
                     self.drawn_objects["ss"][self.active_id] = {"markers": [m1, line, m2], "texts": [txt]}
                     self.coords_memory["ss"][self.active_id] = [(x1,y1), (x2,y2)]

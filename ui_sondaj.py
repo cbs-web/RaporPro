@@ -1,4 +1,5 @@
 ﻿import datetime
+import copy
 import os
 import tkinter as tk
 from tkinter import Canvas, Frame, Scrollbar, Toplevel, filedialog, messagebox, ttk
@@ -8,6 +9,7 @@ import matplotlib.pyplot as plt
 
 from cizim import VeriGirisPenceresi
 from motor import GeoEngine
+from pmt_excel_motoru import pmt_excel_dosyalarini_oku, pmt_kayitlarini_veriye_aktar
 from performans import perf_tracked
 from sabitler import *
 from karot_motoru import derinlik_baslangic
@@ -61,6 +63,7 @@ class SondajMixin:
             ("+ Yeni Sondaj Ekle", self.sondaj_ekle, COLOR_ACCENT, "white", "Yeni bir sondaj satırı oluşturur"),
             ("Workbook", self.veri_giris_workbook_tksheet_ac, "#34495E", "white", "Excel benzeri toplu veri girişini açar"),
             ("SPT Merkezi", self.spt_okuma_merkezi_ac, "#148F77", "white", "Excel ve fotoğraf SPT okuma, kontrol ve aktarım merkezini açar"),
+            ("PMT Excel Al", self.pmt_excel_aktar, "#8E44AD", "white", "Presiyometre Excel dosyalarından PMT verilerini aktarır"),
             ("Karot TCR", self.karot_tcr_merkezi_ac, "#7D3C98", "white", "Karot sandığı fotoğrafından kalibrasyonlu TCR hesabı yapar"),
             ("Akıllı Tamamla", self.sondaj_akilli_tamamla, "#7DCEA0", "#111", "Eksik temel sondaj alanlarını otomatik tamamlar"),
             ("Genel Kaydet", self.sondaj_verilerini_kaydet, COLOR_SUCCESS, "white", "Sondaj tablosundaki değişiklikleri belleğe alır"),
@@ -75,6 +78,36 @@ class SondajMixin:
         scrollbar_y.pack(side="right", fill="y"); scrollbar_x.pack(side="bottom", fill="x"); canvas.pack(side="left", fill="both", expand=True)
         self.sondaj_headers = [("Sondaj No", "no"), ("Derinlik", "der"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"), ("Baş. Tarihi", "bas_tar"), ("Bit. Tarihi", "bit_tar"), ("YASS İlk", "yass_d1"), ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")]
         self.sondaj_tablosunu_ciz()
+
+    @perf_tracked("pmt.excel_import")
+    def pmt_excel_aktar(self):
+        paths = filedialog.askopenfilenames(
+            title="Presiyometre Excel Dosyalarını Seç",
+            filetypes=[("Excel", "*.xlsm;*.xlsx"), ("Tüm dosyalar", "*.*")],
+        )
+        if not paths:
+            return
+        self.guncelle_veri_objesi(silent=True)
+        result = pmt_excel_dosyalarini_oku(paths)
+        apply_result = pmt_kayitlarini_veriye_aktar(self.veri, result.get("records", []), update_existing=True)
+        self.sondaj_tablosunu_ciz()
+        if hasattr(self, "ozet_yenile"):
+            self.ozet_yenile(collect=False)
+        if hasattr(self, "otomatik_kaydet"):
+            self.otomatik_kaydet()
+
+        warnings = (result.get("warnings", []) or []) + (apply_result.get("warnings", []) or [])
+        count_text = (
+            f"{apply_result.get('imported', 0)} yeni PMT, "
+            f"{apply_result.get('updated', 0)} güncelleme, "
+            f"{apply_result.get('skipped', 0)} atlanan"
+        )
+        if result.get("records"):
+            self.set_status(f"PMT Excel aktarımı tamamlandı: {count_text}.", level="success" if not warnings else "warning")
+        else:
+            self.set_status("PMT Excel aktarımı: okunabilir kayıt bulunamadı.", level="warning")
+        if warnings:
+            messagebox.showwarning("PMT Excel Aktarımı", count_text + "\n\n" + "\n".join(warnings[:12]))
 
     @perf_tracked("sondaj.table_redraw")
     def sondaj_tablosunu_ciz(self):
@@ -714,7 +747,7 @@ class SondajMixin:
             if not ayarlar.get("varsayilan_cikti_klasor"):
                 ayarlar["varsayilan_cikti_klasor"] = folder
             win.destroy()
-            self.toplu_log_kaydet_baslat(list(sondajlar), config)
+            self.toplu_log_kaydet_baslat(copy.deepcopy(sondajlar), config)
 
         tk.Button(btns, text="Başlat", command=start_export, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=(5, 0))
         tk.Button(btns, text="Vazgeç", command=win.destroy, bg="#ECF0F1").pack(side="right", padx=5)
@@ -837,7 +870,10 @@ class SondajMixin:
         saved_count = 0
         saved_files = []
         errors = []
+        plot_lock_acquired = False
         try:
+            GeoEngine.plot_lock.acquire()
+            plot_lock_acquired = True
             klasor = config["folder"]
             fmt = config.get("format", "jpg")
             ext = "jpg" if fmt in ("jpg", "jpeg") else fmt
@@ -893,6 +929,9 @@ class SondajMixin:
             error_text = str(exc)
             self._toplu_log_progress_bitti(progress, error_text, "error")
             self.set_status(f"Toplu log kaydı hatası: {error_text}", level="error")
+        finally:
+            if plot_lock_acquired:
+                GeoEngine.plot_lock.release()
 
     def sondaj_ekle(self):
         self.sondaj_verilerini_kaydet()

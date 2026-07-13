@@ -14,11 +14,13 @@ from widgets import UndoRedoEntry
 from ui_cikti import CiktiMerkeziMixin
 from ui_haritalar import HaritalarSekmesiMixin
 from ui_jeofizik import JeofizikMixin
+from ui_jeofizik_sheet import JeofizikSheetMixin
 from ui_karot_tcr import KarotTCRMixin
 from ui_kesit import KesitCizimMixin
 from ui_kontrol import KontrolPaneliMixin
 from ui_lab_sheet import LabSheetMixin
 from ui_rapor import RaporSekmesiMixin
+from ui_sondaj_derinlik import SondajDerinlikHesabiMixin
 from ui_spt_okuma import SPTOkumaMixin
 from ui_sondaj import SondajMixin
 from ui_workbook import WorkbookMixin
@@ -26,14 +28,21 @@ from arayuz_temel import ArayuzTemelMixin
 from arayuz_proje import ArayuzProjeMixin
 from arayuz_ozet import ArayuzOzetMixin
 from arayuz_araclar import ArayuzAraclarMixin
+from yonetmelik_motoru import varsayilan_yonetmelikleri_hazirla
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-AUTOSAVE_DIR = os.path.join(APP_DIR, "autosave")
-AUTOSAVE_PATH = os.path.join(AUTOSAVE_DIR, "raporpro_autosave.json")
-RECENT_PROJECTS_PATH = os.path.join(APP_DIR, "recent_projects.json")
+APP_DIR = str(SOURCE_DIR)
+AUTOSAVE_PATH = str(
+    kullanici_yolu(
+        "autosave",
+        "raporpro_autosave.json",
+        legacy=SOURCE_DIR / "autosave" / "raporpro_autosave.json",
+    )
+)
+AUTOSAVE_DIR = os.path.dirname(AUTOSAVE_PATH)
 # ============================================================================
 # ÖZEL SPT VERİ GİRİŞ PENCERESİ (OTOMATİK HESAPLAMA VE DERİNLİK ARTIŞI)
-class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, ArayuzAraclarMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
+class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
     @perf_tracked("ui.__init__")
     def __init__(self, root):
         self.root = root
@@ -71,6 +80,11 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             state_callback=self._task_engine_state_changed,
             max_workers=2,
         )
+        self._startup_yonetmelik_error = None
+        try:
+            varsayilan_yonetmelikleri_hazirla()
+        except Exception as exc:
+            self._startup_yonetmelik_error = exc
         self.recent_projects = self.recent_projects_yukle()
         
         self.root.bind_all("<Button-1>", self.track_focus, add="+")
@@ -89,6 +103,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             self.set_status(f"Modern tema etkin: {self.bootstrap_theme_name}", level="success")
         if getattr(self, "_startup_load_error", None):
             self.set_status(f"Varsayılan proje okunamadı: {self._startup_load_error}", level="warning")
+        if getattr(self, "_startup_yonetmelik_error", None):
+            self.set_status(f"Yerleşik yönetmelik hazırlanamadı: {self._startup_yonetmelik_error}", level="warning")
         self.kurtarma_durumu_bildir()
         self.root.protocol("WM_DELETE_WINDOW", self.uygulamayi_kapat)
         self.start_autosave()
@@ -142,6 +158,27 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
                 pass
 
     def uygulamayi_kapat(self):
+        if hasattr(self, "task_engine"):
+            active = self.task_engine.snapshot().active_count
+            if active:
+                if getattr(self, "_gorevlerden_sonra_kapat", False):
+                    return
+                names = self.task_engine.active_task_names()
+                detail = "\n".join(f"- {name}" for name in names[:5])
+                if len(names) > 5:
+                    detail += f"\n- ... ve {len(names) - 5} görev daha"
+                wait_for_tasks = messagebox.askyesno(
+                    "Devam Eden İşlemler",
+                    f"{active} arka plan işlemi devam ediyor:\n\n{detail}\n\n"
+                    "Çıktıların bozulmaması için program işlemler tamamlanınca otomatik kapatılsın mı?",
+                )
+                if not wait_for_tasks:
+                    self.set_status("Kapatma iptal edildi; arka plan işlemleri devam ediyor.", level="warning")
+                    return
+                self._gorevlerden_sonra_kapat = True
+                self.set_status("İşlemler tamamlanınca program kapatılacak.", level="info")
+                self.root.after(250, self._gorevler_bittiginde_kapat)
+                return
         if not self.kaydedilmemis_degisiklik_onayi():
             return
         self._closing = True
@@ -155,6 +192,16 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             self.root.destroy()
         except tk.TclError:
             pass
+
+    def _gorevler_bittiginde_kapat(self):
+        if getattr(self, "_closing", False):
+            return
+        active = self.task_engine.snapshot().active_count if hasattr(self, "task_engine") else 0
+        if active:
+            self.root.after(250, self._gorevler_bittiginde_kapat)
+            return
+        self._gorevlerden_sonra_kapat = False
+        self.uygulamayi_kapat()
 
     def otomatik_kaydet(self):
         if getattr(self, "_closing", False):
@@ -246,6 +293,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
         self.toolbar_menu(toolbar, "Araçlar", [
             ("KML Sınır Seç", self.kml_sec),
             ("Tüm Koordinatları Seç", self.toplu_harita_ac),
+            ("Sondaj Derinliği Hesabı", self.sondaj_derinlik_hesabi_penceresi),
             None,
             ("Ayarlar", self.ayarlar_penceresi),
             ("Etiketler", self.etiket_yoneticisi),
@@ -317,6 +365,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             ("Hn", "yukseklik", 9),
             ("Yük. Sınıfı", "yukseklik_sinif", 12),
             ("Temel Alanı", "temel_alan", 11),
+            ("B (m)", "temel_genislik", 8),
             ("İnşaat Alanı", "ins", 12),
             ("Kazı Der.", "der", 9),
             ("Temel Tipi", "tem", 14),
@@ -474,6 +523,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             ("Olası Kazı Derinliği (m)", "der"),
             ("Temel Tipi", "tem"),
             ("Yerel Zemin Sınıfı", "ysinif"),
+            ("Etkili Temel Genişliği B (m)", "temel_genislik"),
         ]
         for i, (l, k) in enumerate(fields_r):
             ttk.Label(right_f, text=l).grid(row=i, column=0, sticky="e", padx=5, pady=5)
@@ -641,6 +691,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
                 self._lab_label_guncelle()
         if hasattr(self, 'lbl_jeo_excel'):
             self.lbl_jeo_excel.config(text=os.path.basename(self.jeo_excel_path) if self.jeo_excel_path else "Henüz jeofizik dosyası seçilmedi", foreground=COLOR_SUCCESS if self.jeo_excel_path else "red")
+            if hasattr(self, "_jeofizik_label_guncelle"):
+                self._jeofizik_label_guncelle()
         if hasattr(self, 'lbl_yer'):
             self.lbl_yer.config(text=os.path.basename(self.img_yer) if self.img_yer else "-", foreground=COLOR_SUCCESS if self.img_yer else "#333")
         if hasattr(self, 'lbl_tkgm'):

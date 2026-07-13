@@ -17,8 +17,9 @@ from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
-from yardimcilar import temizle_baslik, zemin_sinifi_cevir, safe_float
+from yardimcilar import atomic_docx_save, temizle_baslik, zemin_sinifi_cevir, safe_float
 from motor import GeoEngine
+from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_ss_koordinatlarini_koru
 from performans import log_exception, perf_log, perf_timer
 from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
@@ -544,11 +545,12 @@ def first_existing_path(*paths):
     return None
 
 def mjh_resim_yolu(app_instance):
-    return first_existing_path(
-        getattr(app_instance, 'img_mjh', None),
-        getattr(app_instance, 'img_yer', None),
-        getattr(app_instance, 'img_tkgm', None),
-    )
+    """Yalnız mühendislik jeolojisi haritasını döndür.
+
+    Farklı harita türlerini yedek olarak kullanmak, raporda doğru etikete yanlış
+    paftanın yerleşmesine neden olur.
+    """
+    return first_existing_path(getattr(app_instance, 'img_mjh', None))
 
 def _report_detail(**items):
     parts = []
@@ -628,8 +630,20 @@ def raporla(app_instance, final_path=None, autosave=True):
         
         jeo_excel_path = getattr(app_instance, 'jeo_excel_path', None)
         param_ss_list = []
+        jeo_sheet_rows = app_instance.veri.get("jeofizik_sheet", {}).get("rows", []) if isinstance(getattr(app_instance, "veri", None), dict) else []
+        jeo_sheet_ready = any(any(str(cell).strip() for cell in row) for row in jeo_sheet_rows or [])
         
-        if jeo_excel_path:
+        if jeo_sheet_ready:
+            try:
+                with perf_timer("report.read_jeofizik_sheet", "internal"):
+                    param_ss_list = jeofizik_sheet_rows_to_ss_list(jeo_sheet_rows)
+                    jeofizik_ss_koordinatlarini_koru(param_ss_list, ss_list)
+            except Exception as e:
+                _log_silent("jeofizik_sheet_parse", e)
+                traceback.print_exc()
+                param_ss_list = []
+
+        if not param_ss_list and jeo_excel_path:
             try:
                 with perf_timer("report.read_jeofizik_excel", jeo_excel_path):
                     df_jeo = read_table_file(jeo_excel_path, header=None)
@@ -679,7 +693,8 @@ def raporla(app_instance, final_path=None, autosave=True):
                 _log_silent("jeofizik_excel_parse", e)
                 traceback.print_exc()
                 param_ss_list = ss_list 
-        else: param_ss_list = ss_list
+        elif not param_ss_list:
+            param_ss_list = ss_list
         param_layer_count = sum(len(ss.get("layers", []) or []) for ss in param_ss_list)
         report_step(
             "jeofizik_data_ready",
@@ -1383,7 +1398,7 @@ def raporla(app_instance, final_path=None, autosave=True):
                     heading_count = buyuk_basliklari_yeni_sayfaya_al(doc)
                 report_step("major_headings_page_break", _report_detail(headings=heading_count))
             with perf_timer("report.save_docx", final):
-                doc.save(final)
+                atomic_docx_save(doc, final)
             report_step("save_docx", _file_perf_detail(final))
             return True, "Rapor oluşturuldu!"
         return False, "İptal edildi."

@@ -2,6 +2,7 @@ import os
 import tkinter as tk
 from tkinter import Toplevel, ttk
 
+from jeofizik_sheet_motoru import jeofizik_sheet_ozeti, jeofizik_sheet_var_mi
 from kalite_kontrol import build_preflight_report
 from kesit_kalite import build_section_quality_report
 from performans import log_exception, perf_tracked
@@ -40,6 +41,8 @@ class KontrolPaneliMixin:
         jeofizik = self.veri.get("jeofizik", {})
         ss_list = jeofizik.get("ss_list", [])
         mt_list = jeofizik.get("mt_list", [])
+        jeo_sheet_summary = jeofizik_sheet_ozeti(self.veri)
+        jeo_sheet_ok = bool(jeo_sheet_summary.get("ready"))
 
         total_depth = sum(safe_float(s.get("der")) for s in sondajlar)
         lit_count = sum(1 for s in sondajlar if s.get("litoloji"))
@@ -57,7 +60,10 @@ class KontrolPaneliMixin:
         self._ozet_set("sondaj", f"{len(sondajlar)} adet, toplam {total_depth:.2f} m", ok=len(sondajlar) > 0 and total_depth > 0)
         self._ozet_set("litoloji", f"{lit_count}/{len(sondajlar)} sondajda litoloji var", ok=lit_count == len(sondajlar) and len(sondajlar) > 0)
         self._ozet_set("deney", f"SPT: {spt_count} | PMT: {pmt_count} | Kaya: {kaya_count}", ok=(spt_count + pmt_count + kaya_count) > 0)
-        self._ozet_set("jeofizik", f"SS: {len(ss_list)} | MT: {len(mt_list)} | Tabaka: {layer_count}", ok=(len(ss_list) + len(mt_list)) > 0)
+        if jeo_sheet_ok:
+            self._ozet_set("jeofizik", f"Sheet: {jeo_sheet_summary['serim']} serim | Tabaka: {jeo_sheet_summary['layers']}", ok=True)
+        else:
+            self._ozet_set("jeofizik", f"SS: {len(ss_list)} | MT: {len(mt_list)} | Tabaka: {layer_count}", ok=(len(ss_list) + len(mt_list)) > 0)
 
         file_map = {
             "word_path": self.word_path,
@@ -84,6 +90,10 @@ class KontrolPaneliMixin:
             if raw_key == "lab_excel_path" and lab_sheet_ready:
                 rows = self.veri.get("lab_sheet", {}).get("rows", [])
                 status = f"LAB Sheet hazır: {len(rows)} satır"
+                self._ozet_file_set(label_keys[raw_key], status, True)
+                continue
+            if raw_key == "jeo_excel_path" and jeo_sheet_ok:
+                status = f"Jeofizik Sheet hazır: {jeo_sheet_summary['serim']} serim"
                 self._ozet_file_set(label_keys[raw_key], status, True)
                 continue
             status, ok = self._dosya_durumu(path)
@@ -142,6 +152,9 @@ class KontrolPaneliMixin:
     def _lab_sheet_ready(self):
         rows = self.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(self, "veri", None), dict) else []
         return any(any(str(cell).strip() for cell in row) for row in rows or [])
+
+    def _jeofizik_sheet_ready(self):
+        return jeofizik_sheet_var_mi(getattr(self, "veri", {})) and jeofizik_sheet_ozeti(getattr(self, "veri", {})).get("ready", False)
 
     def _dosya_durumu(self, path):
         if path and os.path.exists(path):
@@ -368,11 +381,12 @@ class KontrolPaneliMixin:
         )
 
         jeo_excel_ok = bool(self.jeo_excel_path and os.path.exists(self.jeo_excel_path))
+        jeo_sheet_ok = self._jeofizik_sheet_ready()
         jeo_manual_ok = bool(jeofizik.get("ss_list") or jeofizik.get("mt_list"))
         self.final_kontrol_satir_ekle(
-            items, "1. Proje ve şablon", "Jeofizik verisi", jeo_excel_ok or jeo_manual_ok,
-            "Jeofizik verisi hazır" if (jeo_excel_ok or jeo_manual_ok) else "Jeofizik Excel veya manuel jeofizik verisi yok",
-            "jeofizik", "Jeofizik sekmesinden Excel bağlayın veya manuel veri girin.", warning=True,
+            items, "1. Proje ve şablon", "Jeofizik verisi", jeo_excel_ok or jeo_sheet_ok or jeo_manual_ok,
+            "Jeofizik Sheet hazır" if jeo_sheet_ok else ("Jeofizik verisi hazır" if (jeo_excel_ok or jeo_manual_ok) else "Jeofizik Excel, Sheet veya manuel jeofizik verisi yok"),
+            "jeofizik", "Jeofizik sekmesinden Sheet doldurun, Excel bağlayın veya manuel veri girin.", warning=True,
         )
 
         self.final_kontrol_satir_ekle(

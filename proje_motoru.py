@@ -1,12 +1,18 @@
 import os
 from collections import Counter
 
+from jeofizik_sheet_motoru import jeofizik_sheet_ozeti, jeofizik_sheet_var_mi
+from sondaj_derinlik import sondaj_derinligi_kontrol_sonucu
 from yardimcilar import safe_float
 
 
 def lab_sheet_ready(veri):
     rows = veri.get("lab_sheet", {}).get("rows", []) if isinstance(veri, dict) else []
     return any(any(str(cell).strip() for cell in row) for row in rows or [])
+
+
+def jeofizik_sheet_ready(veri):
+    return jeofizik_sheet_var_mi(veri) and jeofizik_sheet_ozeti(veri).get("ready", False)
 
 
 def proje_saglik_ozeti(veri, dosya_durumlari=None):
@@ -25,6 +31,7 @@ def proje_saglik_ozeti(veri, dosya_durumlari=None):
     kunye = veri.get("kunye", {})
     sondajlar = veri.get("sondaj", [])
     jeofizik = veri.get("jeofizik", {})
+    jeo_sheet_ok = jeofizik_sheet_ready(veri)
 
     def is_blank(value):
         return value is None or str(value).strip() in {"", "-", "None", "null"}
@@ -73,11 +80,27 @@ def proje_saglik_ozeti(veri, dosya_durumlari=None):
     add("Litoloji", bool(sondajlar) and all(s.get("litoloji") for s in sondajlar), "Her sondajda litoloji beklenir", "sondaj", "Sondaj sekmesinde litoloji detaylarını girin.")
     add("Arazi deneyleri", sum(len(s.get("spt", [])) + len(s.get("pmt", [])) + len(s.get("kaya", [])) for s in sondajlar) > 0, "SPT/PMT/Kaya verisi", "sondaj", "Sondaj sekmesinde SPT/PMT/Kaya verilerini girin.")
     add("Sondaj koordinatları", bool(sondajlar) and all(s.get("y") and s.get("x") for s in sondajlar), "Kesit ve harita için koordinat", "sondaj", "Sondaj koordinatlarını doldurun veya harita aracını kullanın.")
-    add("Jeofizik", bool(jeofizik.get("ss_list") or jeofizik.get("mt_list")), "SS veya MT kaydı", "jeofizik", "Jeofizik sekmesinde SS/MT verisi ekleyin.")
+    jeo_detail = "Jeofizik Sheet hazır" if jeo_sheet_ok else "SS veya MT kaydı"
+    add("Jeofizik", bool(jeo_sheet_ok or jeofizik.get("ss_list") or jeofizik.get("mt_list")), jeo_detail, "jeofizik", "Jeofizik sekmesinde SS/MT verisi ekleyin.")
 
     add("Litoloji kapsami", bool(sondajlar) and all(litoloji_kapsami_ok(s) for s in sondajlar), "0.00 m'den kuyu sonuna sureklilik", "sondaj", "Workbook Litoloji sayfasinda bosluk/cakisma ve son derinlikleri kontrol edin.")
     add("SPT derinlikleri", bool(sondajlar) and all(spt_derinlikleri_ok(s) for s in sondajlar), "SPT derinlikleri kuyu/litoloji icinde", "sondaj", "Workbook SPT sayfasinda derinlikleri ve sondaj no alanlarini kontrol edin.")
     add("Sondaj kotlari", bool(sondajlar) and all(not is_blank(s.get("k")) for s in sondajlar), "Kesit baslangic/bitis kotlari icin", "sondaj", "Sondajlar sayfasinda kot alanlarini doldurun.")
+    try:
+        depth_check = sondaj_derinligi_kontrol_sonucu(veri)
+        recommended = safe_float(depth_check.get("onerilen_sondaj_derinligi"))
+        short = depth_check.get("eksik_sondajlar") or []
+        notes = depth_check.get("uyarilar") or []
+        method = "Gerilme %10" if depth_check.get("hesap_tipi") == "gerilme_10" else "Ön kontrol"
+        add(
+            "Sondaj derinliği",
+            bool(sondajlar) and recommended > 0 and not short and not notes,
+            f"{method}: öneri min {recommended:.2f} m" + (f", {len(notes)} hesap notu" if notes else ""),
+            "bina",
+            "Bina sekmesinde Sondaj Derinliği Hesapla ile temel genişliği, Hn ve mevcut sondajları kontrol edin.",
+        )
+    except Exception:
+        add("Sondaj derinliği", False, "Hesaplanamadı", "bina", "Bina bilgilerini kontrol edin.")
 
     for key, label in [
         ("word_path", "Word şablonu"), ("lab_excel_path", "Lab Excel"), ("jeo_excel_path", "Jeofizik Excel"),
@@ -88,6 +111,9 @@ def proje_saglik_ozeti(veri, dosya_durumlari=None):
         path = dosya_durumlari.get(key)
         if key == "lab_excel_path" and lab_sheet_ready(veri):
             add(label, True, "LAB Sheet hazır", "rapor", "Rapor sekmesinden LAB Sheet'i açıp düzenleyebilirsiniz.")
+            continue
+        if key == "jeo_excel_path" and jeo_sheet_ok:
+            add(label, True, "Jeofizik Sheet hazır", "jeofizik", "Jeofizik sekmesinden Sheet'i açıp düzenleyebilirsiniz.")
             continue
         if key == "kml_path":
             target = "haritalar"
@@ -193,6 +219,8 @@ def rapor_onizleme_metni(veri, dosya_durumlari=None, saglik=None, hesap=None):
         path = dosya_durumlari.get(key)
         if key == "lab_excel_path" and lab_sheet_ready(veri):
             lines.append(f"- {label}: LAB Sheet hazır")
+        elif key == "jeo_excel_path" and jeofizik_sheet_ready(veri):
+            lines.append(f"- {label}: Jeofizik Sheet hazır")
         else:
             lines.append(f"- {label}: {os.path.basename(path) if path else '-'}")
     return "\n".join(lines)

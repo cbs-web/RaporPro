@@ -6,10 +6,13 @@ from xml.sax.saxutils import escape
 
 from harita_referans import valid_latlon
 from yardimcilar import atomic_json_dump, atomic_write_text, safe_float
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-COMPLETED_PROJECTS_PATH = os.path.join(APP_DIR, "completed_projects.json")
+APP_DIR = str(SOURCE_DIR)
+COMPLETED_PROJECTS_PATH = str(
+    kullanici_yolu("completed_projects.json", legacy=SOURCE_DIR / "completed_projects.json")
+)
 
 
 def _today_iso():

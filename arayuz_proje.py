@@ -25,10 +25,13 @@ from workbook_motoru import (
     build_initial_rows as wb_build_initial_rows,
     yeni_sondaj_sablonu as wb_yeni_sondaj_sablonu,
 )
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-RECENT_PROJECTS_PATH = os.path.join(APP_DIR, "recent_projects.json")
+APP_DIR = str(SOURCE_DIR)
+RECENT_PROJECTS_PATH = str(
+    kullanici_yolu("recent_projects.json", legacy=SOURCE_DIR / "recent_projects.json")
+)
 
 
 class ArayuzProjeMixin:
@@ -70,21 +73,22 @@ class ArayuzProjeMixin:
         except Exception:
             return True
 
-    def kaydedilmemis_degisiklik_onayi(self):
+    def kaydedilmemis_degisiklik_onayi(self, hedef="programdan çıkış"):
         if not self.proje_degisti_mi():
             return True
+        hedef_metni = str(hedef or "devam etme").strip()
         if self.proje_kilitli_mi():
             msg = (
                 "Projede kaydedilmemiş değişiklikler var ancak proje kilitli olduğu için kaydedilemez.\n\n"
-                "Kaydetmeden çıkılsın mı?"
+                f"{hedef_metni.capitalize()} işlemine kaydetmeden devam edilsin mi?"
             )
             return bool(messagebox.askyesno("Kaydedilmemiş Değişiklikler", msg))
         secim = messagebox.askyesnocancel(
             "Kaydedilmemiş Değişiklikler",
             "Projede kaydedilmemiş değişiklikler var.\n\n"
-            "Program kapanmadan önce kaydedilsin mi?\n\n"
-            "Evet: Kaydet ve çık\n"
-            "Hayır: Kaydetmeden çık\n"
+            f"{hedef_metni.capitalize()} işleminden önce kaydedilsin mi?\n\n"
+            "Evet: Kaydet ve devam et\n"
+            "Hayır: Kaydetmeden devam et\n"
             "İptal: Programa dön",
         )
         if secim is None:
@@ -200,6 +204,8 @@ class ArayuzProjeMixin:
                 self.recent_projects_kaydet()
                 refresh()
                 return "break"
+            if not self.kaydedilmemis_degisiklik_onayi("başka proje açma"):
+                return "break"
             try:
                 self.proje_dosyasi_yukle(path)
                 win.destroy()
@@ -262,6 +268,7 @@ class ArayuzProjeMixin:
             "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
             "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
             "lab_sheet": {"rows": []},
+            "jeofizik_sheet": {"rows": []},
             "kesit_ayarlari": {},
             "ek_icerikleri": {"normal": {}, "arazi_deneyli": {}},
             "proje_durumu": {"tamamlandi": False, "kilitli": False, "tamamlanma_tarihi": "", "arsiv_notu": ""},
@@ -573,6 +580,8 @@ class ArayuzProjeMixin:
             title="Proje Aç"
         )
         if dosya_yolu:
+            if not self.kaydedilmemis_degisiklik_onayi("başka proje açma"):
+                return
             try:
                 self.proje_dosyasi_yukle(dosya_yolu)
             except Exception as e:
@@ -580,8 +589,9 @@ class ArayuzProjeMixin:
 
     @perf_tracked("project.new")
     def yeni_proje(self):
-        if messagebox.askyesno("Yeni Proje", "Mevcut çalışma kaydedilmemişse kaybolacaktır. Yeni proje oluşturmak istiyor musunuz?"):
-            self.yeni_proje_sihirbazi()
+        if not self.kaydedilmemis_degisiklik_onayi("yeni proje oluşturma"):
+            return
+        self.yeni_proje_sihirbazi()
 
     def reset_dosya_baglantilari(self):
         self.aktif_dosya_yolu = None

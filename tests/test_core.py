@@ -4,14 +4,23 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from openpyxl import load_workbook
 
 import spt_okuma_motoru as spt_motoru
 from ai_motoru import belediye_duzeltme_analiz_et, duzeltme_metnini_kural_ile_analiz_et, duzeltme_yonlendirmeleri_olustur
 from arayuz_proje import ArayuzProjeMixin
+from jeofizik_sheet_motoru import (
+    jeofizik_sheet_ozeti,
+    jeofizik_sheet_rows_to_ss_list,
+    jeofizik_sheet_var_mi,
+    jeofizik_ss_koordinatlarini_koru,
+)
 from karot_motoru import derinlik_araligi_coz, derinlik_orta, standart_karot_araliklari, tcr_hesapla
 from motor import GeoEngine, log_ornek_derinligi_formatla
+from pmt_excel_motoru import pmt_excel_dosyasi_oku, pmt_kayitlarini_veriye_aktar
 from rapor_metin_revizyon import (
     metin_revizyon_kural_analiz_et,
     metin_revizyonlari_uygula,
@@ -30,7 +39,9 @@ from raporlama import (
     lab_sheet_verisi_var_mi,
     litoloji_dagilim_birimi,
     litoloji_dagilim_paragraflari,
+    mjh_resim_yolu,
 )
+from kalite_kontrol import image_path_for_tag
 from spt_okuma_motoru import (
     SPTKaydi,
     _path_unique_key,
@@ -43,6 +54,20 @@ from spt_okuma_motoru import (
     spt_ayarlarini_kaydet,
     spt_ayarlarini_yukle,
 )
+from sondaj_derinlik import (
+    boussinesq_katsayisi,
+    efektif_dusey_gerilme,
+    efektif_gerilme_yass,
+    gerilme_artisi_2_1,
+    gerilme_artisi_boussinesq,
+    gerilme_yuzde_on_derinlik_hesapla,
+    sondaj_derinligi_hesapla,
+    sondaj_derinligi_kontrol_sonucu,
+    sondaj_derinligi_ozet_metni,
+    temel_genisligi_bul,
+    westergaard_katsayisi,
+)
+from sondaj_derinlik_foyu import sondaj_derinligi_foyu_olustur
 from ui_spt_okuma_yardimci import collect_image_paths, duplicate_keys as spt_duplicate_keys, record_quality as spt_record_quality
 from taahhutname import taahhutname_context, taahhutname_olustur, taahhutname_yapi_adresi
 from tkgm_kml import geojson_kml_olustur, konum_adi_normalize_et
@@ -58,7 +83,9 @@ from ekler import (
     uygun_ek_sablonu,
 )
 from harita_cikti import eski_paylasimli_temp_harita_yolu_mu, yeni_harita_cikti_yolu
-from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord
+from harita_ayarlari import hgm_ortofoto_url_kaydet, hgm_ortofoto_url_yukle
+from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, ss_harita_etiketi
+from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from proje_arsiv import (
     arsiv_kaydi_ekle,
@@ -67,13 +94,24 @@ from proje_arsiv import (
     kml_sinir_koordinatlari_oku,
     proje_merkez_koordinati,
 )
-from yardimcilar import atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
+from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
 from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import validate_rows as wb_validate_rows
 from workbook_motoru import WORKBOOK_SHEET_DEFS
 from task_engine import TkTaskEngine
-from yonetmelik_motoru import duzeltme_yonetmelik_dayanaklari, yonetmelik_ara, yonetmelik_ekle, yonetmelikleri_listele
+from uygulama_yollari import eski_veriyi_kopyala, kullanici_yolu
+from yonetmelik_motoru import (
+    duzeltme_yonetmelik_dayanaklari,
+    resmi_yonetmelik_baglanti_bul,
+    resmi_yonetmelik_indir_ve_ekle,
+    varsayilan_yonetmelikleri_hazirla,
+    yerlesik_yonetmelik_ekle,
+    yonetmelik_ara,
+    yonetmelik_ekle,
+    yonetmelikleri_listele,
+)
+import yonetmelik_motoru
 
 
 class _ImmediateTkRoot:
@@ -85,7 +123,7 @@ class TaskEngineTestleri(unittest.TestCase):
     def test_basari_sayacini_ve_callbacki_gunceller(self):
         done = threading.Event()
         results = []
-        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1)
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1, log_failures=False)
         try:
             engine.run("deneme", lambda: 42, on_success=lambda result: (results.append(result), done.set()))
             self.assertTrue(done.wait(2))
@@ -104,7 +142,7 @@ class TaskEngineTestleri(unittest.TestCase):
         def fail():
             raise RuntimeError("kontrollu hata")
 
-        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1)
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1, log_failures=False)
         try:
             engine.run("hata", fail, on_error=lambda exc: (errors.append(str(exc)), done.set()))
             self.assertTrue(done.wait(2))
@@ -130,8 +168,48 @@ class ProjeKayitDurumuTestleri(unittest.TestCase):
         app.veri["kunye"]["sahibi"] = "Son"
         self.assertTrue(app.proje_degisti_mi())
 
+    def test_kaydedilmemis_degisiklik_kaydedilip_devam_edebilir(self):
+        app = ArayuzProjeMixin()
+        app.veri = {"kunye": {"sahibi": "İlk"}, "sondaj": []}
+        app.aktif_dosya_yolu = None
+        app._son_kayit_imzasi = app.proje_kayit_imzasi()
+        app.veri["kunye"]["sahibi"] = "Son"
+        app.proje_kilitli_mi = lambda: False
+        app.veri_kaydet = mock.Mock(return_value=True)
+
+        with mock.patch("arayuz_proje.messagebox.askyesnocancel", return_value=True) as prompt:
+            self.assertTrue(app.kaydedilmemis_degisiklik_onayi("başka proje açma"))
+
+        app.veri_kaydet.assert_called_once_with()
+        self.assertIn("Başka proje açma", prompt.call_args.args[1])
+
+    def test_proje_acma_iptal_edilince_yukleme_yapilmaz(self):
+        app = ArayuzProjeMixin()
+        app.kaydedilmemis_degisiklik_onayi = mock.Mock(return_value=False)
+        app.proje_dosyasi_yukle = mock.Mock()
+
+        with mock.patch("arayuz_proje.filedialog.askopenfilename", return_value="proje.json"):
+            app.proje_ac()
+
+        app.kaydedilmemis_degisiklik_onayi.assert_called_once_with("başka proje açma")
+        app.proje_dosyasi_yukle.assert_not_called()
+
+    def test_yeni_proje_iptal_edilince_sihirbaz_acilmaz(self):
+        app = ArayuzProjeMixin()
+        app.kaydedilmemis_degisiklik_onayi = mock.Mock(return_value=False)
+        app.yeni_proje_sihirbazi = mock.Mock()
+
+        app.yeni_proje()
+
+        app.yeni_proje_sihirbazi.assert_not_called()
+
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_serim_adi_haritada_ss_bicimine_donusur(self):
+        self.assertEqual(ss_harita_etiketi("Serim 4", 0), "SS-4")
+        self.assertEqual(ss_harita_etiketi("SS 7", 0), "SS-7")
+        self.assertEqual(ss_harita_etiketi("", 2), "SS-3")
+
     def test_atomic_json_dump_guvenli_yazar_ve_degistirir(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "proje.json")
@@ -154,15 +232,112 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
                 self.assertEqual(f.read(), "son")
             self.assertFalse([name for name in os.listdir(tmp) if name.endswith(".tmp")])
 
+    def test_atomic_docx_save_hata_halinde_mevcut_dosyayi_korur(self):
+        class BrokenDocument:
+            def save(self, path):
+                Path(path).write_bytes(b"yarim")
+                raise RuntimeError("kontrollu kayit hatasi")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rapor.docx"
+            path.write_bytes(b"mevcut-rapor")
+
+            with self.assertRaises(RuntimeError):
+                atomic_docx_save(BrokenDocument(), path)
+
+            self.assertEqual(path.read_bytes(), b"mevcut-rapor")
+            self.assertFalse([name for name in os.listdir(tmp) if name != "rapor.docx"])
+
+    def test_kullanici_verisi_appdata_benzeri_dizine_tasinir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "eski.json"
+            legacy.write_text('{"deger": 1}', encoding="utf-8")
+            target_root = Path(tmp) / "AppData" / "RaporPro"
+
+            target = kullanici_yolu(
+                "recent_projects.json",
+                legacy=legacy,
+                base_dir=target_root,
+            )
+
+            self.assertEqual(target, target_root / "recent_projects.json")
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"deger": 1}')
+            self.assertFalse(eski_veriyi_kopyala(legacy, target))
+
     def test_safe_float_virgul_ve_bos_deger(self):
         self.assertEqual(safe_float("12,5"), 12.5)
         self.assertEqual(safe_float(""), 0.0)
+
+    def test_dpapi_gizli_deger_roundtrip(self):
+        encrypted = gizli_deger_sakla("test-api-key")
+        self.assertTrue(gizli_deger_mi(encrypted))
+        self.assertNotIn("test-api-key", encrypted)
+        self.assertEqual(gizli_deger_coz(encrypted), "test-api-key")
+
+    def test_hgm_url_kaynak_kod_disinda_sifreli_saklanir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "harita_ayarlar.json"
+            url = "https://ornek.test/{z}/{x}/{y}?apikey=secret"
+            hgm_ortofoto_url_kaydet(url, path)
+
+            self.assertEqual(hgm_ortofoto_url_yukle(path), url)
+            self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+
+    def test_mjh_etiketi_baska_haritalara_dusmez(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            yer = os.path.join(tmp, "yer.jpg")
+            tkgm = os.path.join(tmp, "tkgm.jpg")
+            Path(yer).write_bytes(b"yer")
+            Path(tkgm).write_bytes(b"tkgm")
+            app = SimpleNamespace(img_mjh=None, img_yer=yer, img_tkgm=tkgm)
+
+            self.assertIsNone(mjh_resim_yolu(app))
+            self.assertIsNone(image_path_for_tag(app, "img_mjh"))
+
+            mjh = os.path.join(tmp, "mjh.jpg")
+            Path(mjh).write_bytes(b"mjh")
+            app.img_mjh = mjh
+            self.assertEqual(mjh_resim_yolu(app), mjh)
 
     def test_lab_sheet_satirlari_temizlenir_ve_algilanir(self):
         app = type("App", (), {})()
         app.veri = {"lab_sheet": {"rows": [["Sondaj No", "", ""], ["SK-1", "CL", ""], ["", "", ""]]}}
         self.assertTrue(lab_sheet_verisi_var_mi(app))
         self.assertEqual(lab_sheet_satirlari(app), [["Sondaj No"], ["SK-1", "CL"]])
+
+    def test_jeofizik_sheet_serim_parametrelerini_okur(self):
+        rows = [
+            ["Sismik Ölçü ve Hesaplarının Sahibi   :", "Serim 1", "", "", "", ""],
+            ["Zemin Parametreleri", "Simge", "TABAKA NO", "", "", ""],
+            ["", "Birim", "I", "II", "III", "IV"],
+            ["VP = Boyuna Dalga Hızı (Sıkışma Dalgası Hızı)", "VP (m/sn)", 315, 1292, 1292, 1292],
+            ["VS = Enine Dalga Hızı (Kayma Dalgası Hızı)", "VS (m/sn)", 145, 280, 363, 477],
+            ["Tabaka Kalınlığı", "metre", 3.3, 11.2, 15.5, ""],
+            ["Tabaka Yoğunluğu", "γ (gr/cm3)", 1.30, 1.85, 1.88, 1.92],
+            ["Poisson Oranı", "Birimsiz", 0.36, 0.46, 0.46, 0.42],
+            ["Elastisite Modülü", "ED (kg/cm2)", 748, 3963, 7029, 12631],
+            ["Bulk (Sıkışmazlık) Modülü", "Mc (kg/cm2)", 928, 29036, 27716, 25347],
+            ["Maksimum Kayma Modülü (SHEAR) (Gmax.)", "Gmax(kg/cm2)", 274, 1454, 2445, 4222],
+            ["Zemin Büyütme Katsayısı", "b", 2.87, 1.05, 0.99, 0.92],
+            ["Sismik Hız Oranı", "Vp/Vs", 2.17, 4.61, 3.56, 2.71],
+            ["Vs30 = Ortalama Kayma Dalgası Hızı", "Vs30(m/sn)", 285, "", "", ""],
+        ]
+        veri = {"jeofizik_sheet": {"rows": rows}}
+        self.assertTrue(jeofizik_sheet_var_mi(veri))
+        summary = jeofizik_sheet_ozeti(veri)
+        self.assertEqual(summary["serim"], 1)
+        self.assertEqual(summary["layers"], 4)
+
+        ss_list = jeofizik_sheet_rows_to_ss_list(rows)
+        self.assertEqual(ss_list[0]["ad"], "Serim 1")
+        self.assertEqual(ss_list[0]["layers"][0]["vp"], "315")
+        self.assertEqual(ss_list[0]["layers"][0]["vs"], "145")
+        self.assertEqual(ss_list[0]["layers"][0]["G"], "274")
+        self.assertEqual(ss_list[0]["layers"][0]["vs30"], "285")
+        self.assertEqual(ss_list[0]["layers"][3]["h"], "-")
+
+        jeofizik_ss_koordinatlarini_koru(ss_list, [{"ad": "SS-1", "coords": ["1", "2", "3", "4", "5", "6"]}])
+        self.assertEqual(ss_list[0]["coords"], ["1", "2", "3", "4", "5", "6"])
 
     def test_buyuk_basliklar_yeni_sayfaya_alinir(self):
         from docx import Document
@@ -841,6 +1016,16 @@ class SPTMotorTestleri(unittest.TestCase):
             self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-4o-mini-test")
             self.assertEqual(openai_model_sec(ayarlar, "revizyon"), "gpt-5.5-test")
 
+    def test_api_anahtari_ayar_dosyasinda_sifreli_saklanir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ayarlar.json")
+            spt_ayarlarini_kaydet({"openai_api_key": "secret-openai-key"}, path)
+
+            raw = Path(path).read_text(encoding="utf-8")
+            self.assertNotIn("secret-openai-key", raw)
+            self.assertTrue(gizli_deger_mi(json.loads(raw)["openai_api_key"]))
+            self.assertEqual(spt_ayarlarini_yukle(path)["openai_api_key"], "secret-openai-key")
+
     def test_eski_spt_ayar_dosyasi_merkezi_ayara_tasinir(self):
         with tempfile.TemporaryDirectory() as tmp:
             eski_yol = spt_motoru.LEGACY_SPT_AYARLAR_PATH
@@ -861,12 +1046,102 @@ class SPTMotorTestleri(unittest.TestCase):
                 self.assertEqual(ayarlar["openai_api_key"], "test-key")
                 self.assertEqual(ayarlar["revizyon_openai_model"], "gpt-5.5-test")
                 self.assertTrue(spt_motoru.SPT_AYARLAR_PATH.exists())
+                raw = spt_motoru.SPT_AYARLAR_PATH.read_text(encoding="utf-8")
+                self.assertNotIn("test-key", raw)
+                self.assertTrue(gizli_deger_mi(json.loads(raw)["openai_api_key"]))
             finally:
                 spt_motoru.LEGACY_SPT_AYARLAR_PATH = eski_yol
                 spt_motoru.SPT_AYARLAR_PATH = yeni_yol
 
 
+class PMTExcelMotorTestleri(unittest.TestCase):
+    def test_presiyometre_excelinden_pmt_kaydi_okunur_ve_aktarilir(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "SK-1-9_0M-SIM-KELIME-SILINMIS.xlsm")
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Presiyometre"
+            ws["F7"] = "SK-1"
+            ws["F8"] = 9
+            ws["I6"] = 790
+            ws["C53"] = 1.1
+            ws["C54"] = 9.15
+            ws["E53"] = 190
+            ws["E54"] = 205
+            ws["S16"] = '=2.66*($I$6+((E53+E54)/2))*(G53/G54)'
+            ws["S19"] = 8.47
+            ws["S22"] = 9.57
+            wb.save(path)
+
+            record = pmt_excel_dosyasi_oku(path)
+
+        self.assertEqual(record["sondaj_no"], "SK-1")
+        self.assertEqual(record["der"], "9.00")
+        self.assertEqual(record["em"], "1410")
+        self.assertEqual(record["pl"], "9.57")
+        self.assertEqual(record["warnings"], [])
+
+        veri = {"sondaj": [{"no": "SK-1", "pmt": [["9.00", "100", "1"]]}]}
+        result = pmt_kayitlarini_veriye_aktar(veri, [record], update_existing=True)
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(veri["sondaj"][0]["pmt"], [["9.00", "1410", "9.57"]])
+
+
 class YonetmelikMotorTestleri(unittest.TestCase):
+    def test_resmi_yonetmelik_eki_sayfadan_bulunur(self):
+        html = """
+        <html><body>
+            <a href="/duyuru">Duyuru</a>
+            <a href="https://webdosya.csb.gov.tr/db/yapiisleri/icerikler/zemin-format.docx">
+                Eki indirmek için tıklayınız
+            </a>
+        </body></html>
+        """
+        url = resmi_yonetmelik_baglanti_bul(
+            html,
+            "https://yapiisleri.csb.gov.tr/haber",
+            expected_extensions=(".docx",),
+            link_text_hints=("eki indir", "tıklayınız"),
+        )
+        self.assertEqual(url, "https://webdosya.csb.gov.tr/db/yapiisleri/icerikler/zemin-format.docx")
+
+    def test_yerlesik_yonetmelik_kaynagi_eklenir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = yerlesik_yonetmelik_ekle("zemin_temel_etudu_2019", base_dir=tmp)
+
+            self.assertTrue(result["embedded_fallback"])
+            self.assertFalse(result["already_exists"])
+            self.assertEqual(len(yonetmelikleri_listele(tmp)), 1)
+
+            hits = yonetmelik_ara("eksik laboratuvar deneyi ve sondaj logu", base_dir=tmp)
+            self.assertTrue(hits)
+            self.assertTrue(hits[0]["doc_title"].endswith("(Yerleşik)"))
+
+    def test_resmi_yonetmelik_indirme_hatasinda_yerlesik_kaynak_eklenir(self):
+        original_download = yonetmelik_motoru._download_bytes
+        try:
+            yonetmelik_motoru._download_bytes = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("offline"))
+            with tempfile.TemporaryDirectory() as tmp:
+                result = resmi_yonetmelik_indir_ve_ekle("zemin_temel_etudu_2019", base_dir=tmp)
+
+                self.assertTrue(result["embedded_fallback"])
+                docs = yonetmelikleri_listele(tmp)
+                self.assertEqual(len(docs), 1)
+                self.assertTrue(docs[0]["embedded_fallback"])
+                self.assertIn("offline", docs[0]["download_error"])
+        finally:
+            yonetmelik_motoru._download_bytes = original_download
+
+    def test_varsayilan_yonetmelik_programa_hazirlanir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results = varsayilan_yonetmelikleri_hazirla(base_dir=tmp)
+
+            self.assertTrue(results)
+            self.assertEqual(len(yonetmelikleri_listele(tmp)), 1)
+            self.assertTrue(yonetmelikleri_listele(tmp)[0]["embedded_fallback"])
+
     def test_yonetmelik_eklenir_ve_duzeltme_dayanagi_bulunur(self):
         metin = """
         ZEMIN VE TEMEL ETUDU UYGULAMA ESASLARI
@@ -898,6 +1173,231 @@ class YonetmelikMotorTestleri(unittest.TestCase):
             )
             self.assertTrue(result["items"])
             self.assertFalse(result["warnings"])
+
+    def test_html_yonetmelik_eklenir(self):
+        html = """
+        <html>
+            <head><style>.x { color: red; }</style><script>var a = 1;</script></head>
+            <body>
+                <h1>Türkiye Bina Deprem Yönetmeliği</h1>
+                <p>Deprem etkisi altında temel zemini ve temellerin tasarımı için özel kurallar.</p>
+            </body>
+        </html>
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "tbdy.html")
+            atomic_write_text(src, html)
+
+            record = yonetmelik_ekle(src, title="TBDY HTML", base_dir=tmp)
+            self.assertEqual(record["ext"], ".html")
+
+            hits = yonetmelik_ara("temel zemini tasarımı", base_dir=tmp)
+            self.assertTrue(hits)
+            self.assertEqual(hits[0]["doc_title"], "TBDY HTML")
+
+
+class SondajDerinlikHesabiTestleri(unittest.TestCase):
+    def test_temel_genisligi_acik_degerden_bulunur(self):
+        width, source = temel_genisligi_bul({"temel_genislik": "12,5", "plan": "20x30"})
+        self.assertEqual(width, 12.5)
+        self.assertEqual(source, "Temel genişliği B")
+
+    def test_temel_genisligi_plandan_bulunur(self):
+        width, source = temel_genisligi_bul({"plan": "18 x 32"})
+        self.assertEqual(width, 18.0)
+        self.assertIn("Plan", source)
+
+    def test_sondaj_derinligi_onerisi_ve_eksik_sondaj_bulunur(self):
+        veri = {
+            "arazi": {"kategori": "Kategori 2"},
+            "bina": {"der": "3", "temel_genislik": "8", "yukseklik": "18"},
+            "sondaj": [{"no": "SK-1", "der": "15"}, {"no": "SK-2", "der": "18"}],
+        }
+        result = sondaj_derinligi_hesapla(veri)
+        self.assertEqual(result["onerilen_sondaj_derinligi"], 18.0)
+        self.assertEqual([item["sondaj"] for item in result["eksik_sondajlar"]], ["SK-1"])
+        self.assertIn("18.00 m", sondaj_derinligi_ozet_metni(veri))
+
+    def test_coklu_blokta_en_buyuk_derinlik_alinir(self):
+        veri = {
+            "arazi": {"kategori": "Kategori 3"},
+            "bina": {
+                "coklu_blok": True,
+                "bloklar": [
+                    {"blok_adi": "A", "der": "2", "temel_genislik": "5", "yukseklik": "12"},
+                    {"blok_adi": "B", "der": "4", "temel_genislik": "12", "yukseklik": "30"},
+                ],
+            },
+            "sondaj": [{"no": "SK-1", "der": "30"}],
+        }
+        result = sondaj_derinligi_hesapla(veri)
+        self.assertEqual(result["onerilen_sondaj_derinligi"], 28.5)
+        self.assertEqual(result["bloklar"][1]["belirleyici_kriter"], "2B temel genişliği")
+
+    def test_gerilme_yuzde_on_derinligi_bulunur(self):
+        params = {
+            "q_net": "200",
+            "b": "10",
+            "l": "20",
+            "temel_derinligi": "2",
+            "bha": "18",
+            "target_ratio": "0.10",
+            "round_step": "0.50",
+        }
+        result = gerilme_yuzde_on_derinlik_hesapla(params)
+        self.assertTrue(result["ok"])
+        self.assertLessEqual(result["oran"], 0.1001)
+        self.assertGreater(result["sondaj_derinligi_yuvarlatilmis"], result["temel_derinligi"])
+
+        shallower_depth = max(result["temel_derinligi"], result["sondaj_derinligi"] - result["round_step"])
+        delta = gerilme_artisi_boussinesq(result["q_net"], result["b"], result["l"], shallower_depth)
+        sigma = result["bha"] * shallower_depth
+        self.assertGreater(delta / sigma, 0.10)
+
+    def test_yaklasik_yontem_bagimsiz_kok_ile_dogrulanir(self):
+        params = {
+            "q_net": "100",
+            "b": "10",
+            "l": "10",
+            "temel_derinligi": "0",
+            "bha": "10",
+            "target_ratio": "0.10",
+            "round_step": "1",
+            "max_depth": "50",
+            "hesap_yontemi": "yaklasik",
+        }
+        result = gerilme_yuzde_on_derinlik_hesapla(params)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["sayisal_dogrulama"]["ok"])
+        self.assertAlmostEqual(
+            result["yontem_sonuclari"]["yaklasik"]["surekli_kok_derinligi"],
+            15.445115,
+            places=5,
+        )
+        self.assertEqual(result["sondaj_derinligi_yuvarlatilmis"], 16.0)
+        self.assertEqual(result["gerilme_birimi"], "kPa")
+
+    def test_sondaj_derinligi_tutarsiz_birimleri_reddeder(self):
+        result = gerilme_yuzde_on_derinlik_hesapla({
+            "temel_taban_gerilmesi": "200",
+            "temel_genisligi": "10",
+            "temel_uzunlugu": "20",
+            "temel_derinligi": "2",
+            "yass": "1",
+            "dogal_bha": "1.8",
+            "doygun_bha": "20",
+        })
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("aynı birim" in item for item in result["errors"]))
+
+    def test_temel_taban_gerilmesinden_qnet_hesaplanir(self):
+        params = {
+            "temel_taban_gerilmesi": "20",
+            "temel_genisligi": "10",
+            "temel_uzunlugu": "20",
+            "temel_derinligi": "2",
+            "yass": "1",
+            "dogal_bha": "1.8",
+            "doygun_bha": "2.0",
+            "target_ratio": "0.10",
+            "round_step": "0.50",
+        }
+        result = gerilme_yuzde_on_derinlik_hesapla(params)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["uses_yass_model"])
+        self.assertAlmostEqual(efektif_gerilme_yass(2, 1, 1.8, 2.0), 2.8)
+        self.assertAlmostEqual(result["sigma_vo_taban"], 2.8)
+        self.assertAlmostEqual(result["q_net"], 17.2)
+        self.assertLessEqual(result["oran"], 0.1001)
+
+    def test_sondaj_derinligi_excel_ornegiyle_uyumlu_hesaplanir(self):
+        params = {
+            "temel_taban_gerilmesi": "10",
+            "temel_genisligi": "24",
+            "temel_uzunlugu": "83",
+            "temel_derinligi": "4",
+            "yass": "30",
+            "dogal_bha": "1.9",
+            "doygun_bha": "2.0",
+            "target_ratio": "0.10",
+            "round_step": "1",
+            "max_depth": "50",
+        }
+        result = gerilme_yuzde_on_derinlik_hesapla(params)
+
+        self.assertTrue(result["ok"])
+        self.assertAlmostEqual(result["q_net"], 2.4)
+        self.assertAlmostEqual(result["sigma_vo_taban"], 7.6)
+        self.assertAlmostEqual(boussinesq_katsayisi(3, 10.375), 0.24650917381504633)
+        self.assertAlmostEqual(westergaard_katsayisi(3, 10.375), 0.2116276499243993)
+        self.assertEqual(result["yontem_sonuclari"]["boussinesq"]["sondaj_derinligi_yuvarlatilmis"], 11.0)
+        self.assertEqual(result["yontem_sonuclari"]["westergaard"]["sondaj_derinligi_yuvarlatilmis"], 9.0)
+        self.assertEqual(result["yontem_sonuclari"]["yaklasik"]["sondaj_derinligi_yuvarlatilmis"], 9.0)
+        self.assertEqual(result["sondaj_derinligi_yuvarlatilmis"], 11.0)
+        self.assertEqual(result["belirleyici_yontem"], "boussinesq")
+
+    def test_sondaj_derinligi_foyu_docx_ve_pdf_olusturulur(self):
+        import fitz
+
+        veri = {
+            "kunye": {
+                "proje_adi": "Deneme Proje",
+                "mah": "Merkez",
+                "ilce": "Kepez",
+                "il": "Çanakkale",
+                "ada": "1109",
+                "par": "1",
+            },
+            "sondaj_derinlik_hesabi": {
+                "temel_taban_gerilmesi": "10",
+                "temel_genisligi": "24",
+                "temel_uzunlugu": "83",
+                "temel_derinligi": "4",
+                "yass": "30",
+                "dogal_bha": "1.9",
+                "doygun_bha": "2.0",
+                "target_ratio": "0.10",
+                "round_step": "1",
+                "max_depth": "50",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            docx_path = os.path.join(tmp, "sondaj_foyu.docx")
+            pdf_path = os.path.join(tmp, "sondaj_foyu.pdf")
+
+            docx_info = sondaj_derinligi_foyu_olustur(veri, docx_path)
+            pdf_info = sondaj_derinligi_foyu_olustur(veri, pdf_path)
+
+            self.assertTrue(os.path.exists(docx_path))
+            self.assertTrue(os.path.getsize(docx_path) > 1000)
+            self.assertEqual(docx_info["result"]["sondaj_derinligi_yuvarlatilmis"], 11.0)
+            self.assertTrue(os.path.exists(pdf_path))
+            self.assertTrue(os.path.getsize(pdf_path) > 1000)
+            self.assertEqual(pdf_info["result"]["sondaj_derinligi_yuvarlatilmis"], 11.0)
+            with fitz.open(pdf_path) as doc:
+                self.assertGreaterEqual(doc.page_count, 2)
+
+    def test_proje_kontrolu_elle_girilen_gerilme_hesabini_kullanir(self):
+        veri = {
+            "sondaj_derinlik_hesabi": {
+                "temel_taban_gerilmesi": "20",
+                "temel_genisligi": "10",
+                "temel_uzunlugu": "20",
+                "temel_derinligi": "2",
+                "yass": "1",
+                "dogal_bha": "1.8",
+                "doygun_bha": "2.0",
+                "target_ratio": "0.10",
+                "round_step": "0.50",
+            },
+            "sondaj": [{"no": "SK-1", "der": "10"}],
+        }
+        result = sondaj_derinligi_kontrol_sonucu(veri)
+        self.assertEqual(result["hesap_tipi"], "gerilme_10")
+        self.assertTrue(result["eksik_sondajlar"])
 
 
 class LitolojiDagilimTestleri(unittest.TestCase):

@@ -1,12 +1,16 @@
 # Dosya: RaporPro/yonetmelik_motoru.py
 import datetime
+from html.parser import HTMLParser
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import unicodedata
+from urllib.parse import unquote, urljoin, urlparse
+from urllib.request import Request, urlopen
 
 from yardimcilar import atomic_json_dump, temizle_baslik
 
@@ -14,7 +18,126 @@ from yardimcilar import atomic_json_dump, temizle_baslik
 RAPORPRO_CONFIG_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "RaporPro"
 YONETMELIK_DIR = RAPORPRO_CONFIG_DIR / "yonetmelikler"
 YONETMELIK_INDEX_PATH = YONETMELIK_DIR / "index.json"
-SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
+SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".html", ".htm")
+OFFICIAL_USER_AGENT = "RaporPro/1.0 (+https://yapiisleri.csb.gov.tr)"
+RESMI_YONETMELIK_KAYNAKLARI = {
+    "zemin_temel_etudu_2019": {
+        "id": "zemin_temel_etudu_2019",
+        "title": "Zemin ve Temel Etüdü Uygulama Esasları ve Rapor Formatı",
+        "page_url": "https://yapiisleri.csb.gov.tr/zemin-ve-temel-etudu-uygulama-esaslari-ve-rapor-formati-haber-238674",
+        "expected_extensions": (".docx",),
+        "link_text_hints": ("eki indir", "eki indirmek", "tıklayınız", "tiklayiniz"),
+        "description": "Çevre, Şehircilik ve İklim Değişikliği Bakanlığı resmi DOCX eki",
+    },
+}
+RESMI_YONETMELIK_YERLESIK_METINLER = {
+    "zemin_temel_etudu_2019": """
+ZEMİN VE TEMEL ETÜDÜ UYGULAMA ESASLARI VE RAPOR FORMATI
+Yerleşik RaporPro referans metni
+
+Kaynak kimliği:
+Çevre, Şehircilik ve İklim Değişikliği Bakanlığı tarafından duyurulan
+Zemin ve Temel Etüdü Uygulama Esasları ve Rapor Formatı, 09.03.2019 tarihli
+ve 30709 sayılı Resmî Gazete yayımı ile yürürlüğe girmiştir. Bu yerleşik
+metin, program internet bağlantısı olmadan çalışırken düzeltme notlarını
+ilgili zemin etüdü başlıklarıyla eşleştirmek için kullanılan sabit başvuru
+özetidir. Tam resmi DOCX/PDF dosyası elde edildiğinde Yönetmelik Merkezi'ne
+ayrıca eklenebilir.
+
+Kapsam:
+Parsel bazında hazırlanacak zemin ve temel etüt raporlarında arazi
+araştırmaları, laboratuvar çalışmaları, jeofizik çalışmalar, yeraltı suyu
+verileri, yerel deprem etkileri, zemin veya kaya birimlerinin mühendislik
+özellikleri ve rapor formatı birlikte değerlendirilir.
+
+Arazi araştırmaları ve sondajlar:
+Sondajlar, yapı özellikleri, temel sistemi, zemin koşulları ve araştırma
+amacına uygun olacak şekilde planlanır. Sondaj derinliği ve sayısı sahadaki
+zemin veya kaya koşullarını temsil edecek yeterlilikte olmalıdır. SPT,
+presiyometre, yerinde deneyler, karot, örselenmiş numune ve örselenmemiş
+numune bilgileri raporda tutarlı şekilde gösterilir. Sondaj loglarında
+litoloji sürekliliği, deney derinlikleri, numune derinlikleri ve yeraltı suyu
+ölçümleri kontrol edilir.
+
+Laboratuvar deneyleri:
+Laboratuvar deneyleri zemin veya kaya birimlerini temsil edecek seviyelerde
+yapılır. Eksik deney aralıkları, numune alınmayan seviyeler, sınıflama
+deneyleri, doğal birim hacim ağırlık, su muhtevası, Atterberg limitleri,
+granülometri, kesme kutusu, üç eksenli basınç, konsolidasyon, tek eksenli
+basınç, nokta yükleme, TCR, SCR ve RQD gibi deneylerin rapor tablolarıyla
+uyumu denetlenir. Belediye veya idare ek laboratuvar deneyi istediğinde rapor
+tabloları ve zemin parametre özetleri yeni verilere göre yenilenmelidir.
+
+Jeofizik ve deprem verileri:
+MASW, sismik kırılma, mikrotremor ve benzeri jeofizik çalışmalar varsa
+serim, tabaka, Vs, Vp, zemin hakim periyodu ve benzeri değerler rapor
+tablolarıyla uyumlu verilmelidir. Türkiye Bina Deprem Yönetmeliği ile ilişkili
+yerel zemin sınıfı, tasarım spektrumu ve deprem parametreleri raporda tutarlı
+olmalıdır.
+
+Harita, koordinat ve görseller:
+Araştırma noktaları vaziyet planı, sondaj lokasyon haritası, jeofizik
+lokasyon haritası, mühendislik jeolojisi haritası ve koordinat tabloları
+birbiriyle uyumlu olmalıdır. Sondaj, sismik serim ve mikrotremor noktalarının
+etiketleri ve koordinatları rapordaki tablo ve haritalarla çelişmemelidir.
+
+Rapor formatı ve düzeltme kontrolü:
+Rapor metni, çizelgeler, loglar, kesitler, haritalar ve ekler aynı proje
+verisine dayanmalıdır. İdare düzeltme talebinde eksik sondaj, eksik deney,
+yanlış derinlik, yanlış koordinat, güncel olmayan harita, eksik jeofizik veri,
+eksik bina bilgisi veya tutarsız zemin parametresi belirtilirse ilgili veri
+girişi tamamlanmalı ve sadece etkilenen rapor bölümleri yenilenmelidir.
+""".strip(),
+}
+
+
+class _LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self._active = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "a":
+            return
+        attrs = dict(attrs)
+        href = attrs.get("href")
+        if href:
+            self._active = {"href": href, "text": ""}
+
+    def handle_data(self, data):
+        if self._active is not None:
+            self._active["text"] += data or ""
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._active is not None:
+            self.links.append(self._active)
+            self._active = None
+
+
+class _TextHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in {"script", "style", "noscript"} and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth:
+            return
+        text = re.sub(r"\s+", " ", str(data or "")).strip()
+        if text:
+            self.parts.append(text)
+
+    def text(self):
+        return "\n".join(self.parts)
 
 
 def _now_iso():
@@ -56,6 +179,13 @@ def _read_text_file(path):
         except UnicodeDecodeError:
             continue
     return Path(path).read_text(encoding="utf-8", errors="ignore")
+
+
+def _read_html(path):
+    html = _read_text_file(path)
+    parser = _TextHTMLParser()
+    parser.feed(html)
+    return parser.text()
 
 
 def _read_docx(path):
@@ -102,6 +232,8 @@ def yonetmelik_metni_oku(path):
         return _read_pdf(path)
     if ext == ".docx":
         return _read_docx(path)
+    if ext in (".html", ".htm"):
+        return _read_html(path)
     return _read_text_file(path)
 
 
@@ -192,12 +324,74 @@ def _doc_chunks_path(doc_id, base_dir=None):
     return base / f"{doc_id}.chunks.json"
 
 
+def resmi_yonetmelik_kaynaklari():
+    return [dict(item) for item in RESMI_YONETMELIK_KAYNAKLARI.values()]
+
+
+def resmi_yonetmelik_baglanti_bul(html, page_url, expected_extensions=None, link_text_hints=None):
+    expected_extensions = tuple(ext.lower() for ext in (expected_extensions or SUPPORTED_EXTENSIONS))
+    link_text_hints = tuple(_normalize(item) for item in (link_text_hints or ()))
+    parser = _LinkParser()
+    parser.feed(str(html or ""))
+    candidates = []
+    for link in parser.links:
+        href = str(link.get("href") or "").strip()
+        if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+            continue
+        absolute_url = urljoin(page_url, href)
+        url_lower = absolute_url.lower()
+        text_norm = _normalize(link.get("text", ""))
+        score = 0
+        if any(url_lower.split("?", 1)[0].endswith(ext) for ext in expected_extensions):
+            score += 60
+        if "webdosya" in url_lower or "dosya" in url_lower:
+            score += 15
+        if link_text_hints and any(hint and hint in text_norm for hint in link_text_hints):
+            score += 30
+        if score > 0:
+            candidates.append((score, absolute_url))
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][1]
+
+
+def _filename_from_url(url, fallback="yonetmelik.docx"):
+    path = unquote(urlparse(url).path or "")
+    name = Path(path).name or fallback
+    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name).strip(" ._") or fallback
+    if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+        suffix = Path(fallback).suffix or ".docx"
+        name = f"{Path(name).stem or 'yonetmelik'}{suffix}"
+    return name
+
+
+def _download_bytes(url, timeout=45):
+    request = Request(url, headers={"User-Agent": OFFICIAL_USER_AGENT})
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _update_doc_metadata(doc_id, metadata, base_dir=None):
+    if not metadata:
+        return
+    index = _load_index(base_dir)
+    changed = False
+    for doc in index.get("documents", []):
+        if doc.get("id") == doc_id:
+            doc.update(metadata)
+            changed = True
+            break
+    if changed:
+        _save_index(index, base_dir)
+
+
 def yonetmelikleri_listele(base_dir=None):
     index = _load_index(base_dir)
     return list(index.get("documents") or [])
 
 
-def yonetmelik_ekle(path, title=None, base_dir=None):
+def yonetmelik_ekle(path, title=None, base_dir=None, metadata=None):
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError("Yönetmelik dosyası bulunamadı.")
@@ -236,11 +430,110 @@ def yonetmelik_ekle(path, title=None, base_dir=None):
         "chunk_count": len(chunks),
         "active": True,
     }
+    if metadata:
+        record.update(metadata)
     docs.append(record)
     docs.sort(key=lambda item: str(item.get("title", "")).lower())
     index["documents"] = docs
     _save_index(index, base)
     return record
+
+
+def yerlesik_yonetmelik_ekle(source_id, base_dir=None, refresh=False, download_error=None):
+    source = RESMI_YONETMELIK_KAYNAKLARI.get(source_id)
+    text = RESMI_YONETMELIK_YERLESIK_METINLER.get(source_id, "")
+    if not source or not text:
+        raise KeyError(f"Yerleşik yönetmelik kaynağı bulunamadı: {source_id}")
+    if not refresh:
+        for doc in yonetmelikleri_listele(base_dir):
+            if doc.get("official_id") == source_id:
+                return {
+                    "record": doc,
+                    "already_exists": True,
+                    "embedded_fallback": bool(doc.get("embedded_fallback")),
+                    "download_url": doc.get("official_download_url", ""),
+                }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_path = Path(tmp) / f"{source_id}_yerlesik.txt"
+        temp_path.write_text(text, encoding="utf-8")
+        record = yonetmelik_ekle(
+            temp_path,
+            title=f"{source.get('title')} (Yerleşik)",
+            base_dir=base_dir,
+            metadata={
+                "official_id": source_id,
+                "official_page_url": source.get("page_url", ""),
+                "official_download_url": "",
+                "description": source.get("description", ""),
+                "embedded_fallback": True,
+                "download_error": str(download_error or ""),
+            },
+        )
+    _update_doc_metadata(record["id"], {"source_path": "RaporPro yerleşik kaynak"}, base_dir=base_dir)
+    record["source_path"] = "RaporPro yerleşik kaynak"
+    return {"record": record, "already_exists": False, "embedded_fallback": True, "download_url": ""}
+
+
+def varsayilan_yonetmelikleri_hazirla(base_dir=None):
+    results = []
+    for source_id in RESMI_YONETMELIK_KAYNAKLARI:
+        results.append(yerlesik_yonetmelik_ekle(source_id, base_dir=base_dir))
+    return results
+
+
+def resmi_yonetmelik_indir_ve_ekle(source_id, base_dir=None, timeout=45, refresh=False, allow_embedded_fallback=True):
+    source = RESMI_YONETMELIK_KAYNAKLARI.get(source_id)
+    if not source:
+        raise KeyError(f"Resmi yönetmelik kaynağı bulunamadı: {source_id}")
+    if not refresh:
+        for doc in yonetmelikleri_listele(base_dir):
+            if doc.get("official_id") == source_id:
+                return {"record": doc, "already_exists": True, "download_url": doc.get("official_download_url", "")}
+
+    page_url = source.get("page_url", "")
+    download_url = source.get("download_url", "")
+    try:
+        if not download_url:
+            html = _download_bytes(page_url, timeout=timeout).decode("utf-8", errors="ignore")
+            download_url = resmi_yonetmelik_baglanti_bul(
+                html,
+                page_url,
+                expected_extensions=source.get("expected_extensions"),
+                link_text_hints=source.get("link_text_hints"),
+            )
+        if not download_url:
+            raise RuntimeError("Resmi sayfada indirilecek yönetmelik eki bulunamadı.")
+        data = _download_bytes(download_url, timeout=timeout)
+    except Exception as exc:
+        if allow_embedded_fallback:
+            return yerlesik_yonetmelik_ekle(source_id, base_dir=base_dir, refresh=refresh, download_error=exc)
+        raise
+
+    filename = _filename_from_url(download_url, fallback=f"{source_id}.docx")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        suffix = ".docx"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_path = Path(tmp) / filename
+        if temp_path.suffix.lower() != suffix:
+            temp_path = temp_path.with_suffix(suffix)
+        temp_path.write_bytes(data)
+        record = yonetmelik_ekle(
+            temp_path,
+            title=source.get("title"),
+            base_dir=base_dir,
+            metadata={
+                "official_id": source_id,
+                "official_page_url": page_url,
+                "official_download_url": download_url,
+                "description": source.get("description", ""),
+            },
+        )
+    _update_doc_metadata(record["id"], {"source_path": download_url}, base_dir=base_dir)
+    record["source_path"] = download_url
+    return {"record": record, "already_exists": False, "download_url": download_url}
 
 
 def yonetmelik_sil(doc_id, base_dir=None):

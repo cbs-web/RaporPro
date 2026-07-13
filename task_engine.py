@@ -36,6 +36,7 @@ class TkTaskEngine:
         status_callback: Optional[Callable[[str, str], None]] = None,
         state_callback: Optional[Callable[[TaskSnapshot], None]] = None,
         max_workers: int = 2,
+        log_failures: bool = True,
     ):
         self.root = root
         self.status_callback = status_callback
@@ -47,6 +48,7 @@ class TkTaskEngine:
         self._completed = 0
         self._failed = 0
         self._closed = False
+        self.log_failures = bool(log_failures)
 
     def snapshot(self, last_task: str = ""):
         with self._lock:
@@ -56,6 +58,10 @@ class TkTaskEngine:
                 failed_count=self._failed,
                 last_task=last_task,
             )
+
+    def active_task_names(self):
+        with self._lock:
+            return [handle.name for handle in self._active.values()]
 
     def _ui_call(self, func, *args, **kwargs):
         try:
@@ -97,7 +103,8 @@ class TkTaskEngine:
             try:
                 return func(*args, **kwargs)
             except Exception as exc:
-                log_exception(f"task_engine.{task_name}", exc_value=exc)
+                if self.log_failures:
+                    log_exception(f"task_engine.{task_name}", exc_value=exc)
                 raise
 
         future = self.executor.submit(worker)

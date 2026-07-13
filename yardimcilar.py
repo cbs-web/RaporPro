@@ -31,6 +31,28 @@ def atomic_write_text(path, text, encoding="utf-8"):
         raise
 
 
+def atomic_docx_save(document, path):
+    """python-docx belgesini mevcut hedefi bozmadan tek hamlede kaydet."""
+    target = os.path.abspath(os.fspath(path))
+    folder = os.path.dirname(target) or "."
+    os.makedirs(folder, exist_ok=True)
+    suffix = os.path.splitext(target)[1] or ".docx"
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", suffix=suffix, dir=folder)
+    os.close(fd)
+    try:
+        document.save(tmp_path)
+        if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
+            raise OSError("Geçici Word dosyası oluşturulamadı.")
+        os.replace(tmp_path, target)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    return target
+
+
 def atomic_json_dump(data, path, *, indent=2, ensure_ascii=False):
     text = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii)
     atomic_write_text(path, text, encoding="utf-8")

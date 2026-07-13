@@ -7,10 +7,12 @@ import time
 import traceback
 from contextlib import contextmanager
 
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PERF_LOG_PATH = os.path.join(APP_DIR, "logs", "performance.log")
-ERROR_LOG_PATH = os.path.join(APP_DIR, "logs", "error.log")
+
+APP_DIR = str(SOURCE_DIR)
+PERF_LOG_PATH = str(kullanici_yolu("logs", "performance.log"))
+ERROR_LOG_PATH = str(kullanici_yolu("logs", "error.log"))
 _PERF_LOCK = threading.Lock()
 _ERROR_LOCK = threading.Lock()
 

@@ -3,9 +3,11 @@ import tempfile
 import uuid
 from datetime import datetime
 
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-MAP_EXPORT_DIR = os.path.join(APP_DIR, "harita_ciktilari")
+
+APP_DIR = str(SOURCE_DIR)
+MAP_EXPORT_DIR = str(kullanici_yolu("harita_ciktilari"))
 LEGACY_SHARED_MAP_NAMES = {"rapor_sondaj.jpg", "rapor_jeofizik.jpg", "rapor_mjh.jpg"}
 
 

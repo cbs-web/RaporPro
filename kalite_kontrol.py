@@ -4,9 +4,11 @@ import re
 import shutil
 
 from karot_motoru import derinlik_baslangic
+from sondaj_derinlik import sondaj_derinligi_kontrol_sonucu
 
 from docx import Document
 from ekler import uygun_ek_sablonu
+from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_sheet_var_mi
 
 
 KNOWN_TAGS = {
@@ -37,9 +39,9 @@ IMAGE_TAGS = {
     "[RESIM:TKGM]": "img_tkgm",
     "RESIM:TKGM": "img_tkgm",
     "[RESIM_JEOFIZIK]": "word_img_jeofizik",
-    "RESIM:MJH": "img_mjh_or_fallback",
-    "[RESIM:MJH]": "img_mjh_or_fallback",
-    "[RESIM_MJH]": "img_mjh_or_fallback",
+    "RESIM:MJH": "img_mjh",
+    "[RESIM:MJH]": "img_mjh",
+    "[RESIM_MJH]": "img_mjh",
     "[RESIM_SONDAJ]": "word_img_sondaj",
     "[RESIM:SONDAJ]": "word_img_sondaj",
 }
@@ -121,12 +123,6 @@ def number_or_none(value):
         return None
 
 def image_path_for_tag(app_instance, attr_name):
-    if attr_name == "img_mjh_or_fallback":
-        for candidate in ("img_mjh", "img_yer", "img_tkgm"):
-            path = getattr(app_instance, candidate, None)
-            if not is_blank(path) and os.path.exists(path):
-                return path
-        return getattr(app_instance, "img_mjh", None)
     return getattr(app_instance, attr_name, None)
 
 
@@ -212,6 +208,22 @@ def validate_project_data(veri):
             _validate_depth_rows(report, no, der, "Kaya", sondaj.get("kaya", []), 0, sondaj.get("litoloji", []))
 
     _validate_geophysics(report, veri.get("jeofizik", {}))
+
+    try:
+        depth_check = sondaj_derinligi_kontrol_sonucu(veri)
+        recommended = number_or_none(depth_check.get("onerilen_sondaj_derinligi"))
+        if recommended and recommended > 0:
+            method = "gerilme %10 hesabi" if depth_check.get("hesap_tipi") == "gerilme_10" else "yonetmelik on kontrolu"
+            report["info"].append(f"Sondaj derinligi {method}: onerilen minimum sondaj derinligi {recommended:.2f} m.")
+            for item in depth_check.get("eksik_sondajlar", [])[:10]:
+                report["warnings"].append(
+                    f"{item['sondaj']}: sondaj derinligi onerilen {recommended:.2f} m altinda "
+                    f"({item['derinlik']:.2f} m, eksik yaklasik {item['eksik']:.2f} m)."
+                )
+            for note in depth_check.get("uyarilar", [])[:5]:
+                report["warnings"].append(f"Sondaj derinligi hesabi: {note}")
+    except Exception as exc:
+        report["warnings"].append(f"Sondaj derinligi hesabi calistirilamadi: {exc}")
 
     if not report["errors"] and not report["warnings"]:
         report["info"].append("Veri dogrulamasinda kritik sorun bulunmadi.")
@@ -547,12 +559,14 @@ def build_preflight_report(app_instance):
 
     if any(tag in tags for tag in ["[JEO_PARAMETRE]", "[MASW]", "[VP]"]):
         path = getattr(app_instance, "jeo_excel_path", None)
+        jeo_rows = app_instance.veri.get("jeofizik_sheet", {}).get("rows", []) if isinstance(getattr(app_instance, "veri", None), dict) else []
+        jeo_sheet_ready = jeofizik_sheet_var_mi(getattr(app_instance, "veri", {})) and bool(jeofizik_sheet_rows_to_ss_list(jeo_rows))
         has_manual_layers = any(
             ss.get("layers") for ss in app_instance.veri.get("jeofizik", {}).get("ss_list", [])
         )
-        if is_blank(path) and not has_manual_layers:
-            report["warnings"].append("Jeofizik tabloları için Excel veya manuel tabaka verisi yok.")
-        elif not is_blank(path) and not os.path.exists(path):
+        if is_blank(path) and not has_manual_layers and not jeo_sheet_ready:
+            report["warnings"].append("Jeofizik tabloları için Excel, Sheet veya manuel tabaka verisi yok.")
+        elif not is_blank(path) and not os.path.exists(path) and not jeo_sheet_ready:
             report["warnings"].append(f"Jeofizik Excel dosyası bulunamadı: {path}")
 
     try:

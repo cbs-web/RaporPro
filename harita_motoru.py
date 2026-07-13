@@ -6,21 +6,20 @@ import tkintermapview.map_widget as tkintermapview_map_widget
 import math
 import os
 
+from harita_ayarlari import hgm_ortofoto_url_yukle
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, valid_latlon
 from performans import log_exception
 
 DEFAULT_TILE_SERVER = "Google Uydu"
 GOOGLE_SATELLITE_TILE_URL = "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"
-HGM_ORTOFOTO_TILE_URL = os.environ.get(
-    "RAPORPRO_HGM_ORTOFOTO_URL",
-    "https://atlas.harita.gov.tr/webservis/ortofoto/{z}/{x}/{y}.jpg?apikey=rXKdDZxXgj2hgFspEC4BKG4HMittQ0Y6",
-)
+HGM_ORTOFOTO_TILE_URL = hgm_ortofoto_url_yukle()
 HGM_ORTOFOTO_URL_MARKER = "atlas.harita.gov.tr/webservis/ortofoto/"
 
 TILE_SERVERS = {
     "Google Uydu": {"url": GOOGLE_SATELLITE_TILE_URL, "max_zoom": 22},
-    "HGM Ortofoto": {"url": HGM_ORTOFOTO_TILE_URL, "max_zoom": 22},
 }
+if HGM_ORTOFOTO_TILE_URL:
+    TILE_SERVERS["HGM Ortofoto"] = {"url": HGM_ORTOFOTO_TILE_URL, "max_zoom": 22}
 
 
 def ensure_hgm_tile_headers():

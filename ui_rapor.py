@@ -38,6 +38,8 @@ from ekler import (
 from yonetmelik_motoru import (
     YONETMELIK_DIR,
     duzeltme_yonetmelik_dayanaklari,
+    resmi_yonetmelik_indir_ve_ekle,
+    resmi_yonetmelik_kaynaklari,
     yonetmelik_ara,
     yonetmelik_ekle,
     yonetmelik_sil,
@@ -112,6 +114,8 @@ class RaporSekmesiMixin:
                     text=os.path.basename(self.jeo_excel_path) if self.jeo_excel_path else "Jeofizik Excel seçilmedi",
                     foreground=COLOR_SUCCESS if self.jeo_excel_path else "red",
                 )
+                if hasattr(self, "_jeofizik_label_guncelle"):
+                    self._jeofizik_label_guncelle()
             for attr, path in [
                 ("lbl_yer", self.img_yer),
                 ("lbl_tkgm", self.img_tkgm),
@@ -223,6 +227,14 @@ class RaporSekmesiMixin:
         lab_sheet_btn.pack(side="right")
         self.tooltip_ekle(lab_sheet_btn, "Laboratuvar verisini program içindeki sheet'e yapıştır")
         file_row(flow, "Jeofizik Excel", "lbl_jeo_excel", "Jeofizik Excel seçilmedi", "Seç", self.jeo_excel_sec)
+        jeo_sheet_row = ttk.Frame(flow)
+        jeo_sheet_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(jeo_sheet_row, text="", width=20).pack(side="left", padx=(0, 8))
+        jeo_sheet_info = ttk.Label(jeo_sheet_row, text="Sismik parametre Excel'ini kopyalayıp programa yapıştırmak için Jeofizik Sheet'i açın.", foreground="#555555")
+        jeo_sheet_info.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        jeo_sheet_btn = self.modern_button(jeo_sheet_row, text="Jeofizik Sheet", command=self.jeofizik_sheet_ac, role="accent", outline=True, width=18)
+        jeo_sheet_btn.pack(side="right")
+        self.tooltip_ekle(jeo_sheet_btn, "Jeofizik sismik parametre verisini program içindeki sheet'e yapıştır")
 
         f_img = ttk.LabelFrame(center_frame, text="Görseller", padding=12)
         f_img.pack(fill="x", pady=(0, 10))
@@ -347,7 +359,10 @@ class RaporSekmesiMixin:
         f = filedialog.askopenfilename(filetypes=[("Excel Dosyaları", "*.xlsx;*.xls;*.csv")])
         if f:
             self.jeo_excel_path = f
-            self.lbl_jeo_excel.config(text=os.path.basename(f), foreground=COLOR_SUCCESS)
+            if hasattr(self, "_jeofizik_label_guncelle"):
+                self._jeofizik_label_guncelle()
+            else:
+                self.lbl_jeo_excel.config(text=os.path.basename(f), foreground=COLOR_SUCCESS)
 
     def resim_sec(self, tur):
         f = filedialog.askopenfilename(filetypes=[("Resim", "*.jpg;*.png;*.jpeg")])
@@ -785,10 +800,12 @@ class RaporSekmesiMixin:
         klasor = filedialog.askdirectory(**opts)
         if not klasor:
             return
+        veri_snapshot = copy.deepcopy(self.veri)
         self.arka_plan_gorevi_baslat(
             "Grafikleri kaydet",
             self.grafikleri_kaydet_worker,
             klasor,
+            veri_snapshot,
             status_start="Grafik dışa aktarımı arka planda başlatıldı.",
             status_success="Grafik dışa aktarımı tamamlandı.",
             status_error="Grafik dışa aktarımı tamamlanamadı: {error}",
@@ -803,26 +820,27 @@ class RaporSekmesiMixin:
             pass
 
     @perf_tracked("figures.export_all.engine")
-    def grafikleri_kaydet_worker(self, klasor):
-        for s in self.veri["sondaj"]:
-            self._arka_plan_status(f"Çizim başlatılıyor: {s['no']}...", level="info")
-            figures = GeoEngine.ciz_profesyonel_log(s, self.veri)
+    def grafikleri_kaydet_worker(self, klasor, veri_snapshot):
+        with GeoEngine.plot_lock:
+            for s in veri_snapshot["sondaj"]:
+                self._arka_plan_status(f"Çizim başlatılıyor: {s['no']}...", level="info")
+                figures = GeoEngine.ciz_profesyonel_log(s, veri_snapshot)
+                try:
+                    for idx, fig in enumerate(figures):
+                        fig.savefig(
+                            f"{klasor}/Log_{s['no']}_Sayfa{idx + 1}.jpg",
+                            dpi=DEFAULT_EXPORT_DPI,
+                            bbox_inches="tight",
+                        )
+                finally:
+                    for fig in figures:
+                        plt.close(fig)
+            self._arka_plan_status("Jeolojik Kesit çiziliyor...", level="info")
+            fig_k, _ = GeoEngine.kesit_ciz_interaktif(veri_snapshot["sondaj"])
             try:
-                for idx, fig in enumerate(figures):
-                    fig.savefig(
-                        f"{klasor}/Log_{s['no']}_Sayfa{idx + 1}.jpg",
-                        dpi=DEFAULT_EXPORT_DPI,
-                        bbox_inches="tight",
-                    )
+                fig_k.savefig(os.path.join(klasor, "Jeolojik_Kesit.jpg"), dpi=DEFAULT_EXPORT_DPI, bbox_inches="tight")
             finally:
-                for fig in figures:
-                    plt.close(fig)
-        self._arka_plan_status("Jeolojik Kesit çiziliyor...", level="info")
-        fig_k, _ = GeoEngine.kesit_ciz_interaktif(self.veri["sondaj"])
-        try:
-            fig_k.savefig(os.path.join(klasor, "Jeolojik_Kesit.jpg"), dpi=DEFAULT_EXPORT_DPI, bbox_inches="tight")
-        finally:
-            plt.close(fig_k)
+                plt.close(fig_k)
         return klasor
 
     @perf_tracked("report.preflight")
@@ -1596,10 +1614,10 @@ class RaporSekmesiMixin:
             paths = filedialog.askopenfilenames(
                 title="Yönetmelik dosyası seç",
                 filetypes=[
-                    ("Yönetmelik Dosyaları", "*.pdf;*.docx;*.txt;*.md"),
+                    ("Yönetmelik Dosyaları", "*.pdf;*.docx;*.txt;*.md;*.html;*.htm"),
                     ("PDF", "*.pdf"),
                     ("Word", "*.docx"),
-                    ("Metin", "*.txt;*.md"),
+                    ("Metin/HTML", "*.txt;*.md;*.html;*.htm"),
                 ],
                 parent=win,
             )
@@ -1621,6 +1639,55 @@ class RaporSekmesiMixin:
                 status_error="Yönetmelik eklenemedi: {error}",
                 on_success=add_done,
                 on_error=lambda exc: messagebox.showerror("Yönetmelik Merkezi", str(exc), parent=win),
+            )
+
+        def add_official_source():
+            sources = resmi_yonetmelik_kaynaklari()
+            if not sources:
+                messagebox.showinfo("Yönetmelik Merkezi", "Tanımlı resmi yönetmelik kaynağı yok.", parent=win)
+                return
+            source = sources[0]
+
+            def worker():
+                return resmi_yonetmelik_indir_ve_ekle(source["id"])
+
+            def done(result):
+                record = (result or {}).get("record", {})
+                refresh_docs()
+                if (result or {}).get("already_exists"):
+                    messagebox.showinfo(
+                        "Yönetmelik Merkezi",
+                        f"'{record.get('title', source.get('title'))}' zaten ekli.",
+                        parent=win,
+                    )
+                    status_var.set("Resmi yönetmelik zaten kayıtlı.")
+                elif (result or {}).get("embedded_fallback"):
+                    status_var.set(f"Yerleşik yönetmelik kaynağı eklendi: {record.get('title', source.get('title'))}")
+                    self.set_status("İnternet bağlantısı olmadığı için yerleşik yönetmelik kaynağı eklendi.", level="warning")
+                else:
+                    status_var.set(f"Resmi yönetmelik eklendi: {record.get('title', source.get('title'))}")
+                    self.set_status("Resmi yönetmelik eklendi ve indekslendi.", level="success")
+
+            def failed(exc):
+                status_var.set("Resmi yönetmelik indirilemedi. Dosyayı elle ekleyebilirsiniz.")
+                messagebox.showerror(
+                    "Yönetmelik Merkezi",
+                    "Resmi yönetmelik otomatik indirilemedi.\n\n"
+                    f"Kaynak: {source.get('page_url', '-')}\n\n"
+                    f"Hata: {exc}\n\n"
+                    "Bu durumda resmi sayfadaki DOCX/PDF dosyasını indirip 'Yönetmelik Ekle' ile ekleyebilirsiniz.",
+                    parent=win,
+                )
+
+            status_var.set("Resmi yönetmelik indiriliyor ve indeksleniyor...")
+            self.arka_plan_gorevi_baslat(
+                "Resmi yönetmelik ekle",
+                worker,
+                status_start="Resmi yönetmelik indiriliyor.",
+                status_success="Resmi yönetmelik eklendi.",
+                status_error="Resmi yönetmelik indirilemedi: {error}",
+                on_success=done,
+                on_error=failed,
             )
 
         def remove_selected():
@@ -1686,7 +1753,8 @@ class RaporSekmesiMixin:
         btns = ttk.Frame(body)
         btns.pack(fill="x", pady=(10, 0))
         self.modern_button(btns, text="Yönetmelik Ekle", command=add_files, role="success").pack(side="left")
-        self.modern_button(btns, text="Seçileni Sil", command=remove_selected, role="danger", outline=True).pack(side="left", padx=6)
+        self.modern_button(btns, text="Resmi Zemin Formatını Ekle", command=add_official_source, role="primary", outline=True).pack(side="left", padx=6)
+        self.modern_button(btns, text="Seçileni Sil", command=remove_selected, role="danger", outline=True).pack(side="left")
         ttk.Label(btns, textvariable=status_var, foreground="#555555").pack(side="left", fill="x", expand=True, padx=8)
         self.modern_button(btns, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(side="right")
 
