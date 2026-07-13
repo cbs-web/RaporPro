@@ -92,7 +92,7 @@ class ArayuzAraclarMixin:
         self.veri_eksikleri_tamamla(self.veri, self.varsayilan_veri_olustur())
         ayarlar = self.veri.setdefault("ayarlar", {})
         win = Toplevel(self.root)
-        self.pencere_hazirla(win, "Ayarlar", "760x560", (680, 480), modal=True)
+        self.pencere_hazirla(win, "Ayarlar", "760x600", (680, 500), modal=True)
 
         nb = ttk.Notebook(win)
         nb.pack(fill="both", expand=True, padx=12, pady=12)
@@ -113,6 +113,7 @@ class ArayuzAraclarMixin:
             ("Varsayılan sondaj türü", "sondaj_turu"),
             ("Varsayılan delgi çapı", "delgi_capi"),
             ("Yedek sayısı", "yedek_sayisi"),
+            ("Sürüm geçmişi sayısı", "surum_gecmisi_sayisi"),
         ]
 
         entries = {}
@@ -209,6 +210,12 @@ class ArayuzAraclarMixin:
             except Exception:
                 ayarlar["yedek_sayisi"] = "10"
                 messagebox.showwarning("Ayarlar", "Yedek sayısı geçersizdi; 10 olarak ayarlandı.")
+            try:
+                history_keep = int(ayarlar.get("surum_gecmisi_sayisi", "40"))
+                ayarlar["surum_gecmisi_sayisi"] = str(max(5, min(history_keep, 250)))
+            except Exception:
+                ayarlar["surum_gecmisi_sayisi"] = "40"
+                messagebox.showwarning("Ayarlar", "Sürüm geçmişi sayısı geçersizdi; 40 olarak ayarlandı.")
 
             self.ayarlari_uygula()
             self.set_status("Ayarlar güncellendi.", level="success")

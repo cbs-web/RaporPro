@@ -1,4 +1,6 @@
 import json
+import copy
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -87,12 +89,22 @@ from harita_ayarlari import hgm_ortofoto_url_kaydet, hgm_ortofoto_url_yukle
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, ss_harita_etiketi
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
+from ui_proje_surumleri import ProjeSurumleriMixin
 from proje_arsiv import (
     arsiv_kaydi_ekle,
     arsiv_kayitlari_yukle,
     biten_isler_kml_yaz,
     kml_sinir_koordinatlari_oku,
     proje_merkez_koordinati,
+)
+from proje_surumleri import (
+    degisiklik_ozeti,
+    eski_yedekleri_ice_aktar,
+    proje_verilerini_karsilastir,
+    surum_deposunu_kopyala,
+    surum_kaydi_olustur,
+    surum_verisi_yukle,
+    surumleri_listele,
 )
 from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
@@ -357,6 +369,192 @@ class ProjeKayitDurumuTestleri(unittest.TestCase):
         app.yeni_proje()
 
         app.yeni_proje_sihirbazi.assert_not_called()
+
+
+class ProjeSurumGecmisiTestleri(unittest.TestCase):
+    @staticmethod
+    def _veri(derinlik="15", n30=12, lab_rows=None):
+        return {
+            "kunye": {"sahibi": "Surum Testi", "il": "Canakkale", "ilce": "Merkez"},
+            "sondaj": [
+                {
+                    "no": "SK-1",
+                    "der": derinlik,
+                    "litoloji": [{"bas": "0", "bit": derinlik, "tanim": "Kil"}],
+                    "spt": [{"der": "1.5", "n30": n30}],
+                }
+            ],
+            "lab_sheet": {"rows": lab_rows or [["Sondaj No", "Derinlik"], ["SK-1", "1.5"]]},
+            "jeofizik": {"ss_list": [], "mt_list": []},
+            "dosyalar": {},
+        }
+
+    def test_surum_kaydi_ayni_icerigi_art_arda_cogaltmaz(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "proje.json")
+            data = self._veri()
+            with open(project_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False)
+
+            first, first_created = surum_kaydi_olustur(project_path, data, "Ilk kayit", keep=10)
+            second, second_created = surum_kaydi_olustur(project_path, data, "Tekrar", keep=10)
+
+            self.assertTrue(first_created)
+            self.assertFalse(second_created)
+            self.assertEqual(first["hash"], second["hash"])
+            self.assertEqual(len(surumleri_listele(project_path, eski_yedekleri_aktar=False)), 1)
+
+    def test_surumler_saklanir_yuklenir_ve_karsilastirilir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "proje.json")
+            old_data = self._veri()
+            new_data = self._veri(derinlik="18", n30=19)
+
+            surum_kaydi_olustur(project_path, old_data, "Baslangic", keep=10)
+            latest, created = surum_kaydi_olustur(project_path, new_data, "Derinlik guncellendi", keep=10)
+            records = surumleri_listele(project_path, eski_yedekleri_aktar=False)
+            loaded = surum_verisi_yukle(project_path, latest)
+            changes = proje_verilerini_karsilastir(old_data, loaded)
+            summary = degisiklik_ozeti(changes)
+
+            self.assertTrue(created)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(loaded["sondaj"][0]["der"], "18")
+            self.assertGreaterEqual(summary["total"], 2)
+            self.assertTrue(any(item["label"].endswith("N30") for item in changes))
+            self.assertTrue(any(item["old"] == "15" and item["new"] == "18" for item in changes))
+
+    def test_eski_backup_dosyasi_gecmise_aktarilir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "zemin.json")
+            backup_dir = os.path.join(tmp, "backups")
+            os.makedirs(backup_dir)
+            backup_path = os.path.join(backup_dir, "zemin_20260713_101500.json")
+            with open(backup_path, "w", encoding="utf-8") as handle:
+                json.dump(self._veri(derinlik="12"), handle, ensure_ascii=False)
+
+            imported = eski_yedekleri_ice_aktar(project_path, keep=10)
+            imported_again = eski_yedekleri_ice_aktar(project_path, keep=10)
+            records = surumleri_listele(project_path, eski_yedekleri_aktar=False)
+
+            self.assertEqual(imported, 1)
+            self.assertEqual(imported_again, 0)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["source"], "legacy_backup")
+            self.assertEqual(surum_verisi_yukle(project_path, records[0])["sondaj"][0]["der"], "12")
+
+    def test_sheet_icerik_degisimini_tek_anlamli_satirda_gosterir(self):
+        old_data = self._veri(lab_rows=[["Sondaj No", "Derinlik"], ["SK-1", "1.5"]])
+        new_data = self._veri(lab_rows=[["Sondaj No", "Derinlik"], ["SK-1", "3.0"]])
+
+        changes = proje_verilerini_karsilastir(old_data, new_data)
+        lab_changes = [item for item in changes if item["category"] == "Laboratuvar Sheet"]
+
+        self.assertEqual(len(lab_changes), 1)
+        self.assertEqual(lab_changes[0]["label"], "Laboratuvar çalışma sayfası")
+        self.assertIn("içerik değişti", lab_changes[0]["new"])
+
+    def test_gercek_spt_satir_biciminde_n30_alani_ayri_gosterilir(self):
+        old_data = {"sondaj": [{"no": "SK-1", "spt": [["1.50", "2", "3", "4", "7"]]}]}
+        new_data = {"sondaj": [{"no": "SK-1", "spt": [["1.50", "2", "3", "5", "8"]]}]}
+
+        changes = proje_verilerini_karsilastir(old_data, new_data)
+
+        self.assertEqual(len(changes), 2)
+        self.assertTrue(any(item["label"].endswith("30-45 cm") for item in changes))
+        self.assertTrue(any(item["label"].endswith("N30") for item in changes))
+        self.assertTrue(all("SPT [1.50]" in item["label"] for item in changes))
+
+    def test_surum_numarasi_eski_kayitlar_budansa_da_sabit_kalir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "proje.json")
+            for index in range(7):
+                surum_kaydi_olustur(
+                    project_path,
+                    self._veri(derinlik=str(10 + index)),
+                    f"Kayit {index + 1}",
+                    keep=5,
+                )
+
+            records = surumleri_listele(project_path, eski_yedekleri_aktar=False, keep=5)
+
+            self.assertEqual(len(records), 5)
+            self.assertEqual([record["number"] for record in records], [7, 6, 5, 4, 3])
+
+    def test_farkli_kaydet_surumu_yeni_proje_dalina_kopyalar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = os.path.join(tmp, "kaynak.json")
+            target_path = os.path.join(tmp, "hedef.json")
+            surum_kaydi_olustur(source_path, self._veri(derinlik="12"), "V1", keep=10)
+            surum_kaydi_olustur(source_path, self._veri(derinlik="15"), "V2", keep=10)
+
+            copied = surum_deposunu_kopyala(source_path, target_path)
+            records = surumleri_listele(target_path, eski_yedekleri_aktar=False)
+
+            self.assertTrue(copied)
+            self.assertEqual([record["number"] for record in records], [2, 1])
+            self.assertEqual(surum_verisi_yukle(target_path, records[0])["sondaj"][0]["der"], "15")
+
+    def test_manuel_kayit_eski_ve_yeni_durumu_gecmiste_korur(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "proje.json")
+            old_data = self._veri(derinlik="12")
+            new_data = self._veri(derinlik="18")
+            with open(project_path, "w", encoding="utf-8") as handle:
+                json.dump(old_data, handle, ensure_ascii=False)
+
+            app = ArayuzProjeMixin()
+            app.veri = new_data
+            app.aktif_dosya_yolu = project_path
+            app.guncelle_veri_objesi = mock.Mock()
+            app.proje_kilitli_mi = mock.Mock(return_value=False)
+            app.set_status = mock.Mock()
+            app.set_save_indicator = mock.Mock()
+            app.recent_project_ekle = mock.Mock()
+
+            self.assertTrue(app.veri_kaydet())
+            first_count = len(surumleri_listele(project_path, eski_yedekleri_aktar=False))
+            self.assertTrue(app.veri_kaydet())
+            second_count = len(surumleri_listele(project_path, eski_yedekleri_aktar=False))
+            depths = {
+                surum_verisi_yukle(project_path, record)["sondaj"][0]["der"]
+                for record in surumleri_listele(project_path, eski_yedekleri_aktar=False)
+            }
+
+            self.assertEqual(first_count, 2)
+            self.assertEqual(second_count, 2)
+            self.assertEqual(depths, {"12", "18"})
+
+    def test_eski_surumu_yuklemek_dosyayi_degistirmeden_projeyi_kirli_yapar(self):
+        class VersionApp(ArayuzProjeMixin, ProjeSurumleriMixin):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "proje.json")
+            old_data = self._veri(derinlik="12")
+            current_data = self._veri(derinlik="18")
+            with open(project_path, "w", encoding="utf-8") as handle:
+                json.dump(current_data, handle, ensure_ascii=False)
+            old_record, _created = surum_kaydi_olustur(project_path, old_data, "Eski", keep=10)
+            surum_kaydi_olustur(project_path, current_data, "Guncel", keep=10)
+
+            app = VersionApp()
+            app.veri = copy.deepcopy(current_data)
+            app.aktif_dosya_yolu = project_path
+            app._son_kayit_imzasi = app.proje_kayit_imzasi(current_data)
+            app.guncelle_veri_objesi = mock.Mock()
+            app.doldur_arayuz = mock.Mock()
+            app.proje_baslik_guncelle = mock.Mock()
+            app.set_status = mock.Mock()
+            app.set_save_indicator = mock.Mock()
+
+            loaded = app.proje_surumunu_calisma_alanina_yukle(old_record)
+
+            self.assertEqual(loaded["sondaj"][0]["der"], "12")
+            self.assertEqual(app.aktif_dosya_yolu, project_path)
+            self.assertTrue(app.proje_degisti_mi())
+            with open(project_path, "r", encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle)["sondaj"][0]["der"], "18")
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):

@@ -20,6 +20,7 @@ from ui_kesit import KesitCizimMixin
 from ui_kontrol import KontrolPaneliMixin
 from ui_lab_sheet import LabSheetMixin
 from ui_rapor import RaporSekmesiMixin
+from ui_proje_surumleri import ProjeSurumleriMixin
 from ui_sondaj_derinlik import SondajDerinlikHesabiMixin
 from ui_spt_okuma import SPTOkumaMixin
 from ui_sondaj import SondajMixin
@@ -42,7 +43,7 @@ AUTOSAVE_PATH = str(
 AUTOSAVE_DIR = os.path.dirname(AUTOSAVE_PATH)
 # ============================================================================
 # ÖZEL SPT VERİ GİRİŞ PENCERESİ (OTOMATİK HESAPLAMA VE DERİNLİK ARTIŞI)
-class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
+class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
     @perf_tracked("ui.__init__")
     def __init__(self, root):
         self.root = root
@@ -265,6 +266,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ArayuzOzetMixin, Ara
             ("Kaydet", self.veri_kaydet),
             ("Farklı Kaydet", self.proje_farkli_kaydet),
             ("Kurtarma Kaydını Aç", self.otomatik_kayit_yukle),
+            ("Sürüm Geçmişi", self.surum_gecmisi_penceresi),
             None,
             ("Tamamlandı Olarak Kilitle", self.proje_tamamlandi_kilitle),
             ("Proje Kilidini Kaldır", self.proje_kilidini_kaldir),

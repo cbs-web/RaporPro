@@ -19,6 +19,11 @@ from proje_arsiv import (
     biten_isler_kml_yaz,
     proje_merkez_koordinati,
 )
+from proje_surumleri import (
+    VARSAYILAN_SURUM_SINIRI,
+    surum_deposunu_kopyala,
+    surum_kaydi_olustur,
+)
 from kalite_kontrol import backup_project_file
 from workbook_motoru import (
     WORKBOOK_SHEET_DEFS,
@@ -250,6 +255,7 @@ class ArayuzProjeMixin:
             "<Control-r>": self.rapor_on_kontrol,
             "<Control-k>": self.kesit_secim_penceresi,
             "<Control-h>": self.son_projeler_penceresi,
+            "<Control-Shift-H>": self.surum_gecmisi_penceresi,
             "<F5>": self.ozet_yenile,
             "<F9>": self.final_kontrol_penceresi,
         }
@@ -319,6 +325,7 @@ class ArayuzProjeMixin:
                 "taahhut_jeofizik_adres": "İsmetpaşa Mh. Hasan Mevsuf Sk. No :4 Da:5",
                 "taahhut_jeofizik_telefon": "0 532 281 12 95",
                 "yedek_sayisi": "10",
+                "surum_gecmisi_sayisi": str(VARSAYILAN_SURUM_SINIRI),
                 "spt_guven_esigi": "90",
                 "spt_auto_pro": "1"
             },
@@ -404,6 +411,34 @@ class ArayuzProjeMixin:
             return max(1, keep)
         except Exception:
             return 10
+
+    def get_surum_gecmisi_sayisi(self):
+        try:
+            keep = int(str(self.veri.get("ayarlar", {}).get("surum_gecmisi_sayisi", VARSAYILAN_SURUM_SINIRI)).strip())
+            return max(5, min(keep, 250))
+        except Exception:
+            return VARSAYILAN_SURUM_SINIRI
+
+    def proje_surum_kaydi_yaz(self, neden, force=False, source="manual"):
+        """Kayıt başarılı olduktan sonra sürüm kopyasını oluşturur; ana kaydı engellemez."""
+        if not self.aktif_dosya_yolu:
+            return None, False
+        try:
+            record, created = surum_kaydi_olustur(
+                self.aktif_dosya_yolu,
+                self.veri,
+                reason=neden,
+                keep=self.get_surum_gecmisi_sayisi(),
+                force=force,
+                source=source,
+            )
+            if created:
+                self.set_status("Yeni proje sürümü geçmişe eklendi.", level="info")
+            return record, created
+        except Exception as exc:
+            log_exception("project.version.write", exc_value=exc)
+            self.set_status(f"Sürüm geçmişi uyarısı: {exc}", level="warning")
+            return None, False
 
     def proje_durumu(self):
         return self.veri.setdefault("proje_durumu", {"tamamlandi": False, "kilitli": False, "tamamlanma_tarihi": "", "arsiv_notu": ""})
@@ -519,6 +554,7 @@ class ArayuzProjeMixin:
                 if backup_error:
                     self.set_status(f"Yedekleme uyarısı: {backup_error}", level="warning")
                 atomic_json_dump(self.veri, self.aktif_dosya_yolu, indent=4, ensure_ascii=False)
+                self.proje_surum_kaydi_yaz("Proje kaydedildi")
                 self.kayit_imzasi_guncelle()
                 self.set_status(f"Kaydedildi: {os.path.basename(self.aktif_dosya_yolu)}", level="success")
                 self.last_save_time = datetime.datetime.now()
@@ -537,6 +573,7 @@ class ArayuzProjeMixin:
     @perf_tracked("project.save_as")
     def proje_farkli_kaydet(self):
         self.guncelle_veri_objesi()
+        onceki_proje_yolu = self.aktif_dosya_yolu
         if self.proje_kilitli_mi() and not getattr(self, "_kilitli_kayda_izin_ver", False):
             messagebox.showwarning("Proje Kilitli", "Bu proje kilitli. Farklı kaydetmek için önce kilidi kaldırın.")
             self.set_save_indicator("Kilitli: farklı kaydedilmedi", "warning")
@@ -557,7 +594,13 @@ class ArayuzProjeMixin:
                 if backup_error:
                     self.set_status(f"Yedekleme uyarısı: {backup_error}", level="warning")
                 atomic_json_dump(self.veri, dosya_yolu, indent=4, ensure_ascii=False)
+                if onceki_proje_yolu and os.path.normcase(os.path.abspath(onceki_proje_yolu)) != os.path.normcase(os.path.abspath(dosya_yolu)):
+                    try:
+                        surum_deposunu_kopyala(onceki_proje_yolu, dosya_yolu)
+                    except Exception as exc:
+                        log_exception("project.version.copy", exc_value=exc)
                 self.aktif_dosya_yolu = dosya_yolu
+                self.proje_surum_kaydi_yaz("Farklı kaydet" if onceki_proje_yolu else "İlk proje kaydı")
                 self.root.title(f"Zemin Rapor Pro - {os.path.basename(dosya_yolu)}")
                 self.kayit_imzasi_guncelle()
                 self.set_status(f"Yeni proje olarak kaydedildi: {dosya_yolu}", level="success")
