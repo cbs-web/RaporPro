@@ -210,4 +210,11 @@ def derinlik_aralikta_mi(depth, intervals):
 
 def refu_mu(value):
     text = str(value or "").strip().casefold()
-    return text in {"r", "ref", "refü", "refu"} or "refü" in text or "refu" in text
+    if text in {"r", "ref", "refü", "refu"} or "refü" in text or "refu" in text:
+        return True
+    match = re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)\s*(?:cm)?", text)
+    if not match:
+        return False
+    darbe = float(match.group(1).replace(",", "."))
+    penetrasyon_cm = float(match.group(2).replace(",", "."))
+    return darbe >= 50 and 0 <= penetrasyon_cm <= 15

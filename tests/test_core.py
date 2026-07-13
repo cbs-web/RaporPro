@@ -113,6 +113,7 @@ from workbook_motoru import validate_rows as wb_validate_rows
 from workbook_motoru import WORKBOOK_SHEET_DEFS
 from task_engine import TkTaskEngine
 from tutarlilik_motoru import laboratuvar_kayitlarini_ayikla, proje_tutarlilik_raporu
+from tutarlilik_ortak import refu_mu
 from uygulama_yollari import eski_veriyi_kopyala, kullanici_yolu
 from yonetmelik_motoru import (
     duzeltme_yonetmelik_dayanaklari,
@@ -211,6 +212,45 @@ class TutarlilikMotoruTestleri(unittest.TestCase):
         self.assertIn("checks", report)
         self.assertIn("errors", report)
         self.assertIn("warnings", report)
+
+    def test_spt_elli_darbe_penetrasyon_gosterimi_refu_kabul_edilir(self):
+        veri = self._base_veri()
+        veri["sondaj"][0]["spt"] = [
+            ["1.50", "50/5", "-", "-", "R"],
+            ["3.00", "20", "50/10", "-", "R"],
+        ]
+
+        report = proje_tutarlilik_raporu(veri)
+        spt_blow_findings = [
+            item for item in report["findings"]
+            if item["id"].startswith("sondaj.sk1.spt") and item["label"] == "SPT darbe sayısı"
+        ]
+
+        self.assertEqual(spt_blow_findings, [])
+        self.assertTrue(refu_mu("50/10"))
+        self.assertTrue(refu_mu("50 / 5 cm"))
+        self.assertFalse(refu_mu("10/20"))
+        self.assertFalse(refu_mu("49/10"))
+
+    def test_jeofizik_sheet_manuel_serim_koordinatlarini_korur(self):
+        veri = self._base_veri()
+        veri["jeofizik"]["ss_list"][0]["ad"] = "SS-1"
+        veri["jeofizik_sheet"]["rows"] = [
+            ["Sismik Ölçü ve Hesaplarının Sahibi   :", "Serim 1", "", ""],
+            ["Zemin Parametreleri", "Simge", "TABAKA NO", ""],
+            ["", "Birim", "I", "II"],
+            ["VP = Boyuna Dalga Hızı", "VP (m/sn)", 600, 1200],
+            ["VS = Enine Dalga Hızı", "VS (m/sn)", 250, 500],
+            ["Tabaka Kalınlığı", "metre", 5, ""],
+        ]
+
+        report = proje_tutarlilik_raporu(veri)
+        coordinate_findings = [
+            item for item in report["findings"]
+            if item["id"].startswith("jeofizik.ss.0.koordinat")
+        ]
+
+        self.assertEqual(coordinate_findings, [])
 
     def test_sondaj_numarasi_bicim_farki_mukerrer_sayilir(self):
         veri = self._base_veri()

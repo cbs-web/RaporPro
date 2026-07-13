@@ -3,6 +3,7 @@ from jeofizik_sheet_motoru import (
     jeofizik_serim_anahtari,
     jeofizik_sheet_rows_to_ss_list,
     jeofizik_sheet_var_mi,
+    jeofizik_ss_koordinatlarini_koru,
 )
 from tutarlilik_ortak import (
     bulgu_ekle,
@@ -21,6 +22,8 @@ def jeofizik_kontrol(report, veri):
     if jeofizik_sheet_var_mi(veri):
         try:
             sheet_ss = jeofizik_sheet_rows_to_ss_list(veri.get("jeofizik_sheet", {}).get("rows", []))
+            if sheet_ss and manual_ss:
+                sheet_ss = jeofizik_ss_koordinatlarini_koru(sheet_ss, manual_ss)
         except Exception as exc:
             bulgu_ekle(
                 report,
