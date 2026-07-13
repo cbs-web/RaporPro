@@ -3,8 +3,14 @@ import os
 import re
 import shutil
 
-from karot_motoru import derinlik_baslangic
-from sondaj_derinlik import sondaj_derinligi_kontrol_sonucu
+import pandas as pd
+from PIL import Image
+from tutarlilik_motoru import (
+    bulgu_ekle,
+    kontrol_ekle,
+    kontrol_raporunu_tamamla,
+    proje_tutarlilik_raporu,
+)
 
 from docx import Document
 from ekler import uygun_ek_sablonu
@@ -166,197 +172,8 @@ def backup_project_file(project_path, keep=10):
 
 
 def validate_project_data(veri):
-    report = {"errors": [], "warnings": [], "info": []}
-
-    for section in ["kunye", "bina", "arazi", "sondaj", "jeofizik"]:
-        if section not in veri:
-            report["errors"].append(f"Eksik veri bölümü: {section}")
-
-    kunye = veri.get("kunye", {})
-    for key, label in [("sahibi", "Proje adi"), ("il", "Il"), ("ilce", "Ilce")]:
-        if is_blank(kunye.get(key)):
-            report["warnings"].append(f"{label} bos gorunuyor.")
-
-    sondajlar = veri.get("sondaj", [])
-    if not sondajlar:
-        report["errors"].append("En az bir sondaj kaydi gerekli.")
-    else:
-        seen = set()
-        for idx, sondaj in enumerate(sondajlar, start=1):
-            no = str(sondaj.get("no") or f"SK-{idx}").strip()
-            if no in seen:
-                report["warnings"].append(f"Tekrarlanan sondaj no: {no}")
-            seen.add(no)
-
-            der = number_or_none(sondaj.get("der"))
-            if der is None or der <= 0:
-                report["errors"].append(f"{no}: sondaj derinligi gecersiz.")
-                der = None
-
-            _validate_coordinate_pair(report, f"{no} koordinati", sondaj.get("y"), sondaj.get("x"))
-
-            for yass_key in ["yass_d1", "yass_d2"]:
-                yass = number_or_none(sondaj.get(yass_key))
-                if yass is not None and der is not None and yass > der:
-                    report["warnings"].append(f"{no}: yeraltisuyu derinligi sondaj derinligini asiyor.")
-
-            if is_blank(sondaj.get("k")):
-                report["warnings"].append(f"{no}: kuyu kotu girilmemis.")
-            _validate_lithology(report, no, der, sondaj.get("litoloji", []))
-            _validate_depth_rows(report, no, der, "SPT", sondaj.get("spt", []), 0, sondaj.get("litoloji", []))
-            _validate_depth_rows(report, no, der, "PMT", sondaj.get("pmt", []), 0, sondaj.get("litoloji", []))
-            _validate_depth_rows(report, no, der, "Kaya", sondaj.get("kaya", []), 0, sondaj.get("litoloji", []))
-
-    _validate_geophysics(report, veri.get("jeofizik", {}))
-
-    try:
-        depth_check = sondaj_derinligi_kontrol_sonucu(veri)
-        recommended = number_or_none(depth_check.get("onerilen_sondaj_derinligi"))
-        if recommended and recommended > 0:
-            method = "gerilme %10 hesabi" if depth_check.get("hesap_tipi") == "gerilme_10" else "yonetmelik on kontrolu"
-            report["info"].append(f"Sondaj derinligi {method}: onerilen minimum sondaj derinligi {recommended:.2f} m.")
-            for item in depth_check.get("eksik_sondajlar", [])[:10]:
-                report["warnings"].append(
-                    f"{item['sondaj']}: sondaj derinligi onerilen {recommended:.2f} m altinda "
-                    f"({item['derinlik']:.2f} m, eksik yaklasik {item['eksik']:.2f} m)."
-                )
-            for note in depth_check.get("uyarilar", [])[:5]:
-                report["warnings"].append(f"Sondaj derinligi hesabi: {note}")
-    except Exception as exc:
-        report["warnings"].append(f"Sondaj derinligi hesabi calistirilamadi: {exc}")
-
-    if not report["errors"] and not report["warnings"]:
-        report["info"].append("Veri dogrulamasinda kritik sorun bulunmadi.")
-    return report
-
-
-def _validate_coordinate_pair(report, label, lat_raw, lon_raw):
-    if is_blank(lat_raw) and is_blank(lon_raw):
-        report["warnings"].append(f"{label}: koordinat girilmemis.")
-        return
-    lat = number_or_none(lat_raw)
-    lon = number_or_none(lon_raw)
-    if lat is None or lon is None:
-        report["warnings"].append(f"{label}: koordinat sayisal degil.")
-    elif not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        report["warnings"].append(f"{label}: enlem/boylam araligi disinda.")
-
-
-def _validate_lithology(report, sondaj_no, total_depth, litoloji):
-    if not litoloji:
-        report["warnings"].append(f"{sondaj_no}: litoloji girilmemis.")
-        return
-
-    rows = []
-    for row_idx, row in enumerate(litoloji, start=1):
-        if len(row) < 3:
-            report["errors"].append(f"{sondaj_no}: {row_idx}. litoloji satiri eksik.")
-            continue
-        top = number_or_none(row[0])
-        bottom = number_or_none(row[1])
-        desc = row[2]
-        if top is None or bottom is None:
-            report["errors"].append(f"{sondaj_no}: {row_idx}. litoloji derinligi sayisal degil.")
-            continue
-        if bottom <= top:
-            report["errors"].append(f"{sondaj_no}: {row_idx}. litoloji bitisi baslangictan kucuk/esit.")
-            continue
-        if is_blank(desc):
-            report["warnings"].append(f"{sondaj_no}: {row_idx}. litoloji tanimi bos.")
-        if total_depth is not None and bottom > total_depth + 0.05:
-            report["errors"].append(f"{sondaj_no}: litoloji sondaj derinligini asiyor.")
-        rows.append((top, bottom, row_idx))
-
-    if not rows:
-        return
-
-    rows.sort()
-    if rows[0][0] > 0.05:
-        report["warnings"].append(f"{sondaj_no}: litoloji 0.00 m'den baslamiyor.")
-
-    prev_bottom = rows[0][1]
-    for top, bottom, row_idx in rows[1:]:
-        if top < prev_bottom - 0.05:
-            report["errors"].append(f"{sondaj_no}: {row_idx}. litoloji onceki katmanla cakisir.")
-        elif top > prev_bottom + 0.05:
-            report["warnings"].append(f"{sondaj_no}: litoloji araliginda bosluk var ({prev_bottom:g}-{top:g} m).")
-        prev_bottom = max(prev_bottom, bottom)
-
-    if total_depth is not None and prev_bottom < total_depth - 0.05:
-        report["warnings"].append(f"{sondaj_no}: litoloji sondaj sonuna kadar inmiyor.")
-
-
-def _lithology_intervals(litoloji):
-    intervals = []
-    for row in litoloji or []:
-        if len(row) < 2:
-            continue
-        top = number_or_none(row[0])
-        bottom = number_or_none(row[1])
-        if top is not None and bottom is not None and bottom > top:
-            intervals.append((top, bottom))
-    return intervals
-
-
-def _depth_inside_intervals(depth, intervals):
-    return any(top - 0.05 <= depth <= bottom + 0.05 for top, bottom in intervals)
-
-
-def _validate_depth_rows(report, sondaj_no, total_depth, label, rows, depth_index, litoloji=None):
-    intervals = _lithology_intervals(litoloji)
-    for row_idx, row in enumerate(rows or [], start=1):
-        if len(row) <= depth_index:
-            report["warnings"].append(f"{sondaj_no}: {label} {row_idx}. satirinda derinlik yok.")
-            continue
-        if label == "Kaya":
-            depth = derinlik_baslangic(row[depth_index])
-            depth = depth if depth > 0 else None
-        else:
-            depth = number_or_none(row[depth_index])
-        if depth is None:
-            report["warnings"].append(f"{sondaj_no}: {label} {row_idx}. derinligi sayisal degil.")
-        elif total_depth is not None and depth > total_depth + 0.05:
-            report["warnings"].append(f"{sondaj_no}: {label} {row_idx}. derinligi sondaj derinligini asiyor.")
-        elif intervals and not _depth_inside_intervals(depth, intervals):
-            report["warnings"].append(f"{sondaj_no}: {label} {row_idx}. derinligi litoloji araligi disinda.")
-
-        if label == "SPT" and len(row) >= 5:
-            n30 = str(row[4]).strip().upper()
-            if n30 not in {"", "R"} and number_or_none(n30) is None:
-                report["warnings"].append(f"{sondaj_no}: SPT {row_idx}. N30 degeri sayisal degil.")
-
-
-def _validate_geophysics(report, jeofizik):
-    ss_list = jeofizik.get("ss_list", [])
-    mt_list = jeofizik.get("mt_list", [])
-
-    if not ss_list:
-        report["warnings"].append("Jeofizik SS listesi bos.")
-
-    for idx, ss in enumerate(ss_list, start=1):
-        ad = ss.get("ad") or f"SS-{idx}"
-        coords = list(ss.get("coords", []))
-        if coords:
-            while len(coords) < 6:
-                coords.append("")
-            for i in range(0, 6, 2):
-                _validate_coordinate_pair(report, f"{ad} koordinat {i // 2 + 1}", coords[i], coords[i + 1])
-
-        for layer_idx, layer in enumerate(ss.get("layers", []), start=1):
-            for key in ["vp", "vs"]:
-                val = number_or_none(layer.get(key))
-                if val is None or val <= 0:
-                    report["warnings"].append(f"{ad}: {layer_idx}. tabaka {key} degeri gecersiz.")
-            h = number_or_none(layer.get("h"))
-            if layer_idx == 1 and h is None:
-                report["warnings"].append(f"{ad}: tabaka kalinligi girilmemis.")
-
-    for idx, mt in enumerate(mt_list, start=1):
-        ad = mt.get("no") or f"MT-{idx}"
-        _validate_coordinate_pair(report, f"{ad} koordinati", mt.get("y"), mt.get("x"))
-        for key in ["freq", "to", "ta", "tb", "hv", "sure"]:
-            if not is_blank(mt.get(key)) and number_or_none(mt.get(key)) is None:
-                report["warnings"].append(f"{ad}: {key} degeri sayisal degil.")
+    """Proje verisini yapılandırılmış tutarlılık motoruyla denetle."""
+    return proje_tutarlilik_raporu(veri)
 
 
 def read_word_tags(word_path):
@@ -487,98 +304,306 @@ def format_template_analysis(analysis):
     return "\n".join(lines)
 
 
-def build_preflight_report(app_instance):
-    report = validate_project_data(app_instance.veri)
+def _preflight_file_map(app_instance):
+    if hasattr(app_instance, "_dosya_map"):
+        try:
+            return app_instance._dosya_map()
+        except Exception:
+            pass
+    return {
+        key: getattr(app_instance, key, None)
+        for key in (
+            "word_path", "lab_excel_path", "jeo_excel_path", "kml_path",
+            "img_yer", "img_tkgm", "img_pga", "img_mjh",
+            "word_img_sondaj", "word_img_jeofizik",
+        )
+    }
 
+
+def _preflight_lab_rows(app_instance):
+    internal_rows = app_instance.veri.get("lab_sheet", {}).get("rows", [])
+    if any(any(not is_blank(cell) for cell in row) for row in internal_rows or []):
+        return internal_rows, None
+    path = getattr(app_instance, "lab_excel_path", None)
+    if is_blank(path) or not os.path.exists(path):
+        return [], None
     try:
-        from kesit_kalite import build_section_quality_report
-        sondajlar = app_instance.veri.get("sondaj", [])
-        kesit_options = app_instance.veri.get("kesit_ayarlari", {}) or {}
-        selected = kesit_options.get("selected_sondajlar") or []
-        if selected:
-            selected_set = set(selected)
-            kesit_sondajlar = [s for s in sondajlar if s.get("no") in selected_set]
-        else:
-            kesit_sondajlar = sondajlar
-        if len(kesit_sondajlar) >= 2:
-            section_report = build_section_quality_report(kesit_sondajlar, kesit_options)
-            if section_report.get("errors"):
-                for item in section_report["errors"][:8]:
-                    report["errors"].append(f"Kesit: {item}")
-            if section_report.get("warnings"):
-                for item in section_report["warnings"][:10]:
-                    report["warnings"].append(f"Kesit: {item}")
-                if len(section_report["warnings"]) > 10:
-                    report["warnings"].append(f"Kesit: {len(section_report['warnings']) - 10} ek uyarı daha var.")
-            stats = section_report.get("stats", {})
-            report["info"].append(
-                f"Kesit kontrolü: {stats.get('well_count', 0)} sondaj, "
-                f"{len(section_report.get('errors', []))} hata, {len(section_report.get('warnings', []))} uyarı."
+        frame = pd.read_excel(path, header=None)
+        frame = frame.where(pd.notna(frame), "")
+        return frame.values.tolist(), None
+    except Exception as exc:
+        return [], str(exc)
+
+
+def _image_quality_check(report, tag, path, attr_name):
+    check_id = f"rapor.gorsel.{attr_name}.{re.sub(r'[^a-z0-9]+', '', tag.casefold())}"
+    exists = bool(path and os.path.isfile(path))
+    kontrol_ekle(
+        report,
+        check_id,
+        "Rapor görselleri",
+        tag,
+        exists,
+        os.path.basename(path) if exists else f"{tag} için görsel seçilmemiş veya dosya bulunamıyor.",
+        "haritalar",
+        "Haritalar sekmesinde ilgili görseli yeniden oluşturup Word için aktarın.",
+        failure_level="warning",
+        weight=1,
+    )
+    if not exists:
+        return
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+            image.verify()
+        if width * height < 600_000 or min(width, height) < 400:
+            bulgu_ekle(
+                report,
+                f"{check_id}.cozunurluk",
+                "warning",
+                "Rapor görselleri",
+                "Görsel çözünürlüğü",
+                f"{tag} görseli düşük çözünürlüklü görünüyor ({width}x{height} px).",
+                "haritalar",
+                "Haritayı Word için yeniden ve daha yüksek çözünürlükle aktarın.",
             )
     except Exception as exc:
-        report["warnings"].append(f"Kesit kalite kontrol çalıştırılamadı: {exc}")
+        bulgu_ekle(
+            report,
+            f"{check_id}.okuma",
+            "error",
+            "Rapor görselleri",
+            "Görsel dosyası",
+            f"{tag} görseli açılamıyor: {exc}",
+            "haritalar",
+            "Görseli yeniden oluşturun veya geçerli JPG/PNG dosyası seçin.",
+        )
 
+
+def build_preflight_report(app_instance):
+    """Veri, dosya, şablon ve çıktı kaynaklarını tek raporda denetle."""
+    file_map = _preflight_file_map(app_instance)
+    lab_rows, lab_read_error = _preflight_lab_rows(app_instance)
+    report = proje_tutarlilik_raporu(app_instance.veri, file_map, lab_rows=lab_rows)
+
+    if lab_read_error:
+        bulgu_ekle(
+            report,
+            "rapor.lab.okuma",
+            "error",
+            "Laboratuvar",
+            "Lab Excel",
+            f"Lab Excel okunamadı: {lab_read_error}",
+            "rapor",
+            "Lab Excel dosyasını kontrol edin veya veriyi LAB Sheet'e yapıştırın.",
+        )
+
+    sondajlar = app_instance.veri.get("sondaj", []) or []
+    kesit_options = app_instance.veri.get("kesit_ayarlari", {}) or {}
+    selected_names = kesit_options.get("selected_sondajlar") or []
+    if selected_names:
+        selected_set = set(selected_names)
+        selected = [item for item in sondajlar if item.get("no") in selected_set]
+    else:
+        selected = sondajlar
+    if len(selected) >= 2:
+        try:
+            from kesit_kalite import build_section_quality_report
+
+            section_report = build_section_quality_report(selected, kesit_options)
+            section_errors = section_report.get("errors", []) or []
+            section_warnings = section_report.get("warnings", []) or []
+            kontrol_ekle(
+                report,
+                "kesit.kalite",
+                "Kesit",
+                "Kesit kalite kontrolü",
+                not section_errors and not section_warnings,
+                (
+                    "Kesit kalite kontrolü temiz."
+                    if not section_errors and not section_warnings
+                    else f"{len(section_errors)} hata, {len(section_warnings)} uyarı"
+                ),
+                "kesit",
+                "Kesit kalite ekranında tabaka eşleşmelerini ve koordinatları kontrol edin.",
+                failure_level="error" if section_errors else "warning",
+                weight=1,
+            )
+            for idx, detail in enumerate(section_errors):
+                bulgu_ekle(
+                    report,
+                    f"kesit.hata.{idx}",
+                    "error",
+                    "Kesit",
+                    "Kesit hatası",
+                    str(detail),
+                    "kesit",
+                    "Kesit seçim ve kalite ekranından ilgili veriyi düzeltin.",
+                )
+            for idx, detail in enumerate(section_warnings):
+                bulgu_ekle(
+                    report,
+                    f"kesit.uyari.{idx}",
+                    "warning",
+                    "Kesit",
+                    "Kesit uyarısı",
+                    str(detail),
+                    "kesit",
+                    "Kesit seçim ve kalite ekranından ilgili veriyi kontrol edin.",
+                )
+            report.setdefault("stats", {})["kesit_sondaj"] = len(selected)
+        except Exception as exc:
+            bulgu_ekle(
+                report,
+                "kesit.kalite.calistirma",
+                "warning",
+                "Kesit",
+                "Kesit kalite kontrolü",
+                f"Kesit kalite kontrolü çalıştırılamadı: {exc}",
+                "kesit",
+                "Kesit verilerini kontrol edin.",
+            )
+    else:
+        kontrol_ekle(
+            report,
+            "kesit.secim",
+            "Kesit",
+            "Kesit seçimi",
+            False,
+            "Kesit için en az iki sondaj seçilmemiş.",
+            "kesit",
+            "Kesit seçim ekranından çizilecek sondajları seçin.",
+            failure_level="warning",
+            weight=1,
+        )
+
+    tags = []
     word_path = getattr(app_instance, "word_path", None)
-    if is_blank(word_path):
-        report["errors"].append("Word şablonu seçilmemiş.")
-        return report
-    if not os.path.exists(word_path):
-        report["errors"].append(f"Word şablonu bulunamadı: {word_path}")
-        return report
+    if word_path and os.path.isfile(word_path):
+        try:
+            tags = read_word_tags(word_path)
+            bulgu_ekle(
+                report,
+                "rapor.sablon.etiket_bilgisi",
+                "info",
+                "Rapor şablonu",
+                "Word etiketleri",
+                f"Word şablonunda {len(tags)} farklı etiket bulundu.",
+                "rapor",
+                blocking=False,
+            )
+        except Exception as exc:
+            bulgu_ekle(
+                report,
+                "rapor.sablon.okuma",
+                "error",
+                "Rapor şablonu",
+                "Word şablonu",
+                f"Word şablonu okunamadı: {exc}",
+                "rapor",
+                "Geçerli bir DOCX şablonu seçin.",
+            )
 
-    try:
-        tags = read_word_tags(word_path)
-    except Exception as exc:
-        report["errors"].append(f"Word şablonu okunamadı: {exc}")
-        return report
-
-    report["info"].append(f"Word şablonunda {len(tags)} etiket bulundu.")
-
-    unknown_tags = [tag for tag in tags if not is_known_tag(tag)]
-    for tag in unknown_tags:
-        report["warnings"].append(f"Word şablonunda kod karşılığı bilinmeyen etiket var: {tag}")
+    for tag in tags:
+        if not is_known_tag(tag):
+            bulgu_ekle(
+                report,
+                f"rapor.sablon.bilinmeyen.{re.sub(r'[^a-z0-9]+', '', tag.casefold())}",
+                "warning",
+                "Rapor şablonu",
+                "Bilinmeyen etiket",
+                f"Word şablonunda kod karşılığı bilinmeyen etiket var: {tag}",
+                "rapor",
+                "Etiketi Etiket Yöneticisi ile karşılaştırın.",
+            )
 
     for tag, attr_name in IMAGE_TAGS.items():
         if tag in tags:
-            path = image_path_for_tag(app_instance, attr_name)
-            if is_blank(path):
-                report["warnings"].append(f"{tag} için görsel seçilmemiş.")
-            elif not os.path.exists(path):
-                report["warnings"].append(f"{tag} görsel dosyası bulunamadı: {path}")
+            _image_quality_check(report, tag, image_path_for_tag(app_instance, attr_name), attr_name)
 
-    if any(tag in tags for tag in ["[LAB_FIZIK]", "[LAB_MEKANIK]", "[ZEMIN_OZET]"]):
-        path = getattr(app_instance, "lab_excel_path", None)
-        lab_rows = app_instance.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(app_instance, "veri", None), dict) else []
-        lab_sheet_ready = any(any(str(cell).strip() for cell in row) for row in lab_rows or [])
-        if lab_sheet_ready:
-            pass
-        elif is_blank(path):
-            report["warnings"].append("Laboratuvar tabloları için Lab Excel seçilmemiş.")
-        elif not os.path.exists(path):
-            report["warnings"].append(f"Lab Excel dosyası bulunamadı: {path}")
-
-    if any(tag in tags for tag in ["[JEO_PARAMETRE]", "[MASW]", "[VP]"]):
-        path = getattr(app_instance, "jeo_excel_path", None)
-        jeo_rows = app_instance.veri.get("jeofizik_sheet", {}).get("rows", []) if isinstance(getattr(app_instance, "veri", None), dict) else []
-        jeo_sheet_ready = jeofizik_sheet_var_mi(getattr(app_instance, "veri", {})) and bool(jeofizik_sheet_rows_to_ss_list(jeo_rows))
-        has_manual_layers = any(
-            ss.get("layers") for ss in app_instance.veri.get("jeofizik", {}).get("ss_list", [])
+    lab_tags = {"[LAB_FIZIK]", "[LAB_MEKANIK]", "[ZEMIN_OZET]"}
+    if lab_tags.intersection(tags):
+        lab_ready = bool(lab_rows)
+        kontrol_ekle(
+            report,
+            "rapor.kaynak.lab",
+            "Rapor veri kaynakları",
+            "Laboratuvar verisi",
+            lab_ready,
+            "Laboratuvar verisi okunabildi." if lab_ready else "Laboratuvar etiketleri var ancak LAB verisi yok.",
+            "rapor",
+            "LAB Sheet doldurun veya Lab Excel seçin.",
+            failure_level="warning",
+            weight=1,
         )
-        if is_blank(path) and not has_manual_layers and not jeo_sheet_ready:
-            report["warnings"].append("Jeofizik tabloları için Excel, Sheet veya manuel tabaka verisi yok.")
-        elif not is_blank(path) and not os.path.exists(path) and not jeo_sheet_ready:
-            report["warnings"].append(f"Jeofizik Excel dosyası bulunamadı: {path}")
+
+    jeo_tags = {"[JEO_PARAMETRE]", "[MASW]", "[VP]", "[JEO_KOOR]", "[JEO_SONUC]"}
+    if jeo_tags.intersection(tags):
+        jeo_rows = app_instance.veri.get("jeofizik_sheet", {}).get("rows", [])
+        jeo_sheet_ready = jeofizik_sheet_var_mi(app_instance.veri) and bool(jeofizik_sheet_rows_to_ss_list(jeo_rows))
+        manual_ready = any(
+            item.get("layers") for item in app_instance.veri.get("jeofizik", {}).get("ss_list", [])
+        )
+        jeo_path = getattr(app_instance, "jeo_excel_path", None)
+        jeo_ready = jeo_sheet_ready or manual_ready or bool(jeo_path and os.path.isfile(jeo_path))
+        kontrol_ekle(
+            report,
+            "rapor.kaynak.jeofizik",
+            "Rapor veri kaynakları",
+            "Jeofizik parametreleri",
+            jeo_ready,
+            "Jeofizik parametre kaynağı hazır." if jeo_ready else "Jeofizik etiketleri var ancak parametre verisi yok.",
+            "jeofizik",
+            "Jeofizik Sheet doldurun, Excel bağlayın veya manuel tabaka verisi girin.",
+            failure_level="warning",
+            weight=1,
+        )
+
+    if "[SPT]" in tags:
+        has_spt = any(item.get("spt") for item in sondajlar)
+        kontrol_ekle(
+            report,
+            "rapor.kaynak.spt",
+            "Rapor veri kaynakları",
+            "SPT tablosu",
+            has_spt,
+            "SPT kayıtları hazır." if has_spt else "Şablonda [SPT] var ancak SPT kaydı yok.",
+            "workbook",
+            "Workbook SPT sayfasını doldurun.",
+            failure_level="warning",
+            weight=1,
+            sheet="spt",
+        )
 
     try:
         ek_label, ek_path = uygun_ek_sablonu(app_instance.veri)
-        if is_blank(ek_path) or not os.path.exists(ek_path):
-            report["warnings"].append(f"{ek_label} ek dosyası bulunamadı: {ek_path}")
-        else:
-            report["info"].append(f"Ek seçimi: {ek_label} ({os.path.basename(ek_path)})")
+        ek_ok = bool(ek_path and os.path.isfile(ek_path))
+        kontrol_ekle(
+            report,
+            "rapor.ek_sablonu",
+            "Rapor ekleri",
+            ek_label,
+            ek_ok,
+            os.path.basename(ek_path) if ek_ok else f"Ek dosyası bulunamadı: {ek_path or '-'}",
+            "rapor",
+            "Rapor sekmesinde doğru ek setini veya şablonunu seçin.",
+            failure_level="warning",
+            weight=1,
+        )
     except Exception as exc:
-        report["warnings"].append(f"Ek seçimi kontrol edilemedi: {exc}")
+        bulgu_ekle(
+            report,
+            "rapor.ek_sablonu.okuma",
+            "warning",
+            "Rapor ekleri",
+            "Ek seçimi",
+            f"Ek seçimi kontrol edilemedi: {exc}",
+            "rapor",
+            "Ek ayarlarını kontrol edin.",
+        )
 
-    return report
+    report.setdefault("stats", {})["word_tags"] = len(tags)
+    return kontrol_raporunu_tamamla(report)
 
 
 def format_preflight_report(report):

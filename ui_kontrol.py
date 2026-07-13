@@ -4,7 +4,6 @@ from tkinter import Toplevel, ttk
 
 from jeofizik_sheet_motoru import jeofizik_sheet_ozeti, jeofizik_sheet_var_mi
 from kalite_kontrol import build_preflight_report
-from kesit_kalite import build_section_quality_report
 from performans import log_exception, perf_tracked
 from proje_motoru import proje_saglik_ozeti
 from sabitler import COLOR_BG, COLOR_DANGER, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
@@ -255,20 +254,34 @@ class KontrolPaneliMixin:
         counter = 0
         text_widget.insert(tk.END, "RAPOR ÖN KONTROL\n", "section")
         text_widget.insert(tk.END, "=" * 18 + "\n\n")
+        structured_findings = report.get("findings")
         for title, key, tag in (("HATALAR", "errors", "error"), ("UYARILAR", "warnings", "warning"), ("BILGI", "info", "info")):
             text_widget.insert(tk.END, f"{title}\n", "section")
-            items = report.get(key, [])
+            if structured_findings is not None:
+                items = [item for item in structured_findings if item.get("level") == tag]
+            else:
+                items = report.get(key, [])
             if not items:
                 text_widget.insert(tk.END, "- Yok\n\n")
                 continue
             for item in items:
                 row_tag = f"preflight_item_{counter}"
                 counter += 1
+                if isinstance(item, dict):
+                    category = item.get("category", "Kontrol")
+                    label = item.get("label", "Bulgu")
+                    detail = item.get("detail", "")
+                    display = f"[{category}] {label}: {detail}"
+                    action = dict(item)
+                    action.setdefault("message", detail)
+                else:
+                    display = str(item)
+                    action = {"message": item, "target": self._preflight_target_for_message(item)}
                 start = text_widget.index(tk.END)
-                text_widget.insert(tk.END, f"- {item}\n", (tag, "clickable", row_tag))
+                text_widget.insert(tk.END, f"- {display}\n", (tag, "clickable", row_tag))
                 end = text_widget.index(tk.END)
                 text_widget.tag_add(row_tag, start, end)
-                action_map[row_tag] = {"message": item, "target": self._preflight_target_for_message(item)}
+                action_map[row_tag] = action
             text_widget.insert(tk.END, "\n")
         text_widget._preflight_action_map = action_map
         text_widget.bind("<Button-1>", self._preflight_text_click)
@@ -292,8 +305,235 @@ class KontrolPaneliMixin:
 
     def _preflight_item_git(self, action):
         target = action.get("target", "ozet")
-        self._workflow_git(target)
-        self.set_status(action.get("message", "On kontrol kalemi secildi."), level="info")
+        if target == "workbook":
+            self.veri_giris_workbook_tksheet_ac(
+                initial_sheet=action.get("sheet") or None,
+                initial_sondaj=action.get("entity") or None,
+                initial_field=action.get("field") or None,
+                initial_row=action.get("row"),
+            )
+        elif target == "kesit":
+            self.kesit_secim_penceresi()
+        elif target == "cikti":
+            self.cikti_merkezi_penceresi()
+        elif target == "preflight":
+            self.rapor_on_kontrol()
+        else:
+            self._workflow_git(target)
+            field = action.get("field")
+            entry_maps = {
+                "kunye": getattr(self, "e_kunye", {}),
+                "bina": getattr(self, "e_bina", {}),
+                "arazi": getattr(self, "e_arazi", {}),
+            }
+            entry = entry_maps.get(target, {}).get(field) if field else None
+            if entry is not None:
+                try:
+                    entry.focus_set()
+                    entry.selection_range(0, tk.END)
+                except Exception:
+                    pass
+        self.set_status(action.get("message") or action.get("detail") or "Ön kontrol kalemi seçildi.", level="info")
+
+    def on_kontrol_merkezi_penceresi(self, report):
+        win = Toplevel(self.root)
+        self.pencere_hazirla(win, "Çıktı Ön Kontrol Merkezi", "1120x680", (900, 560), modal=False)
+
+        report_holder = {"value": report}
+        summary_var = tk.StringVar()
+        filter_var = tk.StringVar(value="Sorunlar")
+        search_var = tk.StringVar()
+        detail_var = tk.StringVar(value="Bir bulgu seçtiğinizde önerilen işlem burada görünür.")
+
+        header = ttk.Frame(win, padding=(12, 10, 12, 6))
+        header.pack(fill="x")
+        tk.Label(
+            header,
+            text="Çıktı Ön Kontrol Merkezi",
+            bg=COLOR_BG,
+            fg=COLOR_PRIMARY,
+            font=("Segoe UI", 14, "bold"),
+        ).pack(side="left")
+        summary_label = tk.Label(header, textvariable=summary_var, bg=COLOR_BG, font=FONT_BOLD)
+        summary_label.pack(side="right")
+
+        controls = ttk.Frame(win, padding=(12, 0, 12, 8))
+        controls.pack(fill="x")
+        ttk.Label(controls, text="Göster").pack(side="left", padx=(0, 4))
+        filter_combo = ttk.Combobox(
+            controls,
+            textvariable=filter_var,
+            values=("Sorunlar", "Tümü", "Hatalar", "Uyarılar", "Bilgi"),
+            state="readonly",
+            width=13,
+        )
+        filter_combo.pack(side="left", padx=(0, 12))
+        ttk.Label(controls, text="Ara").pack(side="left", padx=(0, 4))
+        search_entry = ttk.Entry(controls, textvariable=search_var)
+        search_entry.pack(side="left", fill="x", expand=True)
+
+        tree_frame = ttk.Frame(win, padding=(12, 0, 12, 6))
+        tree_frame.pack(fill="both", expand=True)
+        columns = ("level", "category", "label", "entity", "detail")
+        tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse")
+        headings = {
+            "level": "Seviye",
+            "category": "Kategori",
+            "label": "Kontrol",
+            "entity": "Kayıt",
+            "detail": "Açıklama",
+        }
+        widths = {"level": 80, "category": 150, "label": 170, "entity": 90, "detail": 520}
+        for column in columns:
+            tree.heading(column, text=headings[column])
+            tree.column(column, width=widths[column], minwidth=70, stretch=column == "detail")
+        y_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        x_scroll = ttk.Scrollbar(tree_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        tree.tag_configure("error", foreground=COLOR_DANGER)
+        tree.tag_configure("warning", foreground="#A65E00")
+        tree.tag_configure("info", foreground="#1F618D")
+        tree.tag_configure("ok", foreground=COLOR_SUCCESS)
+
+        detail_frame = ttk.LabelFrame(win, text="Önerilen İşlem", padding=(10, 6))
+        detail_frame.pack(fill="x", padx=12, pady=(0, 8))
+        detail_label = ttk.Label(detail_frame, textvariable=detail_var, wraplength=1040, justify="left")
+        detail_label.pack(fill="x")
+
+        action_map = {}
+
+        def current_findings():
+            current = report_holder["value"] or {}
+            findings = current.get("findings")
+            if findings is not None:
+                return list(findings)
+            converted = []
+            for level, key in (("error", "errors"), ("warning", "warnings"), ("info", "info")):
+                for detail in current.get(key, []) or []:
+                    converted.append({
+                        "level": level,
+                        "category": "Kontrol",
+                        "label": "Bulgu",
+                        "detail": str(detail),
+                        "target": self._preflight_target_for_message(detail),
+                    })
+            return converted
+
+        def update_summary():
+            current = report_holder["value"] or {}
+            errors = len(current.get("errors", []) or [])
+            warnings = len(current.get("warnings", []) or [])
+            infos = len(current.get("info", []) or [])
+            score = current.get("score")
+            score_text = f" | Hazırlık %{score}" if score is not None else ""
+            summary_var.set(f"{errors} hata | {warnings} uyarı | {infos} bilgi{score_text}")
+            summary_label.config(fg=COLOR_DANGER if errors else (COLOR_WARNING if warnings else COLOR_SUCCESS))
+
+        def populate(*_args):
+            tree.delete(*tree.get_children())
+            action_map.clear()
+            choice = filter_var.get()
+            level_filter = {
+                "Hatalar": {"error"},
+                "Uyarılar": {"warning"},
+                "Bilgi": {"info"},
+                "Sorunlar": {"error", "warning"},
+                "Tümü": {"error", "warning", "info", "ok"},
+            }.get(choice, {"error", "warning"})
+            query = search_var.get().strip().casefold()
+            marks = {"error": "HATA", "warning": "UYARI", "info": "BİLGİ", "ok": "OK"}
+            visible = 0
+            for idx, finding in enumerate(current_findings()):
+                level = finding.get("level", "info")
+                if level not in level_filter:
+                    continue
+                haystack = " ".join(
+                    str(finding.get(key, ""))
+                    for key in ("category", "label", "entity", "detail", "suggestion")
+                ).casefold()
+                if query and query not in haystack:
+                    continue
+                iid = f"finding_{idx}"
+                tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    values=(
+                        marks.get(level, level.upper()),
+                        finding.get("category", "Kontrol"),
+                        finding.get("label", "Bulgu"),
+                        finding.get("entity", ""),
+                        finding.get("detail", ""),
+                    ),
+                    tags=(level,),
+                )
+                action_map[iid] = finding
+                visible += 1
+            if not visible:
+                tree.insert("", "end", iid="empty", values=("OK", "Kontrol", "Gösterilecek bulgu yok", "", "Seçili filtre temiz."), tags=("ok",))
+            update_summary()
+
+        def selected_action():
+            selection = tree.selection()
+            return action_map.get(selection[0]) if selection else None
+
+        def on_select(_event=None):
+            action = selected_action()
+            if not action:
+                detail_var.set("Bir bulgu seçtiğinizde önerilen işlem burada görünür.")
+                return
+            suggestion = action.get("suggestion") or "İlgili kaydı kontrol edin."
+            detail_var.set(f"{action.get('detail', '')}\n{suggestion}")
+
+        def go_selected(_event=None):
+            action = selected_action()
+            if action:
+                self._preflight_item_git(action)
+            return "break"
+
+        def copy_selected():
+            action = selected_action()
+            if not action:
+                return
+            text = f"{action.get('label', 'Bulgu')}: {action.get('detail', '')}"
+            if action.get("suggestion"):
+                text += f"\nÖneri: {action['suggestion']}"
+            win.clipboard_clear()
+            win.clipboard_append(text)
+            self.set_status("Ön kontrol bulgusu panoya kopyalandı.", level="success")
+
+        def refresh():
+            try:
+                self.guncelle_veri_objesi(silent=True)
+            except Exception as exc:
+                log_exception("preflight.center.collect", exc_value=exc)
+            refreshed = build_preflight_report(self)
+            report_holder["value"] = refreshed
+            self.last_preflight_report = refreshed
+            populate()
+            self.ozet_yenile(collect=False)
+
+        filter_combo.bind("<<ComboboxSelected>>", populate)
+        search_var.trace_add("write", populate)
+        tree.bind("<<TreeviewSelect>>", on_select)
+        tree.bind("<Double-Button-1>", go_selected)
+        tree.bind("<Return>", go_selected)
+
+        buttons = ttk.Frame(win, padding=(12, 0, 12, 12))
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Yenile", command=refresh).pack(side="left", padx=(0, 5))
+        ttk.Button(buttons, text="İlgili Yere Git", command=go_selected).pack(side="left", padx=5)
+        ttk.Button(buttons, text="Kopyala", command=copy_selected).pack(side="left", padx=5)
+        ttk.Button(buttons, text="Kapat", command=win.destroy).pack(side="right")
+
+        populate()
+        search_entry.focus_set()
+        return win
 
     def _ozet_preflight_guncelle(self):
         if not hasattr(self, "ozet_preflight_text"):
@@ -329,17 +569,6 @@ class KontrolPaneliMixin:
             self.ozet_preflight_text.insert("1.0", "Ön kontrol henüz çalıştırılmadı.")
             self.ozet_preflight_text.config(state="disabled")
 
-    def final_kontrol_satir_ekle(self, items, category, label, ok, detail, target="ozet", suggestion="", warning=False):
-        level = "ok" if ok else ("warning" if warning else "error")
-        items.append({
-            "category": category,
-            "label": label,
-            "level": level,
-            "detail": detail,
-            "target": target,
-            "suggestion": suggestion,
-        })
-
     @perf_tracked("final_control.build")
     def final_kontrol_raporu_olustur(self):
         if hasattr(self, "e_kunye"):
@@ -348,152 +577,59 @@ class KontrolPaneliMixin:
             except Exception as exc:
                 log_exception("final_control.collect", exc_value=exc)
 
-        file_map = self._dosya_map()
-        health = proje_saglik_ozeti(self.veri, file_map)
         preflight = build_preflight_report(self)
         self.last_preflight_report = preflight
-
+        health = proje_saglik_ozeti(self.veri, self._dosya_map())
         items = []
-        kunye = self.veri.get("kunye", {})
-        sondajlar = self.veri.get("sondaj", []) or []
-        jeofizik = self.veri.get("jeofizik", {}) or {}
+        represented = set()
 
-        project_ok = bool(kunye.get("sahibi") and kunye.get("il") and kunye.get("ilce"))
-        self.final_kontrol_satir_ekle(
-            items, "1. Proje ve şablon", "Proje bilgisi", project_ok,
-            "Proje adı, il ve ilçe tamam" if project_ok else "Proje adı, il veya ilçe eksik",
-            "kunye", "Künye sekmesinde proje ve konum alanlarını tamamlayın.", warning=True,
-        )
+        for check in preflight.get("checks", []):
+            level = "ok" if check.get("ok") else check.get("failure_level", "warning")
+            item = {
+                "id": check.get("id"),
+                "category": check.get("category", "Kontrol"),
+                "label": check.get("label", "Kontrol"),
+                "level": level,
+                "detail": check.get("detail", ""),
+                "target": check.get("target", "ozet"),
+                "suggestion": check.get("suggestion", ""),
+                "entity": check.get("entity", ""),
+                "field": check.get("field", ""),
+                "sheet": check.get("sheet", ""),
+            }
+            items.append(item)
+            represented.add((item["id"], item["detail"]))
 
-        word_ok = bool(self.word_path and os.path.exists(self.word_path))
-        self.final_kontrol_satir_ekle(
-            items, "1. Proje ve şablon", "Word şablonu", word_ok,
-            os.path.basename(self.word_path) if word_ok else "Word şablonu seçilmedi veya bulunamadı",
-            "rapor", "Rapor sekmesinden Word şablonu seçin.",
-        )
+        for finding in preflight.get("findings", []):
+            identity = (finding.get("id"), finding.get("detail", ""))
+            if identity in represented:
+                continue
+            items.append({
+                "id": finding.get("id"),
+                "category": finding.get("category", "Kontrol"),
+                "label": finding.get("label", "Bulgu"),
+                "level": finding.get("level", "info"),
+                "detail": finding.get("detail", ""),
+                "target": finding.get("target", "ozet"),
+                "suggestion": finding.get("suggestion", ""),
+                "entity": finding.get("entity", ""),
+                "field": finding.get("field", ""),
+                "sheet": finding.get("sheet", ""),
+                "row": finding.get("row"),
+            })
 
-        lab_sheet_ok = self._lab_sheet_ready()
-        lab_ok = bool(self.lab_excel_path and os.path.exists(self.lab_excel_path))
-        self.final_kontrol_satir_ekle(
-            items, "1. Proje ve şablon", "Laboratuvar dosyası", lab_ok or lab_sheet_ok,
-            "LAB Sheet hazır" if lab_sheet_ok else (os.path.basename(self.lab_excel_path) if lab_ok else "Lab Excel bağlı değil"),
-            "rapor", "Laboratuvar verisi kullanılacaksa Rapor sekmesinden LAB Sheet doldurun veya Lab Excel seçin.", warning=True,
-        )
-
-        jeo_excel_ok = bool(self.jeo_excel_path and os.path.exists(self.jeo_excel_path))
-        jeo_sheet_ok = self._jeofizik_sheet_ready()
-        jeo_manual_ok = bool(jeofizik.get("ss_list") or jeofizik.get("mt_list"))
-        self.final_kontrol_satir_ekle(
-            items, "1. Proje ve şablon", "Jeofizik verisi", jeo_excel_ok or jeo_sheet_ok or jeo_manual_ok,
-            "Jeofizik Sheet hazır" if jeo_sheet_ok else ("Jeofizik verisi hazır" if (jeo_excel_ok or jeo_manual_ok) else "Jeofizik Excel, Sheet veya manuel jeofizik verisi yok"),
-            "jeofizik", "Jeofizik sekmesinden Sheet doldurun, Excel bağlayın veya manuel veri girin.", warning=True,
-        )
-
-        self.final_kontrol_satir_ekle(
-            items, "2. Sondaj verisi", "Sondaj kaydı", len(sondajlar) > 0,
-            f"{len(sondajlar)} sondaj var" if sondajlar else "Hiç sondaj yok",
-            "sondaj", "Sondaj sekmesinden sondaj ekleyin veya workbook kullanın.",
-        )
-
-        invalid_depth = [s.get("no") or f"SK-{idx + 1}" for idx, s in enumerate(sondajlar) if safe_float(s.get("der")) <= 0]
-        self.final_kontrol_satir_ekle(
-            items, "2. Sondaj verisi", "Sondaj derinlikleri", not invalid_depth,
-            "Tüm sondaj derinlikleri geçerli" if not invalid_depth else "Geçersiz derinlik: " + ", ".join(invalid_depth[:8]),
-            "sondaj", "Sondaj derinliği alanlarını kontrol edin.",
-        )
-
-        missing_coords = [s.get("no") or f"SK-{idx + 1}" for idx, s in enumerate(sondajlar) if not (s.get("y") and s.get("x"))]
-        self.final_kontrol_satir_ekle(
-            items, "2. Sondaj verisi", "Koordinatlar", not missing_coords and bool(sondajlar),
-            "Tüm sondaj koordinatları girilmiş" if not missing_coords and sondajlar else "Koordinatı eksik: " + (", ".join(missing_coords[:8]) if missing_coords else "sondaj yok"),
-            "sondaj", "Sondaj koordinatlarını doldurun veya harita aracını kullanın.", warning=True,
-        )
-
-        missing_elev = [s.get("no") or f"SK-{idx + 1}" for idx, s in enumerate(sondajlar) if str(s.get("k") or "").strip() in ("", "-", "None", "null")]
-        self.final_kontrol_satir_ekle(
-            items, "2. Sondaj verisi", "Başlangıç kotları", not missing_elev and bool(sondajlar),
-            "Tüm sondaj kotları girilmiş" if not missing_elev and sondajlar else "Kotu eksik: " + (", ".join(missing_elev[:8]) if missing_elev else "sondaj yok"),
-            "sondaj", "Sondaj kotlarını doldurun.", warning=True,
-        )
-
-        missing_lit = [s.get("no") or f"SK-{idx + 1}" for idx, s in enumerate(sondajlar) if not s.get("litoloji")]
-        self.final_kontrol_satir_ekle(
-            items, "2. Sondaj verisi", "Litoloji", not missing_lit and bool(sondajlar),
-            "Tüm sondajlarda litoloji var" if not missing_lit and sondajlar else "Litoloji eksik: " + (", ".join(missing_lit[:8]) if missing_lit else "sondaj yok"),
-            "workbook", "Workbook Litoloji sayfasından eksik satırları tamamlayın.",
-        )
-
-        missing_spt = [s.get("no") or f"SK-{idx + 1}" for idx, s in enumerate(sondajlar) if not s.get("spt")]
-        self.final_kontrol_satir_ekle(
-            items, "2. Sondaj verisi", "SPT", not missing_spt and bool(sondajlar),
-            "Tüm sondajlarda SPT var" if not missing_spt and sondajlar else "SPT eksik: " + (", ".join(missing_spt[:8]) if missing_spt else "sondaj yok"),
-            "workbook", "Workbook SPT sayfasından SPT satırlarını üretin veya girin.", warning=True,
-        )
-
-        kesit_options = self.veri.get("kesit_ayarlari", {}) or {}
-        selected_names = kesit_options.get("selected_sondajlar") or []
-        selected = [s for s in sondajlar if s.get("no") in selected_names] if selected_names else sondajlar
-        kesit_selected_ok = len(selected) >= 2
-        self.final_kontrol_satir_ekle(
-            items, "3. Kesit ve görseller", "Kesit seçimi", kesit_selected_ok,
-            f"{len(selected)} sondaj kesit için hazır" if kesit_selected_ok else "Kesit için en az iki sondaj seçilmeli",
-            "kesit", "Kesit seçim ekranından çizilecek sondajları seçin.", warning=True,
-        )
-        if kesit_selected_ok:
-            section_report = build_section_quality_report(selected, kesit_options)
-            section_errors = len(section_report.get("errors", []))
-            section_warnings = len(section_report.get("warnings", []))
-            self.final_kontrol_satir_ekle(
-                items, "3. Kesit ve görseller", "Kesit kalite", section_errors == 0,
-                f"{section_errors} hata, {section_warnings} uyarı" if (section_errors or section_warnings) else "Kesit kalite kontrol temiz",
-                "kesit", "Kesit kalite penceresinden detayları kontrol edin.", warning=section_errors == 0 and section_warnings > 0,
-            )
-
-        visual_sources = [
-            ("Yerbuldurur", self.img_yer),
-            ("TKGM", self.img_tkgm),
-            ("PGA", self.img_pga),
-            ("MJH", getattr(self, "img_mjh", None) or self.img_yer or self.img_tkgm),
-            ("Sondaj haritası", self.word_img_sondaj),
-            ("Jeofizik haritası", self.word_img_jeofizik),
-        ]
-        missing_visuals = [label for label, path in visual_sources if not (path and os.path.exists(path))]
-        self.final_kontrol_satir_ekle(
-            items, "3. Kesit ve görseller", "Rapor görselleri", not missing_visuals,
-            "Tüm rapor görselleri hazır" if not missing_visuals else "Eksik görsel: " + ", ".join(missing_visuals[:8]),
-            "haritalar", "Haritalar/Rapor sekmesinden eksik görselleri bağlayın.", warning=True,
-        )
-
-        output_folder = self.veri.get("ayarlar", {}).get("cikti_merkezi_klasor") or self.veri.get("ayarlar", {}).get("varsayilan_cikti_klasor")
-        output_ok = bool(output_folder and os.path.isdir(output_folder))
-        self.final_kontrol_satir_ekle(
-            items, "4. Rapor ve çıktı", "Çıktı klasörü", output_ok,
-            output_folder if output_ok else "Çıktı Merkezi klasörü seçilmemiş",
-            "cikti", "Çıktı Merkezi'nden ana çıktı klasörünü seçin.", warning=True,
-        )
-
-        preflight_errors = len(preflight.get("errors", []))
-        preflight_warnings = len(preflight.get("warnings", []))
-        self.final_kontrol_satir_ekle(
-            items, "4. Rapor ve çıktı", "Rapor ön kontrol", preflight_errors == 0,
-            f"{preflight_errors} hata, {preflight_warnings} uyarı" if (preflight_errors or preflight_warnings) else "Ön kontrol temiz",
-            "preflight", "Rapor Ön Kontrol ekranında detayları inceleyin.", warning=preflight_errors == 0 and preflight_warnings > 0,
-        )
-
-        errors = sum(1 for item in items if item["level"] == "error")
-        warnings = sum(1 for item in items if item["level"] == "warning")
-        score = max(0, min(100, int(health.get("score", 0)) - errors * 8 - warnings))
-        if errors:
-            state = "EKSİKLER VAR"
-        elif warnings:
-            state = "UYARILI HAZIR"
-        else:
-            state = "RAPORA HAZIR"
+        level_order = {"error": 0, "warning": 1, "info": 2, "ok": 3}
+        items.sort(key=lambda item: (
+            str(item.get("category", "")),
+            level_order.get(item.get("level"), 9),
+            str(item.get("entity", "")),
+            str(item.get("label", "")),
+        ))
         return {
-            "state": state,
-            "score": score,
-            "errors": errors,
-            "warnings": warnings,
+            "state": preflight.get("state", "EKSİKLER VAR"),
+            "score": preflight.get("score", 0),
+            "errors": len(preflight.get("errors", []) or []),
+            "warnings": len(preflight.get("warnings", []) or []),
             "items": items,
             "health": health,
             "preflight": preflight,
@@ -593,15 +729,4 @@ class KontrolPaneliMixin:
         widget.config(cursor=cursor)
 
     def final_kontrol_item_git(self, item):
-        target = item.get("target", "ozet")
-        if target == "workbook":
-            self.veri_giris_workbook_tksheet_ac()
-        elif target == "preflight":
-            self.rapor_on_kontrol()
-        elif target == "kesit":
-            self.kesit_secim_penceresi()
-        elif target == "cikti":
-            self.cikti_merkezi_penceresi()
-        else:
-            self._workflow_git(target)
-        self.set_status(item.get("suggestion") or item.get("detail") or "Final kontrol kalemi seçildi.", level="info")
+        self._preflight_item_git(item)

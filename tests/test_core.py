@@ -41,7 +41,7 @@ from raporlama import (
     litoloji_dagilim_paragraflari,
     mjh_resim_yolu,
 )
-from kalite_kontrol import image_path_for_tag
+from kalite_kontrol import build_preflight_report, image_path_for_tag, validate_project_data
 from spt_okuma_motoru import (
     SPTKaydi,
     _path_unique_key,
@@ -100,6 +100,7 @@ from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import validate_rows as wb_validate_rows
 from workbook_motoru import WORKBOOK_SHEET_DEFS
 from task_engine import TkTaskEngine
+from tutarlilik_motoru import laboratuvar_kayitlarini_ayikla, proje_tutarlilik_raporu
 from uygulama_yollari import eski_veriyi_kopyala, kullanici_yolu
 from yonetmelik_motoru import (
     duzeltme_yonetmelik_dayanaklari,
@@ -117,6 +118,160 @@ import yonetmelik_motoru
 class _ImmediateTkRoot:
     def after(self, _delay, callback):
         callback()
+
+
+class TutarlilikMotoruTestleri(unittest.TestCase):
+    @staticmethod
+    def _base_veri():
+        return {
+            "kunye": {"sahibi": "Test Projesi", "il": "Çanakkale", "ilce": "Merkez"},
+            "bina": {},
+            "arazi": {},
+            "ayarlar": {},
+            "lab_sheet": {"rows": []},
+            "jeofizik_sheet": {"rows": []},
+            "kesit_ayarlari": {},
+            "sondaj": [
+                {
+                    "no": "SK-1",
+                    "der": "10.0",
+                    "y": "40.1000",
+                    "x": "26.4000",
+                    "k": "100.0",
+                    "litoloji": [["0", "5", "Kil"], ["5", "10", "Kum"]],
+                    "spt": [["1.50", "2", "3", "4", "7"]],
+                    "pmt": [],
+                    "kaya": [],
+                }
+            ],
+            "jeofizik": {
+                "ss_list": [
+                    {
+                        "ad": "SS-1",
+                        "coords": ["40.1", "26.4", "40.11", "26.41", "40.12", "26.42"],
+                        "layers": [{"h": "5", "vp": "600", "vs": "250"}, {"h": "", "vp": "1200", "vs": "500"}],
+                    }
+                ],
+                "mt_list": [],
+            },
+        }
+
+    def test_bos_proje_sifir_hazirlik_ve_bloklayici_bulgu_uretir(self):
+        veri = {
+            "kunye": {}, "bina": {}, "arazi": {}, "sondaj": [], "jeofizik": {},
+            "ayarlar": {}, "lab_sheet": {"rows": []}, "jeofizik_sheet": {"rows": []},
+        }
+        report = proje_tutarlilik_raporu(veri, {})
+        self.assertEqual(report["score"], 0)
+        self.assertTrue(report["blocking"])
+        self.assertIn("sondaj.kayit", {item["id"] for item in report["findings"]})
+
+    def test_sondaj_litoloji_ve_deney_uyumsuzluklarini_birlikte_yakalar(self):
+        veri = self._base_veri()
+        sondaj = veri["sondaj"][0]
+        sondaj["litoloji"] = [["0", "4", "Kil"], ["5", "10", "Kum"]]
+        sondaj["spt"] = [["1.50", "2", "3", "4", "99"]]
+        sondaj["pmt"] = [["11.0", "100", "8"]]
+        sondaj["kaya"] = [["6.0-9.0", "40", "50", "60"]]
+
+        report = proje_tutarlilik_raporu(veri)
+        ids = {item["id"] for item in report["findings"]}
+        self.assertIn("sondaj.sk1.litoloji.1.bosluk", ids)
+        self.assertIn("sondaj.sk1.spt.0.n30_toplam", ids)
+        self.assertIn("sondaj.sk1.pmt.0.kuyu_disi", ids)
+        self.assertIn("sondaj.sk1.kaya.0.oran_sirasi", ids)
+
+    def test_laboratuvar_baslik_ve_derinliklerini_ayiklar(self):
+        rows = [
+            ["Sondaj No", "Örnek Derinliği", "USCS"],
+            ["SK-1", "1.50-2.00", "CL"],
+            ["", "3.00", "CL"],
+        ]
+        parsed = laboratuvar_kayitlarini_ayikla(rows)
+        self.assertTrue(parsed["header_found"])
+        self.assertEqual(len(parsed["records"]), 2)
+        self.assertEqual(parsed["records"][1]["sondaj"], "SK-1")
+        self.assertEqual(parsed["records"][0]["bottom"], 2.0)
+
+    def test_validate_project_data_yapilandirilmis_raporu_korur(self):
+        report = validate_project_data(self._base_veri())
+        self.assertIn("findings", report)
+        self.assertIn("checks", report)
+        self.assertIn("errors", report)
+        self.assertIn("warnings", report)
+
+    def test_sondaj_numarasi_bicim_farki_mukerrer_sayilir(self):
+        veri = self._base_veri()
+        ikinci = dict(veri["sondaj"][0])
+        ikinci["no"] = "SK1"
+        veri["sondaj"].append(ikinci)
+        report = proje_tutarlilik_raporu(veri)
+        self.assertTrue(any(
+            item["level"] == "error" and "Mükerrer sondaj" in item["label"]
+            for item in report["findings"]
+        ))
+
+    def test_preflight_mjh_icin_baska_haritayi_kullanmaz(self):
+        from docx import Document
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            word_path = os.path.join(tmp, "sablon.docx")
+            image_path = os.path.join(tmp, "yer.png")
+            doc = Document()
+            doc.add_paragraph("[PROJE_ADI]")
+            doc.add_paragraph("RESIM:MJH")
+            doc.save(word_path)
+            Image.new("RGB", (1200, 800), "white").save(image_path)
+
+            app = SimpleNamespace(
+                veri=self._base_veri(),
+                word_path=word_path,
+                lab_excel_path=None,
+                jeo_excel_path=None,
+                kml_path=None,
+                img_yer=image_path,
+                img_tkgm=None,
+                img_pga=None,
+                img_mjh=None,
+                word_img_sondaj=None,
+                word_img_jeofizik=None,
+            )
+            report = build_preflight_report(app)
+            mjh_findings = [
+                item for item in report["findings"]
+                if item.get("category") == "Rapor görselleri" and "MJH" in item.get("label", "")
+            ]
+            self.assertTrue(mjh_findings)
+            self.assertTrue(any(item["level"] == "warning" for item in mjh_findings))
+
+    def test_sablonda_olmayan_gorsel_uyari_degil_bilgi_olur(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            word_path = os.path.join(tmp, "sablon.docx")
+            doc = Document()
+            doc.add_paragraph("[PROJE_ADI]")
+            doc.save(word_path)
+            app = SimpleNamespace(
+                veri=self._base_veri(),
+                word_path=word_path,
+                lab_excel_path=None,
+                jeo_excel_path=None,
+                kml_path=None,
+                img_yer=None,
+                img_tkgm=None,
+                img_pga=None,
+                img_mjh=None,
+                word_img_sondaj=None,
+                word_img_jeofizik=None,
+            )
+            report = build_preflight_report(app)
+            visual_warnings = [
+                item for item in report["findings"]
+                if item["level"] == "warning" and item["category"] == "Rapor görselleri"
+            ]
+            self.assertEqual(visual_warnings, [])
 
 
 class TaskEngineTestleri(unittest.TestCase):

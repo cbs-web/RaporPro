@@ -22,7 +22,13 @@ from ui_workbook_eski import WorkbookEskiMixin
 
 class WorkbookMixin(WorkbookEskiMixin):
     @perf_tracked("workbook.tksheet_open")
-    def veri_giris_workbook_tksheet_ac(self):
+    def veri_giris_workbook_tksheet_ac(
+        self,
+        initial_sheet=None,
+        initial_sondaj=None,
+        initial_field=None,
+        initial_row=None,
+    ):
         try:
             with perf_timer("workbook.tksheet_import"):
                 from tksheet import Sheet
@@ -962,4 +968,41 @@ class WorkbookMixin(WorkbookEskiMixin):
         ttk.Label(top, textvariable=wb_info_var, foreground="#1F618D").pack(side="left", padx=8)
         tk.Button(apply_group, text="Uygula", command=lambda: apply_workbook(False), bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
         tk.Button(apply_group, text="Kapat", command=lambda: apply_workbook(True), bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
+
+        def focus_initial_target():
+            sheet_key = initial_sheet if initial_sheet in sheet_defs else None
+            if not sheet_key:
+                return
+            sheet = ensure_sheet(sheet_key)
+            nb.select(sheet_frames[sheet_key])
+            rows = collect_rows(sheet_key)
+            no_key = "no" if sheet_key == "sondajlar" else "sondaj_no"
+            matches = []
+            if initial_sondaj:
+                target_no = str(initial_sondaj).strip().casefold()
+                matches = [
+                    idx for idx, values in enumerate(rows)
+                    if str(values.get(no_key, "")).strip().casefold() == target_no
+                ]
+            try:
+                requested_row = int(initial_row) if initial_row is not None else None
+            except (TypeError, ValueError):
+                requested_row = None
+            if matches:
+                row_idx = matches[min(max(requested_row or 0, 0), len(matches) - 1)]
+            elif requested_row is not None and rows:
+                row_idx = min(max(requested_row, 0), len(rows) - 1)
+            else:
+                row_idx = 0
+            column_keys = [key for _, key in sheet_defs[sheet_key]["columns"]]
+            col_idx = column_keys.index(initial_field) if initial_field in column_keys else 0
+            try:
+                sheet.select_cell(row_idx, col_idx)
+                sheet.see(row_idx, col_idx)
+                show_current_cell_message(sheet_key)
+            except Exception as exc:
+                log_exception("workbook.initial_target", exc_value=exc)
+
+        if initial_sheet:
+            win.after(80, focus_initial_target)
         self.set_status("Excel mod workbook acildi.", level="success")

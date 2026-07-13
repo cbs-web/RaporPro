@@ -2,7 +2,7 @@ import os
 from collections import Counter
 
 from jeofizik_sheet_motoru import jeofizik_sheet_ozeti, jeofizik_sheet_var_mi
-from sondaj_derinlik import sondaj_derinligi_kontrol_sonucu
+from tutarlilik_motoru import proje_tutarlilik_raporu
 from yardimcilar import safe_float
 
 
@@ -16,125 +16,31 @@ def jeofizik_sheet_ready(veri):
 
 
 def proje_saglik_ozeti(veri, dosya_durumlari=None):
-    dosya_durumlari = dosya_durumlari or {}
+    """Dashboard sağlığını merkezi tutarlılık kontrollerinden üret."""
+    report = proje_tutarlilik_raporu(veri, dosya_durumlari)
     items = []
-
-    def add(label, ok, detail, target="ozet", suggestion=""):
+    for check in report.get("checks", []):
+        if not check.get("dashboard", True):
+            continue
         items.append({
-            "label": label,
-            "ok": bool(ok),
-            "detail": detail,
-            "target": target,
-            "suggestion": suggestion,
+            "id": check.get("id"),
+            "label": check.get("label"),
+            "ok": bool(check.get("ok")),
+            "detail": check.get("detail", ""),
+            "target": check.get("target", "ozet"),
+            "suggestion": check.get("suggestion", ""),
+            "entity": check.get("entity", ""),
+            "field": check.get("field", ""),
+            "sheet": check.get("sheet", ""),
+            "level": "ok" if check.get("ok") else check.get("failure_level", "warning"),
         })
-
-    kunye = veri.get("kunye", {})
-    sondajlar = veri.get("sondaj", [])
-    jeofizik = veri.get("jeofizik", {})
-    jeo_sheet_ok = jeofizik_sheet_ready(veri)
-
-    def is_blank(value):
-        return value is None or str(value).strip() in {"", "-", "None", "null"}
-
-    def litoloji_kapsami_ok(sondaj):
-        der = safe_float(sondaj.get("der"))
-        rows = []
-        for row in sondaj.get("litoloji", []) or []:
-            if len(row) < 2:
-                continue
-            top, bot = safe_float(row[0]), safe_float(row[1])
-            if bot > top:
-                rows.append((top, bot))
-        if der <= 0 or not rows:
-            return False
-        rows.sort()
-        if rows[0][0] > 0.05:
-            return False
-        prev = rows[0][1]
-        for top, bot in rows[1:]:
-            if top > prev + 0.05 or top < prev - 0.05:
-                return False
-            prev = max(prev, bot)
-        return prev >= der - 0.05
-
-    def spt_derinlikleri_ok(sondaj):
-        der = safe_float(sondaj.get("der"))
-        intervals = []
-        for row in sondaj.get("litoloji", []) or []:
-            if len(row) >= 2:
-                top, bot = safe_float(row[0]), safe_float(row[1])
-                if bot > top:
-                    intervals.append((top, bot))
-        for row in sondaj.get("spt", []) or []:
-            if not row:
-                continue
-            depth = safe_float(row[0])
-            if depth <= 0 or (der > 0 and depth > der + 0.05):
-                return False
-            if intervals and not any(top - 0.05 <= depth <= bot + 0.05 for top, bot in intervals):
-                return False
-        return True
-
-    add("Proje bilgisi", bool(kunye.get("sahibi") and kunye.get("il") and kunye.get("ilce")), "Proje adı, il ve ilçe kontrolü", "kunye", "Künye sekmesinde proje ve konum alanlarını tamamlayın.")
-    add("Sondaj kaydı", len(sondajlar) > 0, f"{len(sondajlar)} sondaj", "sondaj", "Sondaj sekmesinden sondaj satırı ekleyin veya workbook kullanın.")
-    add("Litoloji", bool(sondajlar) and all(s.get("litoloji") for s in sondajlar), "Her sondajda litoloji beklenir", "sondaj", "Sondaj sekmesinde litoloji detaylarını girin.")
-    add("Arazi deneyleri", sum(len(s.get("spt", [])) + len(s.get("pmt", [])) + len(s.get("kaya", [])) for s in sondajlar) > 0, "SPT/PMT/Kaya verisi", "sondaj", "Sondaj sekmesinde SPT/PMT/Kaya verilerini girin.")
-    add("Sondaj koordinatları", bool(sondajlar) and all(s.get("y") and s.get("x") for s in sondajlar), "Kesit ve harita için koordinat", "sondaj", "Sondaj koordinatlarını doldurun veya harita aracını kullanın.")
-    jeo_detail = "Jeofizik Sheet hazır" if jeo_sheet_ok else "SS veya MT kaydı"
-    add("Jeofizik", bool(jeo_sheet_ok or jeofizik.get("ss_list") or jeofizik.get("mt_list")), jeo_detail, "jeofizik", "Jeofizik sekmesinde SS/MT verisi ekleyin.")
-
-    add("Litoloji kapsami", bool(sondajlar) and all(litoloji_kapsami_ok(s) for s in sondajlar), "0.00 m'den kuyu sonuna sureklilik", "sondaj", "Workbook Litoloji sayfasinda bosluk/cakisma ve son derinlikleri kontrol edin.")
-    add("SPT derinlikleri", bool(sondajlar) and all(spt_derinlikleri_ok(s) for s in sondajlar), "SPT derinlikleri kuyu/litoloji icinde", "sondaj", "Workbook SPT sayfasinda derinlikleri ve sondaj no alanlarini kontrol edin.")
-    add("Sondaj kotlari", bool(sondajlar) and all(not is_blank(s.get("k")) for s in sondajlar), "Kesit baslangic/bitis kotlari icin", "sondaj", "Sondajlar sayfasinda kot alanlarini doldurun.")
-    try:
-        depth_check = sondaj_derinligi_kontrol_sonucu(veri)
-        recommended = safe_float(depth_check.get("onerilen_sondaj_derinligi"))
-        short = depth_check.get("eksik_sondajlar") or []
-        notes = depth_check.get("uyarilar") or []
-        method = "Gerilme %10" if depth_check.get("hesap_tipi") == "gerilme_10" else "Ön kontrol"
-        add(
-            "Sondaj derinliği",
-            bool(sondajlar) and recommended > 0 and not short and not notes,
-            f"{method}: öneri min {recommended:.2f} m" + (f", {len(notes)} hesap notu" if notes else ""),
-            "bina",
-            "Bina sekmesinde Sondaj Derinliği Hesapla ile temel genişliği, Hn ve mevcut sondajları kontrol edin.",
-        )
-    except Exception:
-        add("Sondaj derinliği", False, "Hesaplanamadı", "bina", "Bina bilgilerini kontrol edin.")
-
-    for key, label in [
-        ("word_path", "Word şablonu"), ("lab_excel_path", "Lab Excel"), ("jeo_excel_path", "Jeofizik Excel"),
-        ("kml_path", "KML sınır"),
-        ("img_yer", "Yerbuldurur"), ("img_tkgm", "TKGM"), ("img_pga", "PGA"), ("img_mjh", "MJH"),
-        ("word_img_sondaj", "Sondaj haritası"), ("word_img_jeofizik", "Jeofizik haritası"),
-    ]:
-        path = dosya_durumlari.get(key)
-        if key == "lab_excel_path" and lab_sheet_ready(veri):
-            add(label, True, "LAB Sheet hazır", "rapor", "Rapor sekmesinden LAB Sheet'i açıp düzenleyebilirsiniz.")
-            continue
-        if key == "jeo_excel_path" and jeo_sheet_ok:
-            add(label, True, "Jeofizik Sheet hazır", "jeofizik", "Jeofizik sekmesinden Sheet'i açıp düzenleyebilirsiniz.")
-            continue
-        if key == "kml_path":
-            target = "haritalar"
-            suggestion = "Üst araç çubuğundan KML sınır dosyasını seçin."
-        elif key == "jeo_excel_path":
-            target = "jeofizik"
-            suggestion = "Jeofizik sekmesinden Excel dosyasını bağlayın."
-        else:
-            target = "rapor"
-            suggestion = "Rapor sekmesinden ilgili dosyayı veya görseli seçin."
-        add(label, bool(path and os.path.exists(path)), os.path.basename(path) if path else "Seçilmedi", target, suggestion)
-
-    ok_count = sum(1 for item in items if item["ok"])
-    score = int(round((ok_count / len(items)) * 100)) if items else 0
-    if score >= 85:
-        state = "RAPORA HAZIR"
-    elif score >= 60:
-        state = "KONTROL GEREKLİ"
-    else:
-        state = "EKSİKLER VAR"
-    return {"score": score, "state": state, "items": items}
+    return {
+        "score": report.get("score", 0),
+        "state": report.get("state", "EKSİKLER VAR"),
+        "items": items,
+        "counts": report.get("counts", {}),
+        "findings": report.get("findings", []),
+    }
 
 
 def hesap_ozeti(veri):

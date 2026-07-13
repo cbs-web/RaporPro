@@ -859,12 +859,7 @@ class RaporSekmesiMixin:
         return report
 
     def on_kontrol_penceresi(self, report):
-        win = Toplevel(self.root)
-        self.pencere_hazirla(win, "Rapor Ön Kontrol", "760x520", (680, 430), modal=True)
-        txt = tk.Text(win, wrap="word", font=("Consolas", 10))
-        txt.pack(fill="both", expand=True, padx=10, pady=10)
-        self._insert_clickable_report(txt, report)
-        self.modern_button(win, text="Kapat", command=win.destroy, role="primary").pack(pady=(0, 10))
+        return self.on_kontrol_merkezi_penceresi(report)
 
     def rapor_kayit_yolu_sec(self):
         cikti_klasor = self.veri.get("ayarlar", {}).get("varsayilan_cikti_klasor", "")
@@ -2480,14 +2475,25 @@ class RaporSekmesiMixin:
         report = build_preflight_report(self)
         self.last_preflight_report = report
         self.ozet_yenile(collect=False)
-        if report["errors"]:
+        if "blocking" in report:
+            blockers = report.get("blocking", [])
+        else:
+            blockers = [{"detail": detail} for detail in report.get("errors", [])]
+        if blockers:
             self.on_kontrol_penceresi(report)
             self.set_status("Rapor oluşturma durduruldu: ön kontrolde hata var.", level="error")
-            messagebox.showerror("Rapor Ön Kontrol", "Hata bulundu. Detayları ön kontrol penceresinde görebilirsiniz.")
+            messagebox.showerror(
+                "Çıktı Ön Kontrol",
+                f"Raporu etkileyen {len(blockers)} kritik bulgu var. "
+                "Detayları Çıktı Ön Kontrol Merkezi'nde görebilirsiniz.",
+            )
             return
         if report["warnings"]:
             self.on_kontrol_penceresi(report)
-            devam = messagebox.askyesno("Rapor Ön Kontrol", f"{len(report['warnings'])} uyarı bulundu. Yine de rapor oluşturulsun mu?")
+            devam = messagebox.askyesno(
+                "Çıktı Ön Kontrol",
+                f"{len(report['warnings'])} uyarı bulundu. Yine de rapor oluşturulsun mu?",
+            )
             if not devam:
                 self.set_status("Rapor oluşturma kullanıcı tarafından iptal edildi.", level="warning")
                 return
