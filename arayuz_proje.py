@@ -25,6 +25,7 @@ from proje_surumleri import (
     surum_kaydi_olustur,
 )
 from proje_sema import PROJE_SEMA_SURUMU, proje_verisini_migre_et
+from rapor_sablonu import etkin_rapor_sablonu_yolu
 from kalite_kontrol import backup_project_file
 from workbook_motoru import (
     WORKBOOK_SHEET_DEFS,
@@ -695,7 +696,7 @@ class ArayuzProjeMixin:
         ttk.Combobox(body, textvariable=kesit_var, values=("line_projection", "true_distance", "schematic"), state="readonly", width=34).grid(row=len(defaults), column=1, sticky="ew", padx=6, pady=6)
 
         word_var = tk.StringVar(value=mevcut_ayarlar.get("varsayilan_word_path", ""))
-        ttk.Label(body, text="Word sablonu").grid(row=len(defaults) + 1, column=0, sticky="e", padx=6, pady=6)
+        ttk.Label(body, text="Özel Word şablonu (isteğe bağlı)").grid(row=len(defaults) + 1, column=0, sticky="e", padx=6, pady=6)
         word_entry = ttk.Entry(body, textvariable=word_var, width=36)
         word_entry.grid(row=len(defaults) + 1, column=1, sticky="ew", padx=6, pady=6)
         tk.Button(body, text="Seç", command=lambda: self._ayar_dosya_sec(word_entry, [("Word", "*.docx")]), bg="#ECF0F1").grid(row=len(defaults) + 1, column=2, padx=4, pady=6)
@@ -818,7 +819,7 @@ class ArayuzProjeMixin:
 
     def _dosya_map(self):
         return {
-            "word_path": self.word_path,
+            "word_path": etkin_rapor_sablonu_yolu(self.word_path),
             "lab_excel_path": self.lab_excel_path,
             "jeo_excel_path": self.jeo_excel_path,
             "kml_path": self.kml_path,

@@ -21,6 +21,7 @@ from yardimcilar import atomic_docx_save, temizle_baslik, zemin_sinifi_cevir, sa
 from motor import GeoEngine
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_ss_koordinatlarini_koru
 from performans import log_exception, perf_log, perf_timer
+from rapor_sablonu import rapor_sablonu_durumu
 from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
 from raporlama_litoloji import (
@@ -587,7 +588,10 @@ def _doc_perf_stats(doc):
         return ""
 
 def raporla(app_instance, final_path=None, autosave=True):
-    if not app_instance.word_path: return False, "Lütfen önce bir Word şablonu seçin."
+    template_info = rapor_sablonu_durumu(getattr(app_instance, "word_path", None))
+    template_path = template_info.get("path", "")
+    if not template_path:
+        return False, "Dahili rapor şablonu bulunamadı. Geçerli bir özel Word şablonu seçin."
     app_instance.set_status("Rapor oluşturuluyor...", level="warning")
     if final_path is None and hasattr(app_instance, "root"):
         app_instance.root.update()
@@ -601,8 +605,8 @@ def raporla(app_instance, final_path=None, autosave=True):
         step_time[0] = now
     
     try:
-        with perf_timer("report.open_template", app_instance.word_path):
-            doc = Document(app_instance.word_path)
+        with perf_timer("report.open_template", template_path):
+            doc = Document(template_path)
         with perf_timer("report.clean_tags"):
             clean_word_tags(doc)
         report_paragraphs = list(iter_all_paragraphs(doc))

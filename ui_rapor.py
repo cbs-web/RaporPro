@@ -12,6 +12,7 @@ from ai_motoru import AI_MOTOR_ADLARI, belediye_duzeltme_analiz_et, duzeltme_yon
 from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
 from rapor_metin_revizyon import metin_revizyon_analiz_et, metin_revizyonlari_uygula
 from rapor_revizyon import revizyonlu_rapor_olustur
+from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
 from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, DEFAULT_EXPORT_DPI, FONT_BOLD
 from performans import perf_tracked
 from proje_motoru import hesap_ozeti, proje_saglik_ozeti, rapor_onizleme_metni
@@ -49,6 +50,30 @@ from yonetmelik_motoru import (
 
 
 class RaporSekmesiMixin:
+    def rapor_sablon_etiketini_guncelle(self):
+        """Etkin rapor şablonunu arayüzde kaynak türüyle birlikte göster."""
+        info = rapor_sablonu_durumu(getattr(self, "word_path", None))
+        if hasattr(self, "lbl_sab"):
+            text = info.get("label", "Dahili şablon bulunamadı")
+            if info.get("fallback"):
+                text += " (özel dosya bulunamadı)"
+            color = COLOR_WARNING if info.get("fallback") else (COLOR_SUCCESS if info.get("ready") else "red")
+            self.lbl_sab.config(text=text, foreground=color)
+        return info
+
+    def dahili_rapor_sablonunu_kullan(self):
+        """Projedeki özel şablon seçimini kaldırıp dahili şablona dön."""
+        self.word_path = None
+        self.veri.setdefault("dosyalar", {})["word_path"] = None
+        self.veri.setdefault("ayarlar", {})["varsayilan_word_path"] = ""
+        info = self.rapor_sablon_etiketini_guncelle()
+        if hasattr(self, "ozet_yenile"):
+            self.ozet_yenile(collect=False)
+        if info.get("ready"):
+            self.set_status("Dahili rapor şablonu kullanılacak.", level="success")
+        else:
+            self.set_status("Dahili rapor şablonu bulunamadı.", level="error")
+
     def p_rapor(self, p):
         container = ttk.Frame(p)
         container.pack(fill="both", expand=True)
@@ -98,11 +123,7 @@ class RaporSekmesiMixin:
                 self.lbl_rapor_drop.config(text="Dosyaları buraya bırakabilirsiniz", foreground="#2874A6")
 
         def refresh_report_labels():
-            if hasattr(self, "lbl_sab"):
-                self.lbl_sab.config(
-                    text=os.path.basename(self.word_path) if self.word_path else "Word şablonu seçilmedi",
-                    foreground=COLOR_SUCCESS if self.word_path else "red",
-                )
+            self.rapor_sablon_etiketini_guncelle()
             if hasattr(self, "lbl_lab"):
                 self.lbl_lab.config(
                     text=os.path.basename(self.lab_excel_path) if self.lab_excel_path else "Laboratuvar Excel seçilmedi",
@@ -217,7 +238,17 @@ class RaporSekmesiMixin:
         flow = ttk.LabelFrame(center_frame, text="Ana Akış", padding=12)
         flow.pack(fill="x", pady=(0, 10))
         drop_targets.extend([flow, center_frame, canvas])
-        file_row(flow, "Word Şablonu", "lbl_sab", "Word şablonu seçilmedi", "Seç", self.sablon_sec)
+        template_row = file_row(flow, "Rapor Şablonu", "lbl_sab", "Dahili şablon hazırlanıyor...", "Özel Seç", self.sablon_sec)
+        builtin_btn = self.modern_button(
+            template_row,
+            text="Dahili Kullan",
+            command=self.dahili_rapor_sablonunu_kullan,
+            role="accent",
+            outline=True,
+            width=14,
+        )
+        builtin_btn.pack(side="right", padx=(0, 6))
+        self.tooltip_ekle(builtin_btn, "Programa gömülü varsayılan rapor şablonunu kullan")
         file_row(flow, "Lab Excel", "lbl_lab", "Laboratuvar Excel seçilmedi", "Seç", self.lab_excel_sec)
         lab_sheet_row = ttk.Frame(flow)
         lab_sheet_row.pack(fill="x", pady=(0, 4))
@@ -343,7 +374,9 @@ class RaporSekmesiMixin:
         f = filedialog.askopenfilename(filetypes=[("Word", "*.docx")])
         if f:
             self.word_path = f
-            self.lbl_sab.config(text=os.path.basename(f), foreground=COLOR_SUCCESS)
+            self.veri.setdefault("dosyalar", {})["word_path"] = f
+            self.rapor_sablon_etiketini_guncelle()
+            self.set_status(f"Özel rapor şablonu seçildi: {os.path.basename(f)}", level="success")
 
     def lab_excel_sec(self):
         f = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx")])
@@ -2437,7 +2470,7 @@ class RaporSekmesiMixin:
 
     def rapor_arka_plan_context(self):
         return SimpleNamespace(
-            word_path=self.word_path,
+            word_path=etkin_rapor_sablonu_yolu(self.word_path),
             veri=copy.deepcopy(self.veri),
             jeo_excel_path=getattr(self, "jeo_excel_path", None),
             lab_excel_path=getattr(self, "lab_excel_path", None),

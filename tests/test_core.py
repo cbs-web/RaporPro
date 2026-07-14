@@ -49,7 +49,8 @@ from raporlama import (
     litoloji_dagilim_paragraflari,
     mjh_resim_yolu,
 )
-from kalite_kontrol import build_preflight_report, image_path_for_tag, validate_project_data
+from kalite_kontrol import analyze_word_template, build_preflight_report, image_path_for_tag, validate_project_data
+from rapor_sablonu import dahili_rapor_sablonu_yolu, etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
 from spt_okuma_motoru import (
     SPTKaydi,
     _path_unique_key,
@@ -705,6 +706,35 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_dahili_rapor_sablonu_okunur_ve_temel_etiketleri_icerir(self):
+        path = dahili_rapor_sablonu_yolu()
+
+        self.assertTrue(os.path.isfile(path))
+        analysis = analyze_word_template(path)
+        self.assertIsNone(analysis["error"])
+        self.assertIn("[PROJE_ADI]", analysis["tags"])
+        self.assertGreater(len(analysis["tags"]), 20)
+
+    def test_gecersiz_ozel_sablon_dahili_sablona_doner(self):
+        status = rapor_sablonu_durumu(r"Z:\bulunmayan\rapor_sablonu.docx")
+
+        self.assertTrue(status["ready"])
+        self.assertTrue(status["fallback"])
+        self.assertEqual(status["source"], "builtin")
+        self.assertEqual(status["path"], dahili_rapor_sablonu_yolu())
+
+    def test_gecerli_ozel_sablon_dahili_sablondan_once_gelir(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_path = os.path.join(tmp, "ozel.docx")
+            Document().save(custom_path)
+
+            status = rapor_sablonu_durumu(custom_path)
+            self.assertEqual(status["source"], "custom")
+            self.assertFalse(status["fallback"])
+            self.assertEqual(etkin_rapor_sablonu_yolu(custom_path), os.path.abspath(custom_path))
+
     def test_serim_adi_haritada_ss_bicimine_donusur(self):
         self.assertEqual(ss_harita_etiketi("Serim 4", 0), "SS-4")
         self.assertEqual(ss_harita_etiketi("SS 7", 0), "SS-7")

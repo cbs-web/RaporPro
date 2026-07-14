@@ -9,6 +9,7 @@ from performans import perf_tracked
 from harita_motoru import TopluHarita
 from harita_referans import ss_harita_etiketi
 from kalite_kontrol import analyze_word_template, format_template_analysis, get_supported_tags
+from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
 
 
 class ArayuzAraclarMixin:
@@ -135,7 +136,7 @@ class ArayuzAraclarMixin:
             entries[key] = entry
 
         start_row = len(fields)
-        ttk.Label(form, text="Varsayılan Word şablonu").grid(row=start_row, column=0, sticky="e", padx=6, pady=5)
+        ttk.Label(form, text="Özel Word şablonu (isteğe bağlı)").grid(row=start_row, column=0, sticky="e", padx=6, pady=5)
         word_entry = ttk.Entry(form, width=48)
         word_entry.grid(row=start_row, column=1, sticky="ew", padx=6, pady=5)
         word_entry.insert(0, ayarlar.get("varsayilan_word_path", ""))
@@ -245,8 +246,8 @@ class ArayuzAraclarMixin:
         default_word = ayarlar.get("varsayilan_word_path")
         if not self.word_path and default_word and os.path.exists(default_word):
             self.word_path = default_word
-            if hasattr(self, 'lbl_sab'):
-                self.lbl_sab.config(text=os.path.basename(self.word_path), foreground=COLOR_SUCCESS)
+        if hasattr(self, "rapor_sablon_etiketini_guncelle"):
+            self.rapor_sablon_etiketini_guncelle()
 
     def etiket_yoneticisi(self):
         win = Toplevel(self.root)
@@ -314,7 +315,7 @@ class ArayuzAraclarMixin:
 
         top = ttk.Frame(tab_template, padding=8)
         top.pack(fill="x")
-        selected_path = tk.StringVar(value=self.word_path or "")
+        selected_path = tk.StringVar(value=etkin_rapor_sablonu_yolu(self.word_path))
         ttk.Label(top, text="Şablon").pack(side="left", padx=(0, 6))
         path_entry = ttk.Entry(top, textvariable=selected_path)
         path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
@@ -341,8 +342,9 @@ class ArayuzAraclarMixin:
                 return
             selected_path.set(path)
             self.word_path = path
-            if hasattr(self, 'lbl_sab'):
-                self.lbl_sab.config(text=os.path.basename(path), foreground=COLOR_SUCCESS)
+            self.veri.setdefault("dosyalar", {})["word_path"] = path
+            if hasattr(self, "rapor_sablon_etiketini_guncelle"):
+                self.rapor_sablon_etiketini_guncelle()
             show_analysis(path)
 
         def set_default_template():
@@ -350,15 +352,33 @@ class ArayuzAraclarMixin:
             if not path or not os.path.exists(path):
                 messagebox.showwarning("Word", "Varsayılan yapmak için önce geçerli bir Word şablonu seçin.")
                 return
+            builtin_path = etkin_rapor_sablonu_yolu(None)
+            if builtin_path and os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(builtin_path)):
+                use_builtin_template()
+                return
             self.word_path = path
+            self.veri.setdefault("dosyalar", {})["word_path"] = path
             self.veri.setdefault("ayarlar", {})["varsayilan_word_path"] = path
-            if hasattr(self, 'lbl_sab'):
-                self.lbl_sab.config(text=os.path.basename(path), foreground=COLOR_SUCCESS)
+            if hasattr(self, "rapor_sablon_etiketini_guncelle"):
+                self.rapor_sablon_etiketini_guncelle()
             self.set_status(f"Varsayılan Word şablonu ayarlandı: {os.path.basename(path)}", level="success")
+
+        def use_builtin_template():
+            if hasattr(self, "dahili_rapor_sablonunu_kullan"):
+                self.dahili_rapor_sablonunu_kullan()
+            else:
+                self.word_path = None
+                self.veri.setdefault("dosyalar", {})["word_path"] = None
+                self.veri.setdefault("ayarlar", {})["varsayilan_word_path"] = ""
+            info = rapor_sablonu_durumu(None)
+            selected_path.set(info.get("path", ""))
+            if info.get("path"):
+                show_analysis(info["path"])
 
         tk.Button(top, text="Tara", command=lambda: show_analysis(selected_path.get()), bg=COLOR_PRIMARY, fg="white").pack(side="left", padx=3)
         tk.Button(top, text="Word Seç", command=choose_and_scan, bg="#ECF0F1").pack(side="left", padx=3)
         tk.Button(top, text="Varsayılan Yap", command=set_default_template, bg="#D6EAF8").pack(side="left", padx=3)
+        tk.Button(top, text="Dahili Kullan", command=use_builtin_template, bg="#D5F5E3").pack(side="left", padx=3)
 
         if selected_path.get():
             show_analysis(selected_path.get())

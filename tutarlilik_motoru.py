@@ -23,7 +23,7 @@ from tutarlilik_ortak import (
 from yardimcilar import litoloji_yazim_uyarilari
 
 DOSYA_KONTROLLERI = (
-    ("word_path", "Word şablonu", "rapor", "Rapor sekmesinden Word şablonu seçin.", "error"),
+    ("word_path", "Word şablonu", "rapor", "Dahili şablonu kontrol edin veya özel bir Word şablonu seçin.", "error"),
     ("lab_excel_path", "Lab Excel", "rapor", "LAB Sheet doldurun veya Lab Excel bağlayın.", "warning"),
     ("jeo_excel_path", "Jeofizik Excel", "jeofizik", "Jeofizik Sheet doldurun, Excel bağlayın veya manuel veri girin.", "warning"),
     ("kml_path", "KML sınır", "haritalar", "KML sınır dosyasını seçin.", "info"),

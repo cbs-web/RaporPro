@@ -11,6 +11,7 @@ from cikti_kalite import (
 from kalite_kontrol import build_preflight_report
 from performans import log_exception, perf_tracked
 from proje_motoru import proje_saglik_ozeti
+from rapor_sablonu import rapor_sablonu_durumu
 from sabitler import COLOR_BG, COLOR_DANGER, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
 from yardimcilar import safe_float
 
@@ -69,8 +70,9 @@ class KontrolPaneliMixin:
         else:
             self._ozet_set("jeofizik", f"SS: {len(ss_list)} | MT: {len(mt_list)} | Tabaka: {layer_count}", ok=(len(ss_list) + len(mt_list)) > 0)
 
+        template_info = rapor_sablonu_durumu(self.word_path)
         file_map = {
-            "word_path": self.word_path,
+            "word_path": template_info.get("path", ""),
             "lab_excel_path": self.lab_excel_path,
             "jeo_excel_path": self.jeo_excel_path,
             "kml_path": self.kml_path,
@@ -91,6 +93,9 @@ class KontrolPaneliMixin:
         }
         lab_sheet_ready = self._lab_sheet_ready()
         for raw_key, path in file_map.items():
+            if raw_key == "word_path":
+                self._ozet_file_set(label_keys[raw_key], template_info.get("label", ""), template_info.get("ready", False))
+                continue
             if raw_key == "lab_excel_path" and lab_sheet_ready:
                 rows = self.veri.get("lab_sheet", {}).get("rows", [])
                 status = f"LAB Sheet hazır: {len(rows)} satır"

@@ -684,8 +684,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
             self.e_jeo_tar.insert(0, self.veri.get("jeofizik", {}).get("tarih", ""))
         
         self.kml_etiket_guncelle()
-        if hasattr(self, 'lbl_sab'):
-            self.lbl_sab.config(text=os.path.basename(self.word_path) if self.word_path else "Henüz seçilmedi...", foreground=COLOR_SUCCESS if self.word_path else "red")
+        if hasattr(self, "rapor_sablon_etiketini_guncelle"):
+            self.rapor_sablon_etiketini_guncelle()
         if hasattr(self, 'lbl_lab'):
             self.lbl_lab.config(text=os.path.basename(self.lab_excel_path) if self.lab_excel_path else "Henüz laboratuvar dosyası seçilmedi", foreground=COLOR_SUCCESS if self.lab_excel_path else "red")
             if hasattr(self, "_lab_label_guncelle"):

@@ -15,6 +15,7 @@ from tutarlilik_motoru import (
 from docx import Document
 from ekler import uygun_ek_sablonu
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_sheet_var_mi
+from rapor_sablonu import etkin_rapor_sablonu_yolu
 
 
 KNOWN_TAGS = {
@@ -478,7 +479,7 @@ def build_preflight_report(app_instance):
         )
 
     tags = []
-    word_path = getattr(app_instance, "word_path", None)
+    word_path = etkin_rapor_sablonu_yolu(getattr(app_instance, "word_path", None))
     if word_path and os.path.isfile(word_path):
         try:
             tags = read_word_tags(word_path)
