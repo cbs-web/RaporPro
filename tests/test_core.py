@@ -51,6 +51,7 @@ from raporlama import (
 )
 from kalite_kontrol import analyze_word_template, build_preflight_report, image_path_for_tag, validate_project_data
 from rapor_sablonu import dahili_rapor_sablonu_yolu, etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
+from ui_icons import IconManager
 from spt_okuma_motoru import (
     SPTKaydi,
     _path_unique_key,
@@ -706,6 +707,12 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_buton_ikon_eslemesi_yenile_ve_yeni_metinlerini_ayirir(self):
+        icons = IconManager()
+
+        self.assertEqual(icons.guess_key("Yenile"), "refresh")
+        self.assertEqual(icons.guess_key("Yeni Proje"), "plus")
+
     def test_dahili_rapor_sablonu_okunur_ve_temel_etiketleri_icerir(self):
         path = dahili_rapor_sablonu_yolu()
 

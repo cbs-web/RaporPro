@@ -43,6 +43,112 @@ class ArayuzTemelMixin:
         style.configure("Valid.TEntry", fieldbackground="#FFFFFF")
         style.configure("Warning.TEntry", fieldbackground="#FCF3CF")
         style.configure("Invalid.TEntry", fieldbackground="#FADBD8")
+        style.configure("Surface.TFrame", background=COLOR_SURFACE)
+        style.configure("SurfaceAlt.TFrame", background=COLOR_SURFACE_ALT)
+        style.configure("PageTitle.TLabel", background=COLOR_BG, foreground=COLOR_PRIMARY, font=FONT_UI_PAGE)
+        style.configure("SectionTitle.TLabel", background=COLOR_BG, foreground=COLOR_PRIMARY, font=FONT_UI_SECTION)
+        style.configure("Muted.TLabel", background=COLOR_BG, foreground=COLOR_TEXT_MUTED, font=FONT_UI_BODY)
+        style.configure(
+            "Dashboard.Horizontal.TProgressbar",
+            troughcolor="#E8EDF2",
+            background=COLOR_ACCENT,
+            bordercolor="#E8EDF2",
+            lightcolor=COLOR_ACCENT,
+            darkcolor=COLOR_ACCENT,
+            thickness=8,
+        )
+        for name, color in (
+            ("Success", COLOR_SUCCESS),
+            ("Warning", COLOR_WARNING),
+            ("Danger", COLOR_DANGER),
+        ):
+            style.configure(
+                f"{name}.Horizontal.TProgressbar",
+                troughcolor="#E8EDF2",
+                background=color,
+                bordercolor="#E8EDF2",
+                lightcolor=color,
+                darkcolor=color,
+                thickness=8,
+            )
+
+    def scrollable_page(self, parent, padding=12):
+        """İçeriği görünür genişliğe sabitleyen dikey kaydırılabilir sayfa oluştur."""
+        shell = ttk.Frame(parent)
+        shell.pack(fill="both", expand=True)
+        canvas = tk.Canvas(shell, bg=COLOR_BG, highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        inner = ttk.Frame(canvas, padding=padding)
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def update_region(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def update_width(event):
+            canvas.itemconfigure(window_id, width=max(1, event.width))
+
+        def is_page_child(widget):
+            while widget is not None:
+                if widget in (canvas, inner):
+                    return True
+                widget = getattr(widget, "master", None)
+            return False
+
+        def on_mousewheel(event):
+            try:
+                if not canvas.winfo_exists():
+                    return None
+                widget = self.root.winfo_containing(*self.root.winfo_pointerxy())
+                if not is_page_child(widget):
+                    return None
+                if widget is not canvas and isinstance(widget, (tk.Text, tk.Listbox, ttk.Treeview)):
+                    return None
+                steps = -int(event.delta / 120) if event.delta else 0
+                if steps == 0 and event.delta:
+                    steps = -1 if event.delta > 0 else 1
+                if steps:
+                    canvas.yview_scroll(steps, "units")
+                    return "break"
+            except tk.TclError:
+                return None
+            return None
+
+        inner.bind("<Configure>", update_region)
+        canvas.bind("<Configure>", update_width)
+        self.root.bind_all("<MouseWheel>", on_mousewheel, add="+")
+        return inner, canvas
+
+    def ui_surface_frame(self, parent, padding=12, background=COLOR_SURFACE):
+        """İnce kenarlıklı, nötr içerik yüzeyi oluştur."""
+        return tk.Frame(
+            parent,
+            bg=background,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            highlightcolor=COLOR_BORDER_STRONG,
+            padx=padding,
+            pady=padding,
+        )
+
+    def ui_section_title(self, parent, text):
+        """Sayfa içindeki bölüm başlıklarını tek tip üret."""
+        return ttk.Label(parent, text=text, style="SectionTitle.TLabel")
+
+    def ui_status_palette(self, state="neutral"):
+        """Durum göstergelerinde kullanılacak vurgu ve yumuşak yüzey rengini döndür."""
+        palettes = {
+            "success": (COLOR_SUCCESS, COLOR_SUCCESS_SOFT),
+            "warning": (COLOR_WARNING, COLOR_WARNING_SOFT),
+            "danger": (COLOR_DANGER, COLOR_DANGER_SOFT),
+            "accent": (COLOR_ACCENT, COLOR_ACCENT_SOFT),
+            "neutral": (COLOR_TEXT_MUTED, COLOR_SURFACE_ALT),
+        }
+        return palettes.get(state, palettes["neutral"])
 
     def _role_from_color(self, color, default="neutral"):
         color = str(color or "").lower()

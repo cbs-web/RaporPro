@@ -39,12 +39,12 @@ class IconManager:
     def guess_key(self, text):
         t = normalized_text(text)
         checks = [
+            (("kurtar", "yenile", "guncelle"), "refresh"),
             (("yeni", "ekle", "+"), "plus"),
             (("sil", "temizle", "kaldir"), "trash"),
             (("kaydet",), "save"),
             (("ayar", "arac"), "settings"),
             (("ac", "klasor", "dosya sec"), "folder"),
-            (("kurtar", "yenile", "guncelle"), "refresh"),
             (("kilit",), "lock"),
             (("workbook", "excel", "tablo"), "table"),
             (("spt", "foto", "kamera", "kirp"), "camera"),

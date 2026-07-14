@@ -12,7 +12,18 @@ from kalite_kontrol import build_preflight_report
 from performans import log_exception, perf_tracked
 from proje_motoru import proje_saglik_ozeti
 from rapor_sablonu import rapor_sablonu_durumu
-from sabitler import COLOR_BG, COLOR_DANGER, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
+from sabitler import (
+    COLOR_BG,
+    COLOR_BORDER,
+    COLOR_DANGER,
+    COLOR_PRIMARY,
+    COLOR_SUCCESS,
+    COLOR_SURFACE,
+    COLOR_TEXT_MUTED,
+    COLOR_WARNING,
+    FONT_BOLD,
+    FONT_UI_BODY_BOLD,
+)
 from yardimcilar import safe_float
 
 
@@ -117,36 +128,38 @@ class KontrolPaneliMixin:
     def _ozet_set(self, key, text, ok=True):
         label = self.ozet_metric_labels.get(key)
         color = COLOR_SUCCESS if ok else COLOR_WARNING
-        bg = "#F3FBF6" if ok else "#FFF4E5"
         card = getattr(self, "ozet_metric_cards", {}).get(key)
         title = getattr(self, "ozet_metric_title_labels", {}).get(key)
+        accent = getattr(self, "ozet_metric_accents", {}).get(key)
         if card:
-            card.config(bg=bg, highlightbackground=color, highlightcolor=color, highlightthickness=1)
+            card.config(bg=COLOR_SURFACE, highlightbackground=COLOR_BORDER, highlightcolor=COLOR_BORDER)
+        if accent:
+            accent.config(bg=color)
         if title:
-            title.config(bg=bg, fg=COLOR_PRIMARY)
+            title.config(bg=COLOR_SURFACE, fg=COLOR_PRIMARY)
         if label:
-            label.config(text=text, fg=color, bg=bg)
+            label.config(text=text, fg=color, bg=COLOR_SURFACE)
 
     def _ozet_file_set(self, key, text, ok=True):
         label = self.ozet_file_labels.get(key)
         display_text = self._ozet_file_text_compact(text)
         if ok:
             color = COLOR_SUCCESS
-            bg = "#F3FBF6"
         elif str(text).startswith("Bulunamadı"):
             color = COLOR_DANGER
-            bg = "#FDEDEC"
         else:
             color = COLOR_WARNING
-            bg = "#FFF4E5"
         card = getattr(self, "ozet_file_cards", {}).get(key)
         title = getattr(self, "ozet_file_title_labels", {}).get(key)
+        accent = getattr(self, "ozet_file_accents", {}).get(key)
         if card:
-            card.config(bg=bg, highlightbackground=color, highlightcolor=color, highlightthickness=1)
+            card.config(bg=COLOR_SURFACE, highlightbackground=COLOR_BORDER, highlightcolor=COLOR_BORDER)
+        if accent:
+            accent.config(bg=color)
         if title:
-            title.config(bg=bg, fg=COLOR_PRIMARY)
+            title.config(bg=COLOR_SURFACE, fg=COLOR_PRIMARY)
         if label:
-            label.config(text=display_text, fg=color, bg=bg)
+            label.config(text=display_text, fg=color, bg=COLOR_SURFACE)
 
     def _ozet_file_text_compact(self, text, max_name_len=36):
         text = str(text or "")
@@ -255,7 +268,7 @@ class KontrolPaneliMixin:
     def _insert_clickable_report(self, text_widget, report):
         text_widget.config(state="normal")
         text_widget.delete("1.0", tk.END)
-        text_widget.tag_configure("section", foreground=COLOR_PRIMARY, font=("Consolas", 10, "bold"))
+        text_widget.tag_configure("section", foreground=COLOR_PRIMARY, font=FONT_UI_BODY_BOLD)
         text_widget.tag_configure("error", foreground=COLOR_DANGER)
         text_widget.tag_configure("warning", foreground=COLOR_WARNING)
         text_widget.tag_configure("info", foreground="#1F618D")
@@ -571,7 +584,7 @@ class KontrolPaneliMixin:
             self._insert_clickable_report(self.ozet_preflight_text, self.last_preflight_report)
         else:
             if hasattr(self, "ozet_preflight_summary_label"):
-                self.ozet_preflight_summary_label.config(text="Ön kontrol bekliyor", fg="#555555")
+                self.ozet_preflight_summary_label.config(text="Ön kontrol bekliyor", fg=COLOR_TEXT_MUTED)
             if hasattr(self, "ozet_preflight_action_button"):
                 self.configure_modern_button(self.ozet_preflight_action_button, text="Çalıştır", role="warning", outline=True)
             self.ozet_preflight_text.config(state="normal")
