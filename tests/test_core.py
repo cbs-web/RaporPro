@@ -1145,6 +1145,44 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         mixin.sondaj_satir_durumlarini_yenile.assert_called_once_with()
         mixin.sondaj_tablosunu_ciz.assert_not_called()
 
+    def test_sondaj_satir_durumu_litoloji_eksigini_uyari_olarak_gosterir(self):
+        mixin = SondajMixin.__new__(SondajMixin)
+
+        state, message = mixin.sondaj_satir_genel_durumu({"no": "SK-1", "der": "15", "litoloji": []})
+
+        self.assertEqual(state, "warning")
+        self.assertEqual(message, "Litoloji eksik")
+
+    def test_sondaj_satir_durumu_gecerli_litoloji_ile_hazir_olur(self):
+        mixin = SondajMixin.__new__(SondajMixin)
+        sondaj = {
+            "no": "SK-1",
+            "der": "15",
+            "litoloji": [["0", "15", "Kil"]],
+            "spt": [],
+            "pmt": [],
+            "kaya": [],
+        }
+
+        state, message = mixin.sondaj_satir_genel_durumu(sondaj)
+
+        self.assertEqual(state, "ok")
+        self.assertEqual(message, "Hazır")
+
+    def test_sondaj_satir_durumu_gecersiz_koordinati_uyari_olarak_gosterir(self):
+        mixin = SondajMixin.__new__(SondajMixin)
+        sondaj = {
+            "no": "SK-1",
+            "der": "15",
+            "y": "140.25",
+            "litoloji": [["0", "15", "Kil"]],
+        }
+
+        state, message = mixin.sondaj_satir_genel_durumu(sondaj)
+
+        self.assertEqual(state, "warning")
+        self.assertEqual(message, "Koordinat geçersiz")
+
     def test_tamamlama_merkezi_eski_final_kontrol_girisini_korur(self):
         mixin = KontrolPaneliMixin.__new__(KontrolPaneliMixin)
         mixin.final_kontrol_penceresi = mock.Mock(return_value="window")

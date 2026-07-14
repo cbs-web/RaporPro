@@ -50,33 +50,216 @@ class SondajMixin:
 
     def sondaj_satir_vurgula(self, row_frame, active):
         try:
+            selected = bool(getattr(row_frame, "_selected", False))
             row_frame.configure(
-                highlightbackground="#7FB3D5" if active else getattr(row_frame, "_normal_border", "#D8DEE6"),
-                highlightthickness=2 if active else 1,
+                highlightbackground=(
+                    COLOR_ACCENT
+                    if selected
+                    else "#7FB3D5"
+                    if active
+                    else getattr(row_frame, "_normal_border", COLOR_BORDER)
+                ),
+                highlightthickness=2 if active or selected else 1,
             )
         except Exception:
             pass
 
     def p_sondaj(self, p):
-        top_bar = ttk.Frame(p, padding=10); top_bar.pack(fill="x")
-        self.responsive_button_row(top_bar, [
-            ("+ Yeni Sondaj Ekle", self.sondaj_ekle, COLOR_ACCENT, "white", "Yeni bir sondaj satırı oluşturur"),
-            ("Workbook", self.veri_giris_workbook_tksheet_ac, "#34495E", "white", "Excel benzeri toplu veri girişini açar"),
-            ("SPT Merkezi", self.spt_okuma_merkezi_ac, "#148F77", "white", "Excel ve fotoğraf SPT okuma, kontrol ve aktarım merkezini açar"),
-            ("PMT Excel Al", self.pmt_excel_aktar, "#8E44AD", "white", "Presiyometre Excel dosyalarından PMT verilerini aktarır"),
-            ("Karot TCR", self.karot_tcr_merkezi_ac, "#7D3C98", "white", "Karot sandığı fotoğrafından kalibrasyonlu TCR hesabı yapar"),
-            ("Akıllı Tamamla", self.sondaj_akilli_tamamla, "#7DCEA0", "#111", "Eksik temel sondaj alanlarını otomatik tamamlar"),
-            ("Genel Kaydet", self.sondaj_verilerini_kaydet, COLOR_SUCCESS, "white", "Sondaj tablosundaki değişiklikleri belleğe alır"),
-            ("Toplu Log Kaydet", self.toplu_log_kaydet, "#F39C12", "white", "Tüm sondaj loglarını toplu kaydeder"),
-            ("Kesit Çiz", self.kesit_secim_penceresi, "#5D4037", "white", "Seçili sondajlardan jeolojik kesit hazırlar"),
-        ], min_width=150, max_cols=7, padx=3, pady=3)
+        page = ttk.Frame(p, padding=(12, 10))
+        page.pack(fill="both", expand=True)
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(3, weight=1)
 
-        container = ttk.Frame(p); container.pack(fill="both", expand=True)
-        canvas = tk.Canvas(container, bg=COLOR_BG); scrollbar_y = ttk.Scrollbar(container, orient="vertical", command=canvas.yview); scrollbar_x = ttk.Scrollbar(container, orient="horizontal", command=canvas.xview)
-        self.sondaj_scroll_frame = ttk.Frame(canvas); self.sondaj_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self.sondaj_scroll_frame, anchor="nw"); canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
-        scrollbar_y.pack(side="right", fill="y"); scrollbar_x.pack(side="bottom", fill="x"); canvas.pack(side="left", fill="both", expand=True)
+        self.sondaj_baslik_ozet_var = tk.StringVar(value="0 sondaj")
+        self.sondaj_secili_index_var = tk.IntVar(value=0)
+
+        header = ttk.Frame(page)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        header.columnconfigure(0, weight=1)
+        title_area = ttk.Frame(header)
+        title_area.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_area, text="Sondajlar", style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(title_area, textvariable=self.sondaj_baslik_ozet_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+
+        header_actions = ttk.Frame(header)
+        header_actions.grid(row=0, column=1, sticky="e")
+        save_button = self.modern_button(
+            header_actions,
+            "Kaydet",
+            command=self.sondaj_verilerini_kaydet,
+            role="secondary",
+            outline=True,
+            padx=10,
+            pady=5,
+        )
+        save_button.pack(side="left", padx=(0, SPACE_SM))
+        self.tooltip_ekle(save_button, "Sondaj tablosundaki değişiklikleri belleğe alır")
+        add_button = self.modern_button(
+            header_actions,
+            "Yeni Sondaj",
+            command=self.sondaj_ekle,
+            role="primary",
+            padx=10,
+            pady=5,
+        )
+        add_button.pack(side="left")
+        self.tooltip_ekle(add_button, "Yeni bir sondaj satırı oluşturur")
+
+        toolbar_shell = ttk.Frame(page)
+        toolbar_shell.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+        ttk.Separator(toolbar_shell).pack(fill="x", pady=(0, SPACE_XS))
+        toolbar = ttk.Frame(toolbar_shell)
+        toolbar.pack(fill="x")
+        toolbar_specs = [
+            ("Workbook", self.veri_giris_workbook_tksheet_ac, "Excel benzeri toplu veri girişini açar"),
+            ("SPT Merkezi", self.spt_okuma_merkezi_ac, "Excel ve fotoğraf SPT okuma merkezini açar"),
+            ("PMT Excel", self.pmt_excel_aktar, "Presiyometre Excel dosyalarından veri aktarır"),
+            ("Karot TCR", self.karot_tcr_merkezi_ac, "Karot fotoğrafından TCR hesabı yapar"),
+            ("Akıllı Tamamla", self.sondaj_akilli_tamamla, "Eksik temel sondaj alanlarını hazırlar"),
+            ("Toplu Log", self.toplu_log_kaydet, "Tüm sondaj loglarını toplu kaydeder"),
+            ("Kesit Çiz", self.kesit_secim_penceresi, "Sondajlardan jeolojik kesit hazırlar"),
+        ]
+        toolbar_buttons = []
+        for text, command, tooltip in toolbar_specs:
+            button = self.modern_button(
+                toolbar,
+                text,
+                command=command,
+                role="secondary",
+                outline=True,
+                padx=8,
+                pady=4,
+            )
+            toolbar_buttons.append(button)
+            self.tooltip_ekle(button, tooltip)
+        self.responsive_widget_grid(toolbar, toolbar_buttons, min_width=132, max_cols=7, padx=3, pady=3)
+        ttk.Separator(toolbar_shell).pack(fill="x", pady=(SPACE_XS, 0))
+
+        table_header = ttk.Frame(page)
+        table_header.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_XS))
+        ttk.Label(table_header, text="Sondaj Listesi", style="SectionTitle.TLabel").pack(side="left")
+        ttk.Label(
+            table_header,
+            text="Satırı seçerek ayrıntı işlemlerini aşağıdaki panelden açın",
+            style="Muted.TLabel",
+        ).pack(side="right")
+
+        container = ttk.Frame(page)
+        container.grid(row=3, column=0, sticky="nsew")
+        canvas = tk.Canvas(container, bg=COLOR_BG, highlightthickness=0, bd=0)
+        scrollbar_y = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollbar_x = ttk.Scrollbar(container, orient="horizontal", command=canvas.xview)
+        self.sondaj_scroll_frame = ttk.Frame(canvas)
+        self.sondaj_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.sondaj_scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        scrollbar_y.pack(side="right", fill="y")
+        scrollbar_x.pack(side="bottom", fill="x")
+        canvas.pack(side="left", fill="both", expand=True)
+        self.sondaj_canvas = canvas
+
+        self.sondaj_secili_panel = tk.Frame(
+            page,
+            bg=COLOR_SURFACE,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=SPACE_MD,
+            pady=SPACE_SM,
+        )
+        self.sondaj_secili_panel.grid(row=4, column=0, sticky="ew", pady=(SPACE_SM, 0))
+        self.sondaj_secili_panel.columnconfigure(0, weight=1)
+
+        detail_header = tk.Frame(self.sondaj_secili_panel, bg=COLOR_SURFACE)
+        detail_header.grid(row=0, column=0, sticky="ew")
+        detail_header.columnconfigure(0, weight=1)
+        detail_text = tk.Frame(detail_header, bg=COLOR_SURFACE)
+        detail_text.grid(row=0, column=0, sticky="w")
+        self.sondaj_secili_baslik_var = tk.StringVar(value="Seçili sondaj yok")
+        self.sondaj_secili_ozet_var = tk.StringVar(value="Önce bir sondaj satırı seçin")
+        tk.Label(
+            detail_text,
+            textvariable=self.sondaj_secili_baslik_var,
+            bg=COLOR_SURFACE,
+            fg=COLOR_PRIMARY,
+            font=FONT_UI_SECTION,
+            anchor="w",
+        ).pack(anchor="w")
+        self.sondaj_secili_ozet_label = tk.Label(
+            detail_text,
+            textvariable=self.sondaj_secili_ozet_var,
+            bg=COLOR_SURFACE,
+            fg=COLOR_TEXT_MUTED,
+            font=FONT_UI_BODY,
+            anchor="w",
+        )
+        self.sondaj_secili_ozet_label.pack(anchor="w", pady=(2, 0))
+
+        self.sondaj_secili_buttons = {}
+        log_button = self.modern_button(
+            detail_header,
+            "Log Önizle",
+            command=lambda: self.sondaj_secili_detay_ac("log"),
+            role="secondary",
+            outline=True,
+            padx=9,
+            pady=4,
+        )
+        log_button.grid(row=0, column=1, sticky="e", padx=(SPACE_SM, 0))
+        self.tooltip_ekle(log_button, "Seçili sondajın log önizlemesini açar")
+        self.sondaj_secili_buttons["log"] = log_button
+
+        detail_actions = tk.Frame(self.sondaj_secili_panel, bg=COLOR_SURFACE)
+        detail_actions.grid(row=1, column=0, sticky="ew", pady=(SPACE_SM, 0))
+        detail_specs = [
+            ("Litoloji", "litoloji"),
+            ("SPT", "spt"),
+            ("Numune", "numuneler"),
+            ("PMT", "pmt"),
+            ("Kaya", "kaya"),
+        ]
+        detail_buttons = []
+        for text, tur in detail_specs:
+            button = self.modern_button(
+                detail_actions,
+                text,
+                command=lambda t=tur: self.sondaj_secili_detay_ac(t),
+                role="secondary",
+                outline=True,
+                padx=8,
+                pady=4,
+            )
+            self.sondaj_secili_buttons[tur] = button
+            detail_buttons.append(button)
+            self.tooltip_ekle(button, f"Seçili sondajın {text} verilerini açar")
+        delete_button = self.modern_button(
+            detail_actions,
+            "Sondajı Sil",
+            command=self.sondaj_secili_sil,
+            role="danger",
+            outline=True,
+            padx=8,
+            pady=4,
+        )
+        self.sondaj_secili_buttons["sil"] = delete_button
+        detail_buttons.append(delete_button)
+        self.tooltip_ekle(delete_button, "Seçili sondajı projeden siler")
+        self.responsive_widget_grid(detail_actions, detail_buttons, min_width=145, max_cols=6, padx=3, pady=2)
+
         self.sondaj_headers = [("Sondaj No", "no"), ("Derinlik", "der"), ("Enlem", "y"), ("Boylam", "x"), ("Kot", "k"), ("Baş. Tarihi", "bas_tar"), ("Bit. Tarihi", "bit_tar"), ("YASS İlk", "yass_d1"), ("YASS T1", "yass_t1"), ("YASS Son", "yass_d2"), ("YASS T2", "yass_t2")]
+        self.sondaj_column_widths = {
+            "no": 10,
+            "der": 9,
+            "y": 13,
+            "x": 13,
+            "k": 8,
+            "bas_tar": 11,
+            "bit_tar": 11,
+            "yass_d1": 9,
+            "yass_t1": 11,
+            "yass_d2": 9,
+            "yass_t2": 11,
+        }
         self.sondaj_tablosunu_ciz()
 
     @perf_tracked("pmt.excel_import")
@@ -112,32 +295,96 @@ class SondajMixin:
     @perf_tracked("sondaj.table_redraw")
     def sondaj_tablosunu_ciz(self):
         self.sondaj_zebra_stillerini_hazirla()
-        for widget in self.sondaj_scroll_frame.winfo_children(): widget.destroy()
+        selected_before = self.sondaj_secili_index()
+        for widget in self.sondaj_scroll_frame.winfo_children():
+            widget.destroy()
         self.sondaj_ui_rows = []
         self.sondaj_ui_buttons = []
-        header_frame = tk.Frame(self.sondaj_scroll_frame, bg="#D5DBE3")
-        header_frame.pack(fill="x", pady=(2, 4))
-        tk.Label(header_frame, text="", width=1, bg="#D5DBE3", font=FONT_BOLD).pack(side="left", padx=(0, 1))
-        tk.Label(header_frame, text="#", width=3, bg="#D5DBE3", fg="#2C3E50", font=FONT_BOLD).pack(side="left", padx=1)
+        self.sondaj_ui_row_frames = []
+        self.sondaj_ui_status_widgets = []
+
+        sondajlar = self.veri.get("sondaj", [])
+        if sondajlar:
+            selected_before = 0 if selected_before is None else min(selected_before, len(sondajlar) - 1)
+        else:
+            selected_before = None
+        self.sondaj_secili_index_var.set(-1 if selected_before is None else selected_before)
+
+        header_bg = "#E9EEF3"
+        header_frame = tk.Frame(
+            self.sondaj_scroll_frame,
+            bg=header_bg,
+            highlightbackground=COLOR_BORDER,
+            highlightthickness=1,
+            bd=0,
+        )
+        header_frame.pack(fill="x", pady=(1, 4), padx=2)
+        tk.Frame(header_frame, width=5, bg=COLOR_BORDER_STRONG).pack(side="left", fill="y")
+        tk.Label(header_frame, text="", width=2, bg=header_bg, font=FONT_BOLD).pack(side="left", padx=1)
+        tk.Label(header_frame, text="#", width=3, bg=header_bg, fg=COLOR_PRIMARY, font=FONT_BOLD).pack(side="left", padx=1)
         for lbl, key in self.sondaj_headers:
-            tk.Label(header_frame, text=lbl, width=12, bg="#D5DBE3", fg="#2C3E50", font=FONT_BOLD).pack(side="left", padx=1)
-        tk.Label(header_frame, text="İşlemler", width=42, bg="#D5DBE3", fg="#2C3E50", font=FONT_BOLD).pack(side="left", padx=10)
-        
-        for idx, s_data in enumerate(self.veri["sondaj"]):
+            tk.Label(
+                header_frame,
+                text=lbl,
+                width=self.sondaj_column_widths.get(key, 11),
+                bg=header_bg,
+                fg=COLOR_PRIMARY,
+                font=FONT_BOLD,
+            ).pack(side="left", padx=1, pady=5)
+        tk.Label(
+            header_frame,
+            text="Durum",
+            width=18,
+            bg=header_bg,
+            fg=COLOR_PRIMARY,
+            font=FONT_BOLD,
+            anchor="w",
+        ).pack(side="left", padx=(8, 4))
+
+        for idx, s_data in enumerate(sondajlar):
             parity = "odd" if idx % 2 else "even"
             row_bg = "#F3F5F7" if parity == "odd" else "#FFFFFF"
-            strip_color = "#AEB6BF" if parity == "odd" else "#D0D5DA"
+            status_state, status_text = self.sondaj_satir_genel_durumu(s_data)
+            status_color = self.sondaj_durum_rengi(status_state)
             row_frame = tk.Frame(
                 self.sondaj_scroll_frame,
                 bg=row_bg,
-                highlightbackground="#D8DEE6",
+                highlightbackground=COLOR_BORDER,
                 highlightthickness=1,
                 bd=0,
             )
-            row_frame._normal_border = "#D8DEE6"
+            row_frame._normal_border = COLOR_BORDER
+            row_frame._selected = idx == selected_before
             row_frame.pack(fill="x", pady=(0, 2), padx=2)
-            tk.Frame(row_frame, width=4, bg=strip_color).pack(side="left", fill="y", padx=(0, 2))
-            tk.Label(row_frame, text=str(idx+1), width=3, bg=row_bg, fg="#2C3E50", font=FONT_BOLD).pack(side="left", padx=1)
+
+            status_strip = tk.Frame(row_frame, width=5, bg=status_color)
+            status_strip.pack(side="left", fill="y")
+            selector = tk.Radiobutton(
+                row_frame,
+                variable=self.sondaj_secili_index_var,
+                value=idx,
+                command=lambda i=idx: self.sondaj_secili_satir_ayarla(i),
+                bg=row_bg,
+                activebackground=row_bg,
+                selectcolor=COLOR_SURFACE,
+                bd=0,
+                highlightthickness=0,
+                padx=0,
+                pady=0,
+            )
+            selector.pack(side="left", padx=(2, 0))
+            row_number = tk.Label(
+                row_frame,
+                text=str(idx + 1),
+                width=3,
+                bg=row_bg,
+                fg=COLOR_PRIMARY,
+                font=FONT_BOLD,
+                cursor="hand2",
+            )
+            row_number.pack(side="left", padx=1)
+            row_number.bind("<Button-1>", lambda _event, i=idx: self.sondaj_secili_satir_ayarla(i))
+
             row_entries = {}
             for lbl, key in self.sondaj_headers:
                 if key == "sondaj_turu":
@@ -150,11 +397,16 @@ class SondajMixin:
                     e = UndoRedoEntry(row_frame, width=12)
                     e.insert(0, s_data.get(key, ""))
                 e._sondaj_parity = parity
+                e.configure(width=self.sondaj_column_widths.get(key, 11))
                 e.pack(side="left", padx=1, pady=3)
-                e.bind("<FocusIn>", lambda event, rf=row_frame: self.sondaj_satir_vurgula(rf, True), add="+")
+                e.bind(
+                    "<FocusIn>",
+                    lambda event, rf=row_frame, i=idx: self.sondaj_satir_odaklandi(rf, i),
+                    add="+",
+                )
                 e.bind("<FocusOut>", lambda event, rf=row_frame: self.sondaj_satir_vurgula(rf, False), add="+")
                 row_entries[key] = e
-            
+
             row_entries['bit_tar'].bind('<FocusOut>', lambda e, r_ents=row_entries: self.oto_yass_tarih(r_ents))
             for key, ent in row_entries.items():
                 ent.bind("<Return>", lambda event, r=idx, k=key: self.sondaj_tablo_hucre_git(r + 1, k))
@@ -167,42 +419,310 @@ class SondajMixin:
 
             row_entries['bit_tar'].bind('<Return>', bit_tar_enter)
             for key, ent in row_entries.items():
-                ent.bind("<KeyRelease>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
-                ent.bind("<FocusOut>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
-                ent.bind("<<ComboboxSelected>>", lambda event, r_ents=row_entries: self.sondaj_satirini_canli_dogrula(r_ents), add="+")
-            self.sondaj_satirini_canli_dogrula(row_entries)
-            
-            btn_f = tk.Frame(row_frame, bg=row_bg)
-            btn_f.pack(side="left", padx=10, pady=2)
-            button_specs = [
-                ("Litoloji", "litoloji", lambda i=idx: self.satir_veri_ac(i, "litoloji", ["Başlangıç", "Bitiş", "Tanım"])),
-                ("SPT", "spt", lambda i=idx: self.satir_veri_ac(i, "spt", [])),
-                ("Numune", "numuneler", lambda i=idx: self.satir_veri_ac(i, "numuneler", ["Derinlik/Aralık", "Türü/No"])),
-                ("PMT", "pmt", lambda i=idx: self.satir_veri_ac(i, "pmt", ["Der", "Em", "Pl"])),
-                ("Kaya", "kaya", lambda i=idx: self.satir_veri_ac(i, "kaya", ["Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"])),
-                ("LOG", "log", lambda i=idx: self.satir_log_onizle(i)),
-            ]
-            row_buttons = {}
-            for text, tur, command in button_specs:
-                state, tip = self._sondaj_detay_durum(s_data, tur)
-                role = self.sondaj_islem_buton_rolu(state)
-                font = ("Arial", 8, "bold") if tur == "log" else ("Arial", 8)
-                btn = self.modern_button(
-                    btn_f,
-                    text=text,
-                    command=command,
-                    role=role,
-                    outline=(state == "empty"),
-                    font=font,
-                    padx=6,
-                    pady=3,
+                ent.bind(
+                    "<KeyRelease>",
+                    lambda event, i=idx, r_ents=row_entries: self.sondaj_satir_canli_guncelle(i, r_ents),
+                    add="+",
                 )
-                btn.pack(side="left", padx=1 if tur != "log" else 5)
-                self.tooltip_ekle(btn, tip)
-                row_buttons[tur] = btn
-            self.modern_button(btn_f, text="SİL", role="danger", font=("Arial", 8, "bold"), command=lambda i=idx: self.sondaj_sil(i), padx=6, pady=3).pack(side="left", padx=5)
+                ent.bind(
+                    "<FocusOut>",
+                    lambda event, i=idx, r_ents=row_entries: self.sondaj_satir_canli_guncelle(i, r_ents),
+                    add="+",
+                )
+                ent.bind(
+                    "<<ComboboxSelected>>",
+                    lambda event, i=idx, r_ents=row_entries: self.sondaj_satir_canli_guncelle(i, r_ents),
+                    add="+",
+                )
+
+            status_area = tk.Frame(row_frame, bg=row_bg)
+            status_area.pack(side="left", padx=(8, 4), pady=3)
+            status_dot = tk.Frame(status_area, width=8, height=8, bg=status_color)
+            status_dot.pack(side="left", padx=(0, 6))
+            status_dot.pack_propagate(False)
+            status_label = tk.Label(
+                status_area,
+                text=status_text,
+                width=16,
+                bg=row_bg,
+                fg=COLOR_TEXT,
+                font=FONT_UI_BODY,
+                anchor="w",
+            )
+            status_label.pack(side="left")
+            self.tooltip_ekle(status_label, status_text)
+
             self.sondaj_ui_rows.append(row_entries)
-            self.sondaj_ui_buttons.append(row_buttons)
+            self.sondaj_ui_buttons.append({})
+            self.sondaj_ui_row_frames.append(row_frame)
+            self.sondaj_ui_status_widgets.append(
+                {"strip": status_strip, "dot": status_dot, "label": status_label}
+            )
+            self.sondaj_satirini_canli_dogrula(row_entries)
+
+        if not sondajlar:
+            tk.Label(
+                self.sondaj_scroll_frame,
+                text="Henüz sondaj eklenmedi. Sağ üstteki Yeni Sondaj düğmesini kullanın.",
+                bg=COLOR_BG,
+                fg=COLOR_TEXT_MUTED,
+                font=FONT_UI_BODY,
+                padx=SPACE_LG,
+                pady=SPACE_XL,
+            ).pack(fill="x")
+
+        self.sondaj_baslik_ozet_guncelle()
+        self.sondaj_secili_satir_ayarla(selected_before, save_current=False)
+
+    def sondaj_secili_index(self):
+        sondajlar = self.veri.get("sondaj", []) if hasattr(self, "veri") else []
+        if not sondajlar:
+            return None
+        raw_index = getattr(self, "_sondaj_secili_index", None)
+        if raw_index is None:
+            try:
+                raw_index = self.sondaj_secili_index_var.get()
+            except Exception:
+                raw_index = 0
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            index = 0
+        return max(0, min(index, len(sondajlar) - 1))
+
+    def sondaj_ui_satir_verisi(self, index):
+        sondajlar = self.veri.get("sondaj", []) if hasattr(self, "veri") else []
+        if not (0 <= index < len(sondajlar)):
+            return {}
+        data = dict(sondajlar[index])
+        rows = getattr(self, "sondaj_ui_rows", [])
+        if index < len(rows):
+            for key, entry in rows[index].items():
+                try:
+                    data[key] = entry.get()
+                except Exception:
+                    pass
+        return data
+
+    def sondaj_satir_genel_durumu(self, sondaj):
+        general_keys = ("no", "der", "y", "x", "k", "bas_tar", "bit_tar", "yass_d1", "yass_d2")
+        detail_keys = ("litoloji", "spt", "numuneler", "pmt", "kaya")
+        has_general = any(str(sondaj.get(key, "")).strip() for key in general_keys)
+        has_detail = any(sondaj.get(key) for key in detail_keys)
+        if not has_general and not has_detail:
+            return "empty", "Veri yok"
+
+        general_field_keys = (
+            "no", "der", "y", "x", "k", "bas_tar", "bit_tar",
+            "yass_d1", "yass_t1", "yass_d2", "yass_t2",
+        )
+        for key in general_field_keys:
+            state, message = self.sondaj_hucre_durumu(key, sondaj.get(key, ""), row_has_data=True)
+            if state in ("warning", "error"):
+                return "warning", message
+
+        lit_state, lit_message = self._sondaj_detay_durum(sondaj, "litoloji")
+        if lit_state == "empty":
+            return "warning", "Litoloji eksik"
+        if lit_state == "warning":
+            return "warning", lit_message
+
+        for tur in ("spt", "pmt", "kaya"):
+            if not sondaj.get(tur):
+                continue
+            state, message = self._sondaj_detay_durum(sondaj, tur)
+            if state == "warning":
+                return "warning", message
+        return "ok", "Hazır"
+
+    def sondaj_durum_rengi(self, state):
+        return {
+            "ok": COLOR_SUCCESS,
+            "warning": COLOR_WARNING,
+            "error": COLOR_DANGER,
+            "empty": COLOR_TEXT_MUTED,
+        }.get(state, COLOR_TEXT_MUTED)
+
+    def sondaj_satir_durum_gorseli_guncelle(self, index, row_entries=None):
+        widgets = getattr(self, "sondaj_ui_status_widgets", [])
+        if not (0 <= index < len(widgets)):
+            return
+        data = self.sondaj_ui_satir_verisi(index)
+        if row_entries:
+            for key, entry in row_entries.items():
+                try:
+                    data[key] = entry.get()
+                except Exception:
+                    pass
+        state, message = self.sondaj_satir_genel_durumu(data)
+        color = self.sondaj_durum_rengi(state)
+        status_widgets = widgets[index]
+        status_widgets["strip"].configure(bg=color)
+        status_widgets["dot"].configure(bg=color)
+        status_widgets["label"].configure(text=message, fg=color if state != "empty" else COLOR_TEXT_MUTED)
+        status_widgets["label"]._tooltip_text = message
+
+    def sondaj_baslik_ozet_guncelle(self):
+        variable = getattr(self, "sondaj_baslik_ozet_var", None)
+        if variable is None:
+            return
+        sondajlar = self.veri.get("sondaj", []) if hasattr(self, "veri") else []
+        total_depth = 0.0
+        for index in range(len(sondajlar)):
+            total_depth += max(0.0, safe_float(self.sondaj_ui_satir_verisi(index).get("der")))
+        total_text = f"{total_depth:.2f}".replace(".", ",")
+        variable.set(f"{len(sondajlar)} sondaj · toplam {total_text} m")
+
+    def sondaj_satir_canli_guncelle(self, index, row_entries):
+        self.sondaj_satirini_canli_dogrula(row_entries)
+        self.sondaj_satir_durum_gorseli_guncelle(index, row_entries)
+        self.sondaj_baslik_ozet_guncelle()
+        if self.sondaj_secili_index() == index:
+            self.sondaj_secili_paneli_guncelle()
+
+    def sondaj_satir_odaklandi(self, row_frame, index):
+        self.sondaj_secili_satir_ayarla(index)
+        self.sondaj_satir_vurgula(row_frame, True)
+
+    def sondaj_secim_gorselini_guncelle(self):
+        selected = self.sondaj_secili_index()
+        for index, row_frame in enumerate(getattr(self, "sondaj_ui_row_frames", [])):
+            row_frame._selected = index == selected
+            self.sondaj_satir_vurgula(row_frame, False)
+
+    def sondaj_secili_satir_ayarla(self, index, save_current=True):
+        current = getattr(self, "_sondaj_secili_index", None)
+        if save_current and current is not None and index != current and getattr(self, "sondaj_ui_rows", []):
+            self.sondaj_verilerini_kaydet(silent=True)
+
+        sondajlar = self.veri.get("sondaj", []) if hasattr(self, "veri") else []
+        if index is None or not sondajlar:
+            self._sondaj_secili_index = None
+            try:
+                self.sondaj_secili_index_var.set(-1)
+            except Exception:
+                pass
+        else:
+            index = max(0, min(int(index), len(sondajlar) - 1))
+            self._sondaj_secili_index = index
+            try:
+                self.sondaj_secili_index_var.set(index)
+            except Exception:
+                pass
+        self.sondaj_secim_gorselini_guncelle()
+        self.sondaj_secili_paneli_guncelle()
+
+    def sondaj_detay_buton_metni(self, sondaj, tur, label):
+        rows = [row for row in (sondaj.get(tur, []) or []) if self._satirda_veri_var(row)]
+        state, message = self._sondaj_detay_durum(sondaj, tur)
+        if not rows:
+            detail = "Veri yok"
+        elif state == "warning":
+            detail = f"{len(rows)} kayıt · kontrol"
+        else:
+            detail = f"{len(rows)} kayıt"
+        return f"{label} · {detail}", state, message
+
+    def sondaj_secili_paneli_guncelle(self):
+        buttons = getattr(self, "sondaj_secili_buttons", {})
+        title_var = getattr(self, "sondaj_secili_baslik_var", None)
+        summary_var = getattr(self, "sondaj_secili_ozet_var", None)
+        if not buttons or title_var is None or summary_var is None:
+            return
+
+        index = self.sondaj_secili_index()
+        if index is None:
+            title_var.set("Seçili sondaj yok")
+            summary_var.set("Önce bir sondaj satırı seçin")
+            self.sondaj_secili_ozet_label.configure(fg=COLOR_TEXT_MUTED)
+            for button in buttons.values():
+                try:
+                    button.configure(state="disabled")
+                except Exception:
+                    pass
+            return
+
+        sondaj = self.sondaj_ui_satir_verisi(index)
+        no = str(sondaj.get("no", "")).strip() or f"{index + 1}. sondaj"
+        depth = safe_float(sondaj.get("der"))
+        depth_text = f"{depth:.2f} m".replace(".", ",") if depth > 0 else "Derinlik girilmedi"
+        general_state, general_message = self.sondaj_satir_genel_durumu(sondaj)
+        title_var.set(f"Seçili sondaj: {no}")
+        summary_var.set(f"{depth_text} · {general_message}")
+        self.sondaj_secili_ozet_label.configure(fg=self.sondaj_durum_rengi(general_state))
+
+        labels = {
+            "litoloji": "Litoloji",
+            "spt": "SPT",
+            "numuneler": "Numune",
+            "pmt": "PMT",
+            "kaya": "Kaya",
+        }
+        for tur, label in labels.items():
+            button = buttons.get(tur)
+            if button is None:
+                continue
+            text, state, tooltip = self.sondaj_detay_buton_metni(sondaj, tur, label)
+            self.configure_modern_button(
+                button,
+                text=text,
+                role=self.sondaj_islem_buton_rolu(state),
+                outline=(state == "empty"),
+            )
+            button._tooltip_text = tooltip
+            try:
+                button.configure(state="normal")
+            except Exception:
+                pass
+
+        log_button = buttons.get("log")
+        if log_button is not None:
+            log_state, log_tooltip = self._sondaj_detay_durum(sondaj, "log")
+            self.configure_modern_button(
+                log_button,
+                text="Log Önizle",
+                role=self.sondaj_islem_buton_rolu(log_state),
+                outline=(log_state == "empty"),
+            )
+            log_button._tooltip_text = log_tooltip
+            try:
+                log_button.configure(state="normal")
+            except Exception:
+                pass
+
+        delete_button = buttons.get("sil")
+        if delete_button is not None:
+            try:
+                delete_button.configure(state="normal")
+            except Exception:
+                pass
+
+    def sondaj_secili_detay_ac(self, tur):
+        index = self.sondaj_secili_index()
+        if index is None:
+            self.set_status("Önce bir sondaj satırı seçin.", level="warning")
+            return
+        self.sondaj_verilerini_kaydet(silent=True)
+        if tur == "log":
+            self.satir_log_onizle(index)
+            return
+        columns = {
+            "litoloji": ["Başlangıç", "Bitiş", "Tanım"],
+            "spt": [],
+            "numuneler": ["Derinlik/Aralık", "Türü/No"],
+            "pmt": ["Der", "Em", "Pl"],
+            "kaya": ["Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"],
+        }
+        if tur in columns:
+            self.satir_veri_ac(index, tur, columns[tur])
+
+    def sondaj_secili_sil(self):
+        index = self.sondaj_secili_index()
+        if index is None:
+            self.set_status("Silmek için bir sondaj satırı seçin.", level="warning")
+            return
+        self.sondaj_verilerini_kaydet(silent=True)
+        self.sondaj_sil(index)
 
     def sondaj_tablo_hucre_git(self, row_idx, key):
         """Sondaj tablosunda belirtilen satır ve sütuna (key) odaklan."""
@@ -392,6 +912,7 @@ class SondajMixin:
         """Mevcut satırları yeniden oluşturmadan doğrulama ve düğme renklerini yenile."""
         for idx, row_entries in enumerate(getattr(self, "sondaj_ui_rows", [])):
             self.sondaj_satirini_canli_dogrula(row_entries)
+            self.sondaj_satir_durum_gorseli_guncelle(idx, row_entries)
             if idx >= len(self.veri.get("sondaj", [])):
                 continue
             row_buttons = (
@@ -407,6 +928,8 @@ class SondajMixin:
                     outline=(state == "empty"),
                 )
                 btn._tooltip_text = tip
+        self.sondaj_baslik_ozet_guncelle()
+        self.sondaj_secili_paneli_guncelle()
 
     def sondaj_akilli_tamamla(self):
         self.sondaj_verilerini_kaydet(silent=True)
@@ -969,9 +1492,18 @@ class SondajMixin:
             "bas_tar": bugun_str, "bit_tar": bugun_str, "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str, 
             "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
         })
+        self._sondaj_secili_index = len(self.veri["sondaj"]) - 1
         self.sondaj_tablosunu_ciz()
+
     def sondaj_sil(self, index):
-        if messagebox.askyesno("Sil", f"{index+1}. sıradaki sondaj silinsin mi?"): del self.veri["sondaj"][index]; self.sondaj_tablosunu_ciz()
+        if not messagebox.askyesno("Sil", f"{index+1}. sıradaki sondaj silinsin mi?"):
+            return
+        del self.veri["sondaj"][index]
+        if self.veri["sondaj"]:
+            self._sondaj_secili_index = min(index, len(self.veri["sondaj"]) - 1)
+        else:
+            self._sondaj_secili_index = None
+        self.sondaj_tablosunu_ciz()
         
 
 
