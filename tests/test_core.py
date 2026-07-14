@@ -1901,6 +1901,65 @@ class LogCizimTestleri(unittest.TestCase):
         self.assertEqual(len(figures), 1)
         self.assertTrue(figures[0].axes)
 
+    def test_log_ust_bilgi_hizasi_ve_buyuk_pmt_fontu_korunur(self):
+        from motor_log_kaynak import LOG_ZEMIN_PROFILI_START_RATIO
+
+        proje_adi = "Uzun Proje Adı Gayrimenkul Tarım Sanayi ve Ticaret Anonim Şirketi"
+        sondaj = {
+            "no": "SK-4",
+            "der": "15.0",
+            "litoloji": [["0", "15", "Kil"]],
+            "spt": [],
+            "pmt": [["3.0", "1726", "13.5"]],
+            "kaya": [],
+            "numuneler": [],
+        }
+        figure = GeoEngine.ciz_profesyonel_log(
+            sondaj,
+            {
+                "kunye": {
+                    "sahibi": proje_adi,
+                    "il": "Çanakkale",
+                    "ada": "1476",
+                    "par": "7",
+                },
+                "ayarlar": {
+                    "sorumlu_muhendis": "GOKALP DOGAN",
+                    "sondor_belge": "MURAT ERCELIK 3629",
+                },
+            },
+        )[0]
+        axis = figure.axes[0]
+        texts = {artist.get_text(): artist for artist in axis.texts}
+
+        self.assertEqual(texts["1726"].get_fontsize(), 6.1)
+        self.assertGreater(texts["Proje Adı"].get_fontsize(), 7.0)
+        self.assertGreater(texts["1476"].get_fontsize(), 7.0)
+        self.assertLessEqual(texts[proje_adi].get_fontsize(), 8.5)
+        self.assertEqual(
+            texts["Gökalp DOĞAN"].get_fontsize(),
+            texts["Çanakkale"].get_fontsize(),
+        )
+        self.assertEqual(
+            texts["Murat ERÇELİK 3629"].get_fontsize(),
+            texts["Çanakkale"].get_fontsize(),
+        )
+        self.assertEqual(texts["Gökalp DOĞAN"].get_fontweight(), "normal")
+        self.assertEqual(texts["Murat ERÇELİK 3629"].get_fontweight(), "normal")
+
+        expected_x = 0.035 + (0.965 - 0.035) * LOG_ZEMIN_PROFILI_START_RATIO
+        aligned_body_lines = [
+            line
+            for line in axis.lines
+            if len(line.get_xdata()) == 2
+            and abs(float(line.get_xdata()[0]) - expected_x) < 1e-9
+            and abs(float(line.get_xdata()[1]) - expected_x) < 1e-9
+        ]
+        self.assertTrue(aligned_body_lines)
+        self.assertTrue(
+            any(abs(patch.get_x() - expected_x) < 1e-9 for patch in axis.patches)
+        )
+
 
 class KarotTCRTestleri(unittest.TestCase):
     def test_log_ornek_derinligi_tek_haneli_formatlanir(self):

@@ -14,7 +14,9 @@ import textwrap
 
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
 import matplotlib.patches as mpatches
+from matplotlib.textpath import TextPath
 
 try:
     from sabitler import LEJANTLAR
@@ -40,6 +42,23 @@ except ImportError:
 
 A4_PORTRAIT_SIZE = (8.27, 11.69)
 LOG_FIGURE_DPI = 100
+LOG_BODY_COLUMN_RATIOS = (4.79, 2.34, 4.79, 6.25, 5.73, 16.0, 8.85, 22.2, 6.67, 18.0, 4.38)
+LOG_ZEMIN_PROFILI_START_RATIO = (
+    sum(LOG_BODY_COLUMN_RATIOS[:8]) / sum(LOG_BODY_COLUMN_RATIOS)
+)
+
+
+def _log_personel_yazimi_duzelt(value):
+    text = str(value or "").strip()
+    key = text.casefold().translate(
+        str.maketrans({"ç": "c", "ğ": "g", "ı": "i", "ö": "o", "ş": "s", "ü": "u"})
+    )
+    key = re.sub(r"\s+", " ", key)
+    if key == "gokalp dogan":
+        return "Gökalp DOĞAN"
+    if key == "murat ercelik 3629":
+        return "Murat ERÇELİK 3629"
+    return text
 
 
 def log_ornek_derinligi_formatla(value):
@@ -184,9 +203,13 @@ class GeoEngineLogMixin:
         firma_adi = val(ayarlar.get("firma_adi"), "UB ZEMIN MUHENDISLIK")
         log_baslik = val(ayarlar.get("log_baslik"), "SONDAJ LOGU")
         sorumlu_unvan = val(ayarlar.get("sorumlu_muhendis_unvan"), "Sorumlu Jeoloji Muhendisi")
-        sorumlu_muhendis = val(ayarlar.get("sorumlu_muhendis"), "GOKALP DOGAN")
+        sorumlu_muhendis = _log_personel_yazimi_duzelt(
+            val(ayarlar.get("sorumlu_muhendis"), "Gökalp DOĞAN")
+        )
         sondor_belge_baslik = val(ayarlar.get("sondor_belge_baslik"), "Sondor Belge No")
-        sondor_belge = val(ayarlar.get("sondor_belge"), "Murat Ercelik 3629")
+        sondor_belge = _log_personel_yazimi_duzelt(
+            val(ayarlar.get("sondor_belge"), "Murat ERÇELİK 3629")
+        )
         makine_metodu = val(ayarlar.get("makine_metodu"), "Rotary / Burgusuz")
         spt_sahmerdan = val(ayarlar.get("spt_sahmerdan"), "Otomatik")
         delgi_capi = val(ayarlar.get("delgi_capi"), "76 mm")
@@ -222,6 +245,8 @@ class GeoEngineLogMixin:
                 ec="black",
                 clip=True,
                 linespacing=0.95,
+                fit_text=False,
+                min_fs=4.8,
             ):
                 rect = mpatches.Rectangle(
                     (x, y),
@@ -235,6 +260,32 @@ class GeoEngineLogMixin:
                 ax.add_patch(rect)
                 if text not in (None, ""):
                     pad = min(0.006, max(w * 0.05, 0.002))
+                    if fit_text and rotation == 0:
+                        text_lines = str(text).splitlines() or [str(text)]
+                        available_w = max(
+                            1.0,
+                            (w - 2 * pad) * A4_PORTRAIT_SIZE[0] * 0.96 * 72,
+                        )
+                        available_h = max(
+                            1.0,
+                            h * A4_PORTRAIT_SIZE[1] * 0.96 * 72 * 0.82,
+                        )
+                        font_prop = FontProperties(size=fs, weight=fw)
+                        text_width = max(
+                            (
+                                TextPath((0, 0), line or " ", prop=font_prop)
+                                .get_extents()
+                                .width
+                            )
+                            for line in text_lines
+                        )
+                        estimated_h = fs * max(1, len(text_lines)) * max(linespacing, 0.9)
+                        scale = min(
+                            1.0,
+                            available_w / max(text_width * 1.04, 1.0),
+                            available_h / max(estimated_h, 1.0),
+                        )
+                        fs = max(min_fs, fs * scale)
                     if ha == "left":
                         tx = x + pad
                     elif ha == "right":
@@ -259,12 +310,32 @@ class GeoEngineLogMixin:
                     return rect, txt
                 return rect, None
 
-            header_label_bonus = 0.35
-            header_value_bonus = 0.85
+            header_label_bonus = 0.60
+            header_value_bonus = 1.45
 
             def draw_label_value(x, y, label_w, value_w, label, value, fs=6.2):
-                draw_cell(x, y, label_w, row_h, label, fs=fs + header_label_bonus, fw="bold", ha="left", fc="#F4F4F4")
-                draw_cell(x + label_w, y, value_w, row_h, value, fs=fs + header_value_bonus, ha="left")
+                draw_cell(
+                    x,
+                    y,
+                    label_w,
+                    row_h,
+                    label,
+                    fs=fs + header_label_bonus,
+                    fw="bold",
+                    ha="left",
+                    fc="#F4F4F4",
+                    fit_text=True,
+                )
+                draw_cell(
+                    x + label_w,
+                    y,
+                    value_w,
+                    row_h,
+                    value,
+                    fs=fs + header_value_bonus,
+                    ha="left",
+                    fit_text=True,
+                )
 
             def d2y(depth):
                 return body_top - ((depth - z_start) / PAGE_CAPACITY) * (body_top - body_bottom)
@@ -300,10 +371,11 @@ class GeoEngineLogMixin:
                 )
             )
 
+            header_width_gain = (LOG_ZEMIN_PROFILI_START_RATIO - 0.675) / 2
             c1 = 0.12 * page_w
-            c2 = 0.225 * page_w
+            c2 = (0.225 + header_width_gain) * page_w
             c3 = 0.145 * page_w
-            c4 = 0.185 * page_w
+            c4 = (0.185 + header_width_gain) * page_w
             c5 = 0.095 * page_w
             c6 = page_w - (c1 + c2 + c3 + c4 + c5)
             hx = [
@@ -317,8 +389,8 @@ class GeoEngineLogMixin:
             ]
 
             y = header_top - row_h
-            draw_cell(hx[0], y, c1, row_h, "Yüklenici Firma", fs=7.0, fw="bold", ha="left", fc="#F4F4F4")
-            draw_cell(hx[1], y, page_w - c1, row_h, firma_adi, fs=8.2, fw="bold", ha="left")
+            draw_cell(hx[0], y, c1, row_h, "Yüklenici Firma", fs=7.6, fw="bold", ha="left", fc="#F4F4F4", fit_text=True)
+            draw_cell(hx[1], y, page_w - c1, row_h, firma_adi, fs=8.8, fw="bold", ha="left", fit_text=True)
             ax.text(
                 hx[1] + (page_x1 - hx[1]) / 2,
                 y + row_h / 2,
@@ -331,10 +403,10 @@ class GeoEngineLogMixin:
             )
 
             y -= row_h
-            draw_cell(hx[0], y, c1, row_h, "Proje Adı", fs=7.0, fw="bold", ha="left", fc="#F4F4F4")
-            draw_cell(hx[1], y, c2 + c3 + c4, row_h, val(kunye.get("sahibi")), fs=7.7, ha="left")
-            draw_cell(hx[4], y, c5, row_h, "Sondaj No", fs=7.0, fw="bold", ha="left", fc="#F4F4F4")
-            draw_cell(hx[5], y, c6, row_h, val(sondaj.get("no"), "SK-1"), fs=8.2, fw="bold")
+            draw_cell(hx[0], y, c1, row_h, "Proje Adı", fs=7.6, fw="bold", ha="left", fc="#F4F4F4", fit_text=True)
+            draw_cell(hx[1], y, c2 + c3 + c4, row_h, val(kunye.get("sahibi")), fs=8.5, ha="left", fit_text=True)
+            draw_cell(hx[4], y, c5, row_h, "Sondaj No", fs=7.6, fw="bold", ha="left", fc="#F4F4F4", fit_text=True)
+            draw_cell(hx[5], y, c6, row_h, val(sondaj.get("no"), "SK-1"), fs=8.8, fw="bold", fit_text=True)
 
             header_rows = [
                 ("İl", kunye.get("il", ""), "Sondaj Derinliği (m)", sondaj.get("der", ""), "Sayfa No", f"{page_idx + 1} / {num_pages}"),
@@ -360,8 +432,19 @@ class GeoEngineLogMixin:
 
                 if idx in (2, 3, 4, 5):
                     text = l3 if idx in (2, 4) else (v3 or l3)
-                    fs = 7.3 if idx in (2, 4) else 8.2
-                    draw_cell(hx[4], y, c5 + c6, row_h, text, fs=fs, fw="bold", ha="center")
+                    is_title = idx in (2, 4)
+                    fs = 7.8 if is_title else 6.1 + header_value_bonus
+                    draw_cell(
+                        hx[4],
+                        y,
+                        c5 + c6,
+                        row_h,
+                        text,
+                        fs=fs,
+                        fw="bold" if is_title else "normal",
+                        ha="center",
+                        fit_text=True,
+                    )
                 elif idx < 2:
                     draw_label_value(hx[4], y, c5, c6, l3, val(v3), fs=5.9)
                 else:
@@ -371,19 +454,19 @@ class GeoEngineLogMixin:
             draw_cell(hx[0], y - row_h, c1, row_h * 2, "Koordinatlar", fs=7.4, fw="bold", fc="#F4F4F4")
             coord_label_w = c2 * 0.22
             draw_cell(hx[1], y, coord_label_w, row_h, "X", fs=7.3, fw="bold", fc="#F4F4F4")
-            draw_cell(hx[1] + coord_label_w, y, c2 - coord_label_w, row_h, val(sondaj.get("x"), "-"), fs=7.3, ha="left")
+            draw_cell(hx[1] + coord_label_w, y, c2 - coord_label_w, row_h, val(sondaj.get("x"), "-"), fs=8.0, ha="left", fit_text=True)
             draw_cell(hx[1], y - row_h, coord_label_w, row_h, "Y", fs=7.3, fw="bold", fc="#F4F4F4")
-            draw_cell(hx[1] + coord_label_w, y - row_h, c2 - coord_label_w, row_h, val(sondaj.get("y"), "-"), fs=7.3, ha="left")
+            draw_cell(hx[1] + coord_label_w, y - row_h, c2 - coord_label_w, row_h, val(sondaj.get("y"), "-"), fs=8.0, ha="left", fit_text=True)
             water_w = c4 / 3
-            draw_cell(hx[3], y, water_w, row_h, val(sondaj.get("yass_d1"), "-"), fs=6.6)
-            draw_cell(hx[3] + water_w, y, water_w, row_h, val(sondaj.get("yass_t1"), "-"), fs=6.0)
+            draw_cell(hx[3], y, water_w, row_h, val(sondaj.get("yass_d1"), "-"), fs=7.2, fit_text=True)
+            draw_cell(hx[3] + water_w, y, water_w, row_h, val(sondaj.get("yass_t1"), "-"), fs=6.6, fit_text=True)
             draw_cell(hx[3] + water_w * 2, y, water_w, row_h, "", fs=6.0)
-            draw_cell(hx[3], y - row_h, water_w, row_h, val(sondaj.get("yass_d2"), "-"), fs=6.6)
-            draw_cell(hx[3] + water_w, y - row_h, water_w, row_h, val(sondaj.get("yass_t2"), "-"), fs=6.0)
+            draw_cell(hx[3], y - row_h, water_w, row_h, val(sondaj.get("yass_d2"), "-"), fs=7.2, fit_text=True)
+            draw_cell(hx[3] + water_w, y - row_h, water_w, row_h, val(sondaj.get("yass_t2"), "-"), fs=6.6, fit_text=True)
             draw_cell(hx[3] + water_w * 2, y - row_h, water_w, row_h, "", fs=6.0)
             draw_cell(hx[4], y, c5 + c6, row_h * 2, "", fs=5.8)
 
-            ratios = [4.79, 2.34, 4.79, 6.25, 5.73, 16.0, 8.85, 22.2, 6.67, 18.0, 4.38]
+            ratios = LOG_BODY_COLUMN_RATIOS
             ratio_sum = sum(ratios)
             widths = [page_w * r / ratio_sum for r in ratios]
             cols = [page_x0]
@@ -548,8 +631,8 @@ class GeoEngineLogMixin:
                     if not (z_start <= d_mid < z_end):
                         continue
                     y_mid = d2y(d_mid)
-                    ax.text(cols[6] + pmt_w / 2, y_mid, str(pmt[1] if len(pmt) > 1 else ""), ha="center", va="center", fontsize=5.1, zorder=9)
-                    ax.text(cols[6] + pmt_w + pmt_w / 2, y_mid, str(pmt[2] if len(pmt) > 2 else ""), ha="center", va="center", fontsize=5.1, zorder=9)
+                    ax.text(cols[6] + pmt_w / 2, y_mid, str(pmt[1] if len(pmt) > 1 else ""), ha="center", va="center", fontsize=6.1, zorder=9)
+                    ax.text(cols[6] + pmt_w + pmt_w / 2, y_mid, str(pmt[2] if len(pmt) > 2 else ""), ha="center", va="center", fontsize=6.1, zorder=9)
                 except Exception:
                     pass
 
