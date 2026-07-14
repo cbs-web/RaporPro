@@ -269,14 +269,12 @@ class RaporSekmesiMixin:
         actions.pack(fill="x", pady=(0, 10))
         primary_row = ttk.Frame(actions)
         primary_row.pack(fill="x")
-        self.modern_button(primary_row, text="Ön Kontrol", command=self.rapor_on_kontrol, role="warning").pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.modern_button(primary_row, text="Tamamlama Merkezi", command=self.tamamlama_merkezi_penceresi, role="warning").pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.modern_button(primary_row, text="Önizleme", command=self.rapor_onizleme_penceresi, role="accent").pack(side="left", fill="x", expand=True, padx=4)
         self.toolbar_menu(
             primary_row,
             "Gelişmiş",
             [
-                ("Final Kontrol", self.final_kontrol_penceresi),
-                ("Çıktı Merkezi", self.cikti_merkezi_penceresi),
                 ("Yönetmelik Merkezi", self.yonetmelik_merkezi_penceresi),
                 ("Rapor Revizyon Merkezi", self.rapor_revizyon_merkezi_birlesik_penceresi),
                 ("Düzeltme Etiketleri", self.duzeltme_etiketleri_penceresi),

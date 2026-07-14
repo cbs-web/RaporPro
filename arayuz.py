@@ -281,8 +281,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
             ("Şablonlar", self.proje_sablon_penceresi),
         ], bg="#D6EAF8", tooltip="Veri girişini hızlandıran araçlar", role="accent")
         self.toolbar_menu(toolbar, "Kontrol", [
-            ("Final Kontrol", self.final_kontrol_penceresi),
-            ("Rapor Ön Kontrol", self.rapor_on_kontrol),
+            ("Tamamlama Merkezi", self.tamamlama_merkezi_penceresi),
             ("Proje Özeti", lambda: self._workflow_git("ozet")),
             ("Günlükler", self.gunluk_penceresi),
         ], bg="#FADBD8", tooltip="Eksikleri ve rapor hazırlığını kontrol eder", role="warning")

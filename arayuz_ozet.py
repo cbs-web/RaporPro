@@ -109,8 +109,8 @@ class ArayuzOzetMixin:
         self.ozet_next_action_label.grid(row=1, column=0, sticky="nsew", pady=(5, 5))
         self.ozet_next_action_button = self.modern_button(
             next_card,
-            text="Final Kontrol",
-            command=self.final_kontrol_penceresi,
+            text="Tamamlama Merkezi",
+            command=self.tamamlama_merkezi_penceresi,
             role="warning",
             pady=2,
         )
@@ -152,9 +152,8 @@ class ArayuzOzetMixin:
             ("SPT Merkezi", self.spt_okuma_merkezi_ac, "#A3E4D7"),
             ("Kesit", self.kesit_secim_penceresi, "#E8DAEF"),
             ("Haritalar", lambda: self._workflow_git("haritalar"), "#D6EAF8"),
-            ("Final Kontrol", self.final_kontrol_penceresi, "#F5B7B1"),
-            ("Rapor Oluştur", self.raporla, COLOR_SUCCESS),
-        ], min_width=155, max_cols=6, pady=2)
+            ("Tamamlama Merkezi", self.tamamlama_merkezi_penceresi, "#F5B7B1"),
+        ], min_width=175, max_cols=5, pady=2)
 
         body = ttk.Frame(outer)
         body.pack(fill="both", expand=True)
@@ -302,7 +301,7 @@ class ArayuzOzetMixin:
             self.ozet_file_title_labels[key] = title
             self.ozet_file_labels[key] = value
 
-        preflight_frame = ttk.LabelFrame(right, text="Son Ön Kontrol", padding=8)
+        preflight_frame = ttk.LabelFrame(right, text="Ön Kontrol", padding=8)
         preflight_frame.pack(fill="both", expand=True)
         preflight_top = ttk.Frame(preflight_frame)
         preflight_top.pack(fill="x", pady=(0, 6))
@@ -410,7 +409,7 @@ class ArayuzOzetMixin:
         elif score >= 60:
             title = "Proje iyi durumda, son kontroller gerekiyor"
             color = COLOR_WARNING
-            action = "Final Kontrol ile kalan uyarıları temizlemek iyi olur."
+            action = "Tamamlama Merkezi ile kalan uyarıları temizlemek iyi olur."
         else:
             title = "Veri girişi tamamlandıkça proje hazır hale gelecek"
             color = COLOR_DANGER
@@ -445,7 +444,7 @@ class ArayuzOzetMixin:
                 next_text = f"Ön kontrolde {error_count} hata var. Önce hatalı maddeleri temizleyelim."
                 btn_text = "Hataları Aç"
                 btn_color = COLOR_DANGER
-                btn_command = self.final_kontrol_penceresi
+                btn_command = self.tamamlama_merkezi_penceresi
             elif missing_items:
                 first = missing_items[0]
                 suggestion = first.get("suggestion") or first.get("detail") or "Eksik bilgiyi tamamlayın."
@@ -455,9 +454,9 @@ class ArayuzOzetMixin:
                 btn_command = lambda target=first.get("target", "ozet"): self._workflow_git(target)
             elif warning_count:
                 next_text = f"Ön kontrolde {warning_count} uyarı var. Son kontrolü açıp karar verelim."
-                btn_text = "Final Kontrol"
+                btn_text = "Tamamlama Merkezi"
                 btn_color = COLOR_WARNING
-                btn_command = self.final_kontrol_penceresi
+                btn_command = self.tamamlama_merkezi_penceresi
             else:
                 next_text = "Eksik görünmüyor. Raporu oluşturabilir veya çıktı merkezinden son dosyaları toplayabilirsiniz."
                 btn_text = "Raporu Oluştur"

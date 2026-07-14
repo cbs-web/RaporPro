@@ -679,14 +679,33 @@ class KontrolPaneliMixin:
         }
 
     def final_kontrol_penceresi(self):
+        existing = getattr(self, "_tamamlama_merkezi_win", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                refresh_callback = getattr(self, "_tamamlama_merkezi_refresh", None)
+                if refresh_callback:
+                    refresh_callback()
+                return existing
+        except Exception:
+            pass
+
         win = Toplevel(self.root)
-        self.pencere_hazirla(win, "Final Proje Kontrolü", "940x660", (780, 520), modal=True)
+        self.pencere_hazirla(win, "Proje Tamamlama Merkezi", "1040x700", (820, 540), modal=False)
+        self._tamamlama_merkezi_win = win
 
         header = ttk.Frame(win, padding=(12, 10, 12, 6))
         header.pack(fill="x")
+        ttk.Label(header, text="Proje Tamamlama Merkezi", font=("Segoe UI", 14, "bold")).pack(side="left")
         status_var = tk.StringVar(value="Kontrol hazırlanıyor...")
-        status_label = tk.Label(header, textvariable=status_var, bg=COLOR_BG, fg="#333333", font=("Segoe UI", 13, "bold"), anchor="w")
-        status_label.pack(side="left", fill="x", expand=True)
+        status_label = tk.Label(header, textvariable=status_var, bg=COLOR_BG, fg="#333333", font=("Segoe UI", 10, "bold"), anchor="e")
+        status_label.pack(side="right", fill="x", expand=True, padx=(12, 0))
+
+        steps = ttk.LabelFrame(win, text="Tamamlama Adımları", padding=8)
+        steps.pack(fill="x", padx=12, pady=(0, 8))
+        steps_inner = ttk.Frame(steps)
+        steps_inner.pack(fill="x")
 
         body = ttk.Frame(win, padding=(12, 0, 12, 8))
         body.pack(fill="both", expand=True)
@@ -696,11 +715,11 @@ class KontrolPaneliMixin:
         txt.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
-        btns = ttk.Frame(win, padding=(12, 0, 12, 12))
-        btns.pack(fill="x")
+        report_holder = {"value": None}
 
         def refresh():
             report = self.final_kontrol_raporu_olustur()
+            report_holder["value"] = report
             color = COLOR_SUCCESS if report["errors"] == 0 and report["warnings"] == 0 else (COLOR_WARNING if report["errors"] == 0 else COLOR_DANGER)
             status_label.config(fg=color)
             status_var.set(f"{report['state']} - %{report['score']} | {report['errors']} hata, {report['warnings']} uyarı")
@@ -711,13 +730,48 @@ class KontrolPaneliMixin:
             if self.cikti_kalite_dosyalari_sec(parent=win):
                 refresh()
 
-        tk.Button(btns, text="Yenile", command=refresh, bg="#ECF0F1", font=FONT_BOLD).pack(side="left", padx=(0, 5))
-        tk.Button(btns, text="Ön Kontrol", command=self.rapor_on_kontrol, bg=COLOR_WARNING, fg="white", font=FONT_BOLD).pack(side="left", padx=5)
-        tk.Button(btns, text="Çıktı Denetle", command=audit_outputs, bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(side="left", padx=5)
-        tk.Button(btns, text="Çıktı Merkezi", command=self.cikti_merkezi_penceresi, bg="#117A65", fg="white", font=FONT_BOLD).pack(side="left", padx=5)
-        tk.Button(btns, text="Raporu Oluştur", command=self.raporla, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="left", padx=5)
-        tk.Button(btns, text="Kapat", command=win.destroy, bg="#ECF0F1", font=FONT_BOLD).pack(side="right")
+        def first_issue():
+            report = report_holder.get("value") or self.final_kontrol_raporu_olustur()
+            items = report.get("items", [])
+            item = next((row for row in items if row.get("level") == "error"), None)
+            if item is None:
+                item = next((row for row in items if row.get("level") == "warning"), None)
+            if item:
+                self.final_kontrol_item_git(item)
+            else:
+                self.set_status("Tamamlama kontrolünde gidilecek hata veya uyarı yok.", level="success")
+
+        self.responsive_button_row(
+            steps_inner,
+            [
+                ("1. Kontrolü Yenile", refresh, COLOR_WARNING, "Proje verisini yeniden denetle"),
+                ("İlk Eksik Alana Git", first_issue, COLOR_PRIMARY, "İlk hata veya uyarının bulunduğu alana git"),
+                ("2. Raporu Oluştur", self.raporla, COLOR_SUCCESS, "Word raporunu oluştur"),
+                ("3. Çıktıları Topla", self.cikti_merkezi_penceresi, "#117A65", "Log, kesit ve görselleri çıktı klasöründe topla"),
+                ("4. Çıktıyı Denetle", audit_outputs, "#5B6B7A", "Hazır dosyaların çıktı kalitesini denetle"),
+            ],
+            min_width=175,
+            max_cols=5,
+            pady=2,
+        )
+
+        footer = ttk.Frame(win, padding=(12, 0, 12, 12))
+        footer.pack(fill="x")
+        self.modern_button(footer, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(side="right")
+
+        def clear_window_ref(event=None):
+            if event is None or event.widget is win:
+                self._tamamlama_merkezi_win = None
+                self._tamamlama_merkezi_refresh = None
+
+        win.bind("<Destroy>", clear_window_ref, add="+")
+        self._tamamlama_merkezi_refresh = refresh
         refresh()
+        return win
+
+    def tamamlama_merkezi_penceresi(self):
+        """Yeni adla tek giriş noktası; eski final kontrol çağrıları çalışmaya devam eder."""
+        return self.final_kontrol_penceresi()
 
     def cikti_kalite_dosyalari_sec(self, parent=None):
         paths = filedialog.askopenfilenames(
@@ -758,8 +812,8 @@ class KontrolPaneliMixin:
         action_map = {}
         counter = 0
 
-        text_widget.insert(tk.END, "FINAL PROJE KONTROLÜ\n", "header")
-        text_widget.insert(tk.END, "=" * 24 + "\n")
+        text_widget.insert(tk.END, "PROJE TAMAMLAMA MERKEZİ\n", "header")
+        text_widget.insert(tk.END, "=" * 26 + "\n")
         text_widget.insert(tk.END, f"Durum: {report['state']} | Puan: %{report['score']} | Hata: {report['errors']} | Uyarı: {report['warnings']}\n\n")
 
         current_category = None

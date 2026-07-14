@@ -268,7 +268,7 @@ class ArayuzProjeMixin:
             "<Control-h>": self.son_projeler_penceresi,
             "<Control-Shift-H>": self.surum_gecmisi_penceresi,
             "<F5>": self.ozet_yenile,
-            "<F9>": self.final_kontrol_penceresi,
+            "<F9>": self.tamamlama_merkezi_penceresi,
         }
         for sequence, command in bindings.items():
             try:

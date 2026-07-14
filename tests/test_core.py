@@ -95,6 +95,7 @@ from harita_ayarlari import hgm_ortofoto_url_kaydet, hgm_ortofoto_url_yukle
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, ss_harita_etiketi
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
+from ui_kontrol import KontrolPaneliMixin
 from ui_sondaj import SondajMixin
 from ui_proje_surumleri import ProjeSurumleriMixin
 from proje_arsiv import (
@@ -1106,6 +1107,15 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         self.assertEqual(mixin.veri["sondaj"][0]["der"], "18.0")
         mixin.sondaj_satir_durumlarini_yenile.assert_called_once_with()
         mixin.sondaj_tablosunu_ciz.assert_not_called()
+
+    def test_tamamlama_merkezi_eski_final_kontrol_girisini_korur(self):
+        mixin = KontrolPaneliMixin.__new__(KontrolPaneliMixin)
+        mixin.final_kontrol_penceresi = mock.Mock(return_value="window")
+
+        result = mixin.tamamlama_merkezi_penceresi()
+
+        self.assertEqual(result, "window")
+        mixin.final_kontrol_penceresi.assert_called_once_with()
 
     def test_spt_helper_klasorden_resimleri_toplar(self):
         with tempfile.TemporaryDirectory() as tmp:
