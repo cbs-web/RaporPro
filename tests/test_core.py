@@ -106,6 +106,11 @@ from proje_surumleri import (
     surum_verisi_yukle,
     surumleri_listele,
 )
+from proje_sema import (
+    PROJE_SEMA_SURUMU,
+    ProjeSemaHatasi,
+    proje_verisini_migre_et,
+)
 from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
 from workbook_motoru import build_initial_rows as wb_build_initial_rows
@@ -360,6 +365,41 @@ class TaskEngineTestleri(unittest.TestCase):
             self.assertEqual(snap.failed_count, 1)
         finally:
             engine.shutdown(wait=True)
+
+
+class ProjeSemaTestleri(unittest.TestCase):
+    def test_legacy_proje_kayipsiz_migre_edilir(self):
+        legacy = {
+            "kunye": {"sahibi": "Eski Proje"},
+            "word_path": r"C:\projeler\rapor.docx",
+            "sondaj": [{"no": "SK-1", "litoloji": None}],
+            "jeofizik": {"ss": [{"ad": "SS-1"}]},
+            "bilinmeyen_alan": {"koru": True},
+        }
+        defaults = ArayuzProjeMixin().varsayilan_veri_olustur()
+
+        migrated, info = proje_verisini_migre_et(legacy, defaults)
+
+        self.assertEqual(info.onceki_surum, 0)
+        self.assertEqual(info.yeni_surum, PROJE_SEMA_SURUMU)
+        self.assertTrue(info.degisti)
+        self.assertEqual(migrated["schema_version"], PROJE_SEMA_SURUMU)
+        self.assertEqual(migrated["dosyalar"]["word_path"], legacy["word_path"])
+        self.assertEqual(migrated["jeofizik"]["ss_list"], [{"ad": "SS-1"}])
+        self.assertEqual(migrated["sondaj"][0]["litoloji"], [])
+        self.assertEqual(migrated["sondaj"][0]["pmt"], [])
+        self.assertEqual(migrated["bilinmeyen_alan"], {"koru": True})
+        self.assertNotIn("schema_version", legacy)
+
+    def test_guncel_proje_tekrar_migrasyonda_degisimez(self):
+        current = ArayuzProjeMixin().varsayilan_veri_olustur()
+        migrated, info = proje_verisini_migre_et(current, current)
+        self.assertFalse(info.degisti)
+        self.assertEqual(migrated, current)
+
+    def test_daha_yeni_proje_surumu_acilmaz(self):
+        with self.assertRaisesRegex(ProjeSemaHatasi, "daha yeni"):
+            proje_verisini_migre_et({"schema_version": PROJE_SEMA_SURUMU + 1})
 
 
 class ProjeKayitDurumuTestleri(unittest.TestCase):

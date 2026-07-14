@@ -242,7 +242,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
             with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             veri = payload.get("veri", {})
-            self.veri_eksikleri_tamamla(veri, self.varsayilan_veri_olustur())
+            veri, _migrasyon = self.proje_verisini_hazirla(veri)
             self.veri = veri
             self.aktif_dosya_yolu = payload.get("active_path")
             self.doldur_arayuz()

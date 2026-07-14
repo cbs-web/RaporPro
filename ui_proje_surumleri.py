@@ -83,7 +83,7 @@ class ProjeSurumleriMixin:
             source="restore_guard",
         )
         loaded = surum_verisi_yukle(self.aktif_dosya_yolu, record)
-        self.veri_eksikleri_tamamla(loaded, self.varsayilan_veri_olustur())
+        loaded, _migrasyon = self.proje_verisini_hazirla(loaded)
         self.veri = loaded
         self.doldur_arayuz()
         self.proje_baslik_guncelle()
@@ -268,7 +268,9 @@ class ProjeSurumleriMixin:
             record = state["records"].get(iid)
             if not record:
                 raise KeyError("Seçilen sürüm bulunamadı")
-            return surum_verisi_yukle(self.aktif_dosya_yolu, record), record
+            loaded = surum_verisi_yukle(self.aktif_dosya_yolu, record)
+            loaded, _migrasyon = self.proje_verisini_hazirla(loaded)
+            return loaded, record
 
         def render_changes(*_args):
             change_tree.delete(*change_tree.get_children())

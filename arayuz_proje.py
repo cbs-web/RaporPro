@@ -24,6 +24,7 @@ from proje_surumleri import (
     surum_deposunu_kopyala,
     surum_kaydi_olustur,
 )
+from proje_sema import PROJE_SEMA_SURUMU, proje_verisini_migre_et
 from kalite_kontrol import backup_project_file
 from workbook_motoru import (
     WORKBOOK_SHEET_DEFS,
@@ -156,15 +157,25 @@ class ArayuzProjeMixin:
         with perf_timer("project.open_read_apply"):
             with open(dosya_yolu, 'r', encoding='utf-8') as f:
                 yuklenen_veri = json.load(f)
-            varsayilan = self.varsayilan_veri_olustur()
-            self.veri_eksikleri_tamamla(yuklenen_veri, varsayilan)
+            yuklenen_veri, migrasyon = self.proje_verisini_hazirla(yuklenen_veri)
             self.veri = yuklenen_veri
             self.aktif_dosya_yolu = dosya_yolu
             self.doldur_arayuz()
-            self.kayit_imzasi_guncelle(collect=True)
+            if migrasyon.degisti:
+                self._son_kayit_imzasi = None
+            else:
+                self.kayit_imzasi_guncelle(collect=True)
         self.proje_baslik_guncelle()
         self.recent_project_ekle(dosya_yolu)
-        self.set_status(f"Proje açıldı: {dosya_yolu}", level="success")
+        if migrasyon.degisti:
+            self.set_status(
+                f"Eski proje v{migrasyon.onceki_surum} → v{migrasyon.yeni_surum} olarak hazırlandı; "
+                "kalıcılaştırmak için Kaydet'i kullanın.",
+                level="warning",
+            )
+            self.set_save_indicator("Proje yapısı güncellendi: kaydedilmedi", "warning")
+        else:
+            self.set_status(f"Proje açıldı: {dosya_yolu}", level="success")
         self.proje_kilit_durumunu_goster()
 
     def son_projeler_penceresi(self):
@@ -267,6 +278,7 @@ class ArayuzProjeMixin:
 
     def varsayilan_veri_olustur(self):
         default = {
+            "schema_version": PROJE_SEMA_SURUMU,
             "kunye": {"sahibi":"", "il":"", "ilce":"", "mah":"", "mev":"", "paf":"", "ada":"", "par":""},
             "bina": {"kul":"", "sinif":"", "onem":"", "malz":"", "bod":"", "kat":"", "plan":"", "yukseklik":"", "yukseklik_sinif":"", "temel_alan":"", "ins":"", "der":"", "gqe_min":"", "gqe_max":"", "gqe_ort":"", "comb_min":"", "comb_max":"", "comb_ort":"", "ysinif":"", "tem":"", "coklu_blok": False, "bloklar": []},
             "arazi": {"kot":"", "yon":"", "egim":"", "min":"", "max":"", "ort":"", "imar_alani":"", "imar_durumu":"", "zemin":"", "kategori": "", "pga":"", "alan_y": "", "alan_x": ""},
@@ -332,6 +344,9 @@ class ArayuzProjeMixin:
             "dosyalar": {"kml_path": None, "word_path": None, "lab_excel_path": None, "jeo_excel_path": None, "img_yer": None, "img_tkgm": None, "img_pga": None, "img_mjh": None, "word_img_sondaj": None, "word_img_jeofizik": None}
         }
         return default
+
+    def proje_verisini_hazirla(self, veri):
+        return proje_verisini_migre_et(veri, self.varsayilan_veri_olustur())
 
     def veri_eksikleri_tamamla(self, hedef, varsayilan):
         for key, value in varsayilan.items():
