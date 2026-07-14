@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from cizim import VeriGirisPenceresi
 from motor import GeoEngine
 from pmt_excel_motoru import pmt_excel_dosyalarini_oku, pmt_kayitlarini_veriye_aktar
-from performans import perf_tracked
+from performans import perf_timer, perf_tracked
 from sabitler import *
 from karot_motoru import derinlik_baslangic
 from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
@@ -114,6 +114,7 @@ class SondajMixin:
         self.sondaj_zebra_stillerini_hazirla()
         for widget in self.sondaj_scroll_frame.winfo_children(): widget.destroy()
         self.sondaj_ui_rows = []
+        self.sondaj_ui_buttons = []
         header_frame = tk.Frame(self.sondaj_scroll_frame, bg="#D5DBE3")
         header_frame.pack(fill="x", pady=(2, 4))
         tk.Label(header_frame, text="", width=1, bg="#D5DBE3", font=FONT_BOLD).pack(side="left", padx=(0, 1))
@@ -181,6 +182,7 @@ class SondajMixin:
                 ("Kaya", "kaya", lambda i=idx: self.satir_veri_ac(i, "kaya", ["Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"])),
                 ("LOG", "log", lambda i=idx: self.satir_log_onizle(i)),
             ]
+            row_buttons = {}
             for text, tur, command in button_specs:
                 state, tip = self._sondaj_detay_durum(s_data, tur)
                 role = self.sondaj_islem_buton_rolu(state)
@@ -197,8 +199,10 @@ class SondajMixin:
                 )
                 btn.pack(side="left", padx=1 if tur != "log" else 5)
                 self.tooltip_ekle(btn, tip)
+                row_buttons[tur] = btn
             self.modern_button(btn_f, text="SİL", role="danger", font=("Arial", 8, "bold"), command=lambda i=idx: self.sondaj_sil(i), padx=6, pady=3).pack(side="left", padx=5)
             self.sondaj_ui_rows.append(row_entries)
+            self.sondaj_ui_buttons.append(row_buttons)
 
     def sondaj_tablo_hucre_git(self, row_idx, key):
         """Sondaj tablosunda belirtilen satır ve sütuna (key) odaklan."""
@@ -381,8 +385,28 @@ class SondajMixin:
             if idx < len(self.veri["sondaj"]):
                 for key, ent in row_ents.items(): self.veri["sondaj"][idx][key] = ent.get()
         if not silent:
-            self.sondaj_tablosunu_ciz()
+            self.sondaj_satir_durumlarini_yenile()
             self.set_status("Sondaj verileri hafızaya alındı.")
+
+    def sondaj_satir_durumlarini_yenile(self):
+        """Mevcut satırları yeniden oluşturmadan doğrulama ve düğme renklerini yenile."""
+        for idx, row_entries in enumerate(getattr(self, "sondaj_ui_rows", [])):
+            self.sondaj_satirini_canli_dogrula(row_entries)
+            if idx >= len(self.veri.get("sondaj", [])):
+                continue
+            row_buttons = (
+                self.sondaj_ui_buttons[idx]
+                if idx < len(getattr(self, "sondaj_ui_buttons", []))
+                else {}
+            )
+            for tur, btn in row_buttons.items():
+                state, tip = self._sondaj_detay_durum(self.veri["sondaj"][idx], tur)
+                self.configure_modern_button(
+                    btn,
+                    role=self.sondaj_islem_buton_rolu(state),
+                    outline=(state == "empty"),
+                )
+                btn._tooltip_text = tip
 
     def sondaj_akilli_tamamla(self):
         self.sondaj_verilerini_kaydet(silent=True)
@@ -889,12 +913,14 @@ class SondajMixin:
                 self.set_status(f"Log hazırlanıyor ({idx}/{total}): {sondaj_no}", level="info")
                 figures = []
                 try:
-                    figures = GeoEngine.ciz_profesyonel_log(sondaj, self.sondaj_log_verisi(sondaj))
+                    with perf_timer("sondaj.log_draw", sondaj_no):
+                        figures = GeoEngine.ciz_profesyonel_log(sondaj, self.sondaj_log_verisi(sondaj))
                     safe_no = self._guvenli_dosya_adi(sondaj_no, f"SK_{idx}")
                     for page_idx, fig in enumerate(figures, start=1):
                         suffix = f"_Sayfa{page_idx}" if len(figures) > 1 else ""
                         path = os.path.join(klasor, f"{prefix}_{safe_no}{suffix}.{ext}")
-                        fig.savefig(path, dpi=dpi, bbox_inches="tight", format=ext)
+                        with perf_timer("sondaj.log_save", os.path.basename(path)):
+                            fig.savefig(path, dpi=dpi, bbox_inches="tight", format=ext)
                         saved_count += 1
                         saved_files.append(path)
                     self._toplu_log_progress_guncelle(progress, idx, f"Kaydedildi: {sondaj_no}")

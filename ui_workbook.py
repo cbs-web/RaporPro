@@ -10,6 +10,7 @@ from workbook_motoru import (
     apply_rows_to_veri as wb_apply_rows_to_veri,
     build_initial_rows as wb_build_initial_rows,
     calc_n30 as wb_calc_n30,
+    excel_workbook_yaz as wb_excel_workbook_yaz,
     header_map as wb_header_map,
     rows_to_dicts as wb_rows_to_dicts,
     validate_rows as wb_validate_rows,
@@ -757,29 +758,31 @@ class WorkbookMixin(WorkbookEskiMixin):
 
         @perf_tracked("workbook.tksheet_export_excel")
         def export_workbook():
-            try:
-                from openpyxl import Workbook
-                from openpyxl.styles import Font, PatternFill
-                from openpyxl.utils import get_column_letter
-            except Exception as exc:
-                messagebox.showerror("Excel", f"openpyxl yüklenemedi:\n{exc}"); return
             path = filedialog.asksaveasfilename(title="Workbook Excel'e Aktar", defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")])
             if not path: return
-            wb = Workbook(); wb.remove(wb.active)
+            sheet_payloads = []
             for sheet_key, spec in sheet_defs.items():
-                ws = wb.create_sheet(spec["title"])
-                ws.append([label for label, _ in spec["columns"]])
-                for cell in ws[1]:
-                    cell.font = Font(bold=True); cell.fill = PatternFill("solid", fgColor="D9EAF7")
+                rows = []
                 for values in collect_rows(sheet_key):
                     if row_has_data(values, {"sondaj_no"}):
-                        ws.append([values.get(col_key, "") for _, col_key in spec["columns"]])
-                for col_idx, width in enumerate(spec["widths"], start=1):
-                    ws.column_dimensions[get_column_letter(col_idx)].width = max(10, width / 7)
-            try:
-                wb.save(path); self.set_status(f"Workbook Excel'e aktarıldı: {os.path.basename(path)}", level="success")
-            except Exception as exc:
-                messagebox.showerror("Excel", f"Excel kaydedilemedi:\n{exc}")
+                        rows.append([values.get(col_key, "") for _, col_key in spec["columns"]])
+                sheet_payloads.append({
+                    "title": spec["title"],
+                    "headers": [label for label, _ in spec["columns"]],
+                    "rows": rows,
+                    "widths": list(spec["widths"]),
+                })
+
+            self.arka_plan_gorevi_baslat(
+                "Workbook Excel aktarımı",
+                wb_excel_workbook_yaz,
+                path,
+                sheet_payloads,
+                status_start="Workbook Excel dosyası arka planda hazırlanıyor...",
+                status_success=f"Workbook Excel'e aktarıldı: {os.path.basename(path)}",
+                status_error="Workbook Excel aktarımı başarısız: {error}",
+                on_error=lambda exc: messagebox.showerror("Excel", f"Excel kaydedilemedi:\n{exc}"),
+            )
 
         @perf_tracked("workbook.tksheet_import_excel")
         def import_workbook():

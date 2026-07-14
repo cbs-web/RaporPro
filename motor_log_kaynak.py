@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import re
 import textwrap
+from functools import lru_cache
 
 import numpy as np
 from matplotlib.figure import Figure
@@ -38,6 +39,13 @@ except ImportError:
         @staticmethod
         def draw_pattern(ax, p, s, c, bbox=None, density_scale=1):
             return None
+
+
+@lru_cache(maxsize=4096)
+def _log_text_genisligi(text, font_size, font_weight):
+    """Tekrarlanan log başlıklarının vektörel genişliğini önbellekten döndür."""
+    font_prop = FontProperties(size=float(font_size), weight=str(font_weight))
+    return TextPath((0, 0), str(text) or " ", prop=font_prop).get_extents().width
 
 
 A4_PORTRAIT_SIZE = (8.27, 11.69)
@@ -270,13 +278,8 @@ class GeoEngineLogMixin:
                             1.0,
                             h * A4_PORTRAIT_SIZE[1] * 0.96 * 72 * 0.82,
                         )
-                        font_prop = FontProperties(size=fs, weight=fw)
                         text_width = max(
-                            (
-                                TextPath((0, 0), line or " ", prop=font_prop)
-                                .get_extents()
-                                .width
-                            )
+                            _log_text_genisligi(line or " ", fs, fw)
                             for line in text_lines
                         )
                         estimated_h = fs * max(1, len(text_lines)) * max(linespacing, 0.9)

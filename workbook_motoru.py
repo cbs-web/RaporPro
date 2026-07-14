@@ -2,6 +2,7 @@ import datetime
 import unicodedata
 
 from karot_motoru import derinlik_baslangic
+from performans import perf_tracked
 from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
 
 
@@ -105,6 +106,32 @@ def row_has_data(values, ignored=None):
 def row_values_to_list(sheet_key, values, sheet_defs=None):
     sheet_defs = sheet_defs or WORKBOOK_SHEET_DEFS
     return [values.get(col_key, "") for _, col_key in sheet_defs[sheet_key]["columns"]]
+
+
+@perf_tracked("workbook.excel_write")
+def excel_workbook_yaz(path, sheet_payloads):
+    """UI'dan bağımsız Excel yazıcısı; büyük workbook aktarımını arka planda çalıştırır."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    total_rows = 0
+    for payload in sheet_payloads:
+        ws = wb.create_sheet(str(payload.get("title") or "Sayfa"))
+        ws.append(list(payload.get("headers") or []))
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="D9EAF7")
+        rows = list(payload.get("rows") or [])
+        for row in rows:
+            ws.append(list(row))
+        total_rows += len(rows)
+        for col_idx, width in enumerate(payload.get("widths") or [], start=1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = max(10, float(width) / 7)
+    wb.save(path)
+    return {"path": str(path), "sheet_count": len(sheet_payloads), "row_count": total_rows}
 
 
 def normalize_data_rows(sheet_key, data, sheet_defs=None):

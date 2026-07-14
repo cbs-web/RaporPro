@@ -95,6 +95,7 @@ from harita_ayarlari import hgm_ortofoto_url_kaydet, hgm_ortofoto_url_yukle
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, ss_harita_etiketi
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
+from ui_sondaj import SondajMixin
 from ui_proje_surumleri import ProjeSurumleriMixin
 from proje_arsiv import (
     arsiv_kaydi_ekle,
@@ -120,6 +121,7 @@ from proje_sema import (
 from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
 from workbook_motoru import build_initial_rows as wb_build_initial_rows
+from workbook_motoru import excel_workbook_yaz as wb_excel_workbook_yaz
 from workbook_motoru import validate_rows as wb_validate_rows
 from workbook_motoru import WORKBOOK_SHEET_DEFS
 from task_engine import TkTaskEngine
@@ -1060,6 +1062,50 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         self.assertFalse(warnings)
         self.assertEqual(sondajlar[0]["sondaj_turu"], "Kaya")
         self.assertEqual(sondajlar[0]["delgi_capi"], "89mm")
+
+    def test_workbook_excel_yazici_tum_sayfalari_olusturur(self):
+        payloads = [
+            {
+                "title": "Sondajlar",
+                "headers": ["SondajNo", "Derinlik"],
+                "rows": [["SK-1", "15.0"]],
+                "widths": [110, 85],
+            },
+            {
+                "title": "SPT",
+                "headers": ["SondajNo", "Derinlik", "N30"],
+                "rows": [["SK-1", "1.50", "12"], ["SK-1", "3.00", "18"]],
+                "widths": [110, 90, 70],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "workbook.xlsx")
+            result = wb_excel_workbook_yaz(path, payloads)
+            workbook = load_workbook(path, data_only=True)
+
+        self.assertEqual(workbook.sheetnames, ["Sondajlar", "SPT"])
+        self.assertEqual(workbook["Sondajlar"]["A2"].value, "SK-1")
+        self.assertEqual(workbook["SPT"]["C3"].value, "18")
+        self.assertEqual(result["sheet_count"], 2)
+        self.assertEqual(result["row_count"], 3)
+
+    def test_sondaj_kaydet_tabloyu_yeniden_cizmeden_veriyi_gunceller(self):
+        mixin = SondajMixin.__new__(SondajMixin)
+        mixin.veri = {"sondaj": [{"no": "SK-1", "der": "10"}]}
+        mixin.sondaj_ui_rows = [{
+            "no": SimpleNamespace(get=lambda: "SK-2"),
+            "der": SimpleNamespace(get=lambda: "18.0"),
+        }]
+        mixin.sondaj_satir_durumlarini_yenile = mock.Mock()
+        mixin.sondaj_tablosunu_ciz = mock.Mock()
+        mixin.set_status = mock.Mock()
+
+        mixin.sondaj_verilerini_kaydet()
+
+        self.assertEqual(mixin.veri["sondaj"][0]["no"], "SK-2")
+        self.assertEqual(mixin.veri["sondaj"][0]["der"], "18.0")
+        mixin.sondaj_satir_durumlarini_yenile.assert_called_once_with()
+        mixin.sondaj_tablosunu_ciz.assert_not_called()
 
     def test_spt_helper_klasorden_resimleri_toplar(self):
         with tempfile.TemporaryDirectory() as tmp:

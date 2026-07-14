@@ -239,7 +239,31 @@ class ArayuzTemelMixin:
     def arka_plan_gorevi_baslat(self, ad, func, *args, **kwargs):
         engine = getattr(self, "task_engine", None)
         if engine is None:
-            return func(*args, **kwargs)
+            on_success = kwargs.pop("on_success", None)
+            on_error = kwargs.pop("on_error", None)
+            on_done = kwargs.pop("on_done", None)
+            status_start = kwargs.pop("status_start", None)
+            status_success = kwargs.pop("status_success", None)
+            status_error = kwargs.pop("status_error", None)
+            if status_start:
+                self.set_status(status_start)
+            try:
+                result = func(*args, **kwargs)
+            except Exception as exc:
+                if status_error:
+                    self.set_status(status_error.format(error=exc), level="error")
+                if on_error:
+                    on_error(exc)
+                if on_done:
+                    on_done()
+                return None
+            if status_success:
+                self.set_status(status_success, level="success")
+            if on_success:
+                on_success(result)
+            if on_done:
+                on_done()
+            return result
         return engine.run(ad, func, *args, **kwargs)
 
     def _geometry_parcala(self, geometry):
@@ -376,6 +400,7 @@ class ArayuzTemelMixin:
     def tooltip_ekle(self, widget, text, delay=550):
         if not text:
             return widget
+        widget._tooltip_text = text
         state = {"after": None, "tip": None}
 
         def show_tip():
@@ -389,9 +414,13 @@ class ArayuzTemelMixin:
             tip = tk.Toplevel(widget)
             tip.wm_overrideredirect(True)
             tip.wm_geometry(f"+{x}+{y}")
+            current_text = getattr(widget, "_tooltip_text", text)
+            if not current_text:
+                tip.destroy()
+                return
             label = tk.Label(
                 tip,
-                text=text,
+                text=current_text,
                 bg="#FFF8DC",
                 fg="#111111",
                 relief="solid",

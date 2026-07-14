@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD, PROJE_KLASORU
-from performans import perf_tracked
+from performans import perf_timer, perf_tracked
 from harita_referans import kml_koordinatlari_oku, ss_harita_etiketi
 from harita_resim_cache import display_image_read
 from resim_isaretleyici import ResimIsaretleyici
@@ -188,17 +188,17 @@ class HaritalarSekmesiMixin:
         self.set_status(f"TKGM KML bağlandı: {os.path.basename(path)}", level="success")
         messagebox.showinfo("TKGM KML", f"KML oluşturuldu ve projeye bağlandı:\n{path}")
 
-    @perf_tracked("map.image_marker_open")
     def harita_cizici_ac(self, harita_tipi):
-        self.guncelle_veri_objesi()
-        map_data = {
-            "sondaj": [{"no": s.get("no", ""), "y": s.get("y", "-"), "x": s.get("x", "-")} for s in self.veri["sondaj"]],
-            "ss": [
-                {"ad": ss_harita_etiketi(s.get("ad", ""), idx), "coords": s.get("coords", ["-"] * 6)}
-                for idx, s in enumerate(self.veri["jeofizik"]["ss_list"])
-            ],
-            "mt": [{"no": m.get("no", ""), "y": m.get("y", "-"), "x": m.get("x", "-")} for m in self.veri["jeofizik"]["mt_list"]],
-        }
+        with perf_timer("map.image_marker_data_prepare", harita_tipi):
+            self.guncelle_veri_objesi()
+            map_data = {
+                "sondaj": [{"no": s.get("no", ""), "y": s.get("y", "-"), "x": s.get("x", "-")} for s in self.veri["sondaj"]],
+                "ss": [
+                    {"ad": ss_harita_etiketi(s.get("ad", ""), idx), "coords": s.get("coords", ["-"] * 6)}
+                    for idx, s in enumerate(self.veri["jeofizik"]["ss_list"])
+                ],
+                "mt": [{"no": m.get("no", ""), "y": m.get("y", "-"), "x": m.get("x", "-")} for m in self.veri["jeofizik"]["mt_list"]],
+            }
         harita_data = self.veri.get("harita_cizimleri", {}).get(harita_tipi, {})
         img_path = harita_data.get("img_path", "")
 
@@ -229,22 +229,24 @@ class HaritalarSekmesiMixin:
 
         def worker():
             display_image_read(img_path)
-            return kml_koordinatlari_oku(getattr(self, "kml_path", None))
+            with perf_timer("map.kml_reference_read", os.path.basename(str(getattr(self, "kml_path", "") or ""))):
+                return kml_koordinatlari_oku(getattr(self, "kml_path", None))
 
         def open_marker(kml_points):
             if progress.winfo_exists():
                 progress.destroy()
-            ResimIsaretleyici(
-                self.root,
-                img_path=img_path,
-                map_data=map_data,
-                harita_tipi=harita_tipi,
-                formasyon=formasyon_kod,
-                kml_points=kml_points,
-                word_callback=self.harita_word_aktar,
-                save_callback=lambda data: self.harita_cizim_kaydet(harita_tipi, data),
-                saved_state=harita_data,
-            )
+            with perf_timer("map.image_marker_window_open", harita_tipi):
+                ResimIsaretleyici(
+                    self.root,
+                    img_path=img_path,
+                    map_data=map_data,
+                    harita_tipi=harita_tipi,
+                    formasyon=formasyon_kod,
+                    kml_points=kml_points,
+                    word_callback=self.harita_word_aktar,
+                    save_callback=lambda data: self.harita_cizim_kaydet(harita_tipi, data),
+                    saved_state=harita_data,
+                )
 
         def show_error(exc):
             if progress.winfo_exists():
