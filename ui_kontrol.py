@@ -1,8 +1,13 @@
 import os
 import tkinter as tk
-from tkinter import Toplevel, ttk
+from tkinter import Toplevel, filedialog, messagebox, ttk
 
 from jeofizik_sheet_motoru import jeofizik_sheet_ozeti, jeofizik_sheet_var_mi
+from cikti_kalite import (
+    cikti_dosyalari_denetle,
+    kalite_manifestosu_yaz,
+    proje_parmak_izi,
+)
 from kalite_kontrol import build_preflight_report
 from performans import log_exception, perf_tracked
 from proje_motoru import proje_saglik_ozeti
@@ -618,6 +623,41 @@ class KontrolPaneliMixin:
                 "row": finding.get("row"),
             })
 
+        output_quality = getattr(self, "last_output_quality_report", None)
+        output_errors = 0
+        output_warnings = 0
+        if output_quality:
+            output_findings = list(output_quality.get("findings", []) or [])
+            if (
+                output_quality.get("project_fingerprint")
+                and output_quality.get("project_fingerprint") != proje_parmak_izi(self.veri)
+            ):
+                output_findings.append({
+                    "id": "cikti.guncellik",
+                    "category": "Çıktı kalitesi",
+                    "label": "Güncelliğini yitirmiş çıktı",
+                    "level": "warning",
+                    "detail": "Proje verisi son çıktı kalite denetiminden sonra değişmiş.",
+                    "target": "cikti",
+                    "suggestion": "Çıktıları güncel proje verisiyle yeniden oluşturun.",
+                })
+            for finding in output_findings:
+                level = finding.get("level", "info")
+                output_errors += int(level == "error")
+                output_warnings += int(level == "warning")
+                items.append({
+                    "id": finding.get("id"),
+                    "category": finding.get("category", "Çıktı kalitesi"),
+                    "label": finding.get("label", "Çıktı denetimi"),
+                    "level": level,
+                    "detail": finding.get("detail", ""),
+                    "target": finding.get("target", "cikti"),
+                    "suggestion": finding.get("suggestion", ""),
+                    "entity": "",
+                    "field": "",
+                    "sheet": "",
+                })
+
         level_order = {"error": 0, "warning": 1, "info": 2, "ok": 3}
         items.sort(key=lambda item: (
             str(item.get("category", "")),
@@ -625,11 +665,14 @@ class KontrolPaneliMixin:
             str(item.get("entity", "")),
             str(item.get("label", "")),
         ))
+        error_count = len(preflight.get("errors", []) or []) + output_errors
+        warning_count = len(preflight.get("warnings", []) or []) + output_warnings
+        state = "HATALAR VAR" if error_count else ("UYARILAR VAR" if warning_count else preflight.get("state", "HAZIR"))
         return {
-            "state": preflight.get("state", "EKSİKLER VAR"),
+            "state": state,
             "score": preflight.get("score", 0),
-            "errors": len(preflight.get("errors", []) or []),
-            "warnings": len(preflight.get("warnings", []) or []),
+            "errors": error_count,
+            "warnings": warning_count,
             "items": items,
             "health": health,
             "preflight": preflight,
@@ -664,12 +707,45 @@ class KontrolPaneliMixin:
             self.final_kontrol_text_doldur(txt, report)
             self.ozet_yenile(collect=False)
 
+        def audit_outputs():
+            if self.cikti_kalite_dosyalari_sec(parent=win):
+                refresh()
+
         tk.Button(btns, text="Yenile", command=refresh, bg="#ECF0F1", font=FONT_BOLD).pack(side="left", padx=(0, 5))
         tk.Button(btns, text="Ön Kontrol", command=self.rapor_on_kontrol, bg=COLOR_WARNING, fg="white", font=FONT_BOLD).pack(side="left", padx=5)
+        tk.Button(btns, text="Çıktı Denetle", command=audit_outputs, bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(side="left", padx=5)
         tk.Button(btns, text="Çıktı Merkezi", command=self.cikti_merkezi_penceresi, bg="#117A65", fg="white", font=FONT_BOLD).pack(side="left", padx=5)
         tk.Button(btns, text="Raporu Oluştur", command=self.raporla, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="left", padx=5)
         tk.Button(btns, text="Kapat", command=win.destroy, bg="#ECF0F1", font=FONT_BOLD).pack(side="right")
         refresh()
+
+    def cikti_kalite_dosyalari_sec(self, parent=None):
+        paths = filedialog.askopenfilenames(
+            parent=parent,
+            title="Denetlenecek çıktıları seçin",
+            filetypes=[
+                ("Desteklenen çıktılar", "*.docx *.pdf *.jpg *.jpeg *.png *.xlsx *.xlsm *.svg"),
+                ("Tüm dosyalar", "*.*"),
+            ],
+        )
+        if not paths:
+            return None
+        report = cikti_dosyalari_denetle(paths, veri=self.veri)
+        self.last_output_quality_report = report
+        manifest_path = os.path.join(os.path.dirname(os.path.abspath(paths[0])), "RaporPro_Cikti_Kalite.json")
+        kalite_manifestosu_yaz(manifest_path, report, veri=self.veri)
+        errors = len(report.get("errors", []))
+        warnings = len(report.get("warnings", []))
+        message = (
+            f"Denetlenen dosya: {len(report.get('files', []))}\n"
+            f"Hata: {errors} | Uyarı: {warnings}\n\n"
+            f"Kalite manifestosu:\n{manifest_path}"
+        )
+        if errors or warnings:
+            messagebox.showwarning("Çıktı Kalite Denetimi", message, parent=parent)
+        else:
+            messagebox.showinfo("Çıktı Kalite Denetimi", message, parent=parent)
+        return report
 
     def final_kontrol_text_doldur(self, text_widget, report):
         text_widget.config(state="normal")

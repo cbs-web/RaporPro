@@ -665,6 +665,7 @@ class ArayuzProjeMixin:
         self.word_img_jeofizik = None
         self.ek_tutanak_path = None
         self.ek_arazi_deneyli_path = None
+        self.last_output_quality_report = None
 
     def yeni_proje_sihirbazi(self):
         mevcut_ayarlar = self.veri.get("ayarlar", {}).copy()

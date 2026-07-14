@@ -9,6 +9,7 @@ from tkinter import Toplevel, filedialog, messagebox, ttk
 import matplotlib.pyplot as plt
 
 from ai_motoru import AI_MOTOR_ADLARI, belediye_duzeltme_analiz_et, duzeltme_yonlendirmeleri_olustur
+from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
 from rapor_metin_revizyon import metin_revizyon_analiz_et, metin_revizyonlari_uygula
 from rapor_revizyon import revizyonlu_rapor_olustur
 from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, DEFAULT_EXPORT_DPI, FONT_BOLD
@@ -2454,18 +2455,32 @@ class RaporSekmesiMixin:
     @perf_tracked("report.generate.engine")
     def raporla_worker(self, context, path):
         success, msg = rapor_olustur(context, final_path=path, autosave=False)
-        return path, success, msg
+        quality_report = None
+        manifest_path = ""
+        if success:
+            quality_report = cikti_dosyalari_denetle([path], veri=context.veri)
+            manifest_path = os.path.splitext(path)[0] + "_Kalite.json"
+            kalite_manifestosu_yaz(manifest_path, quality_report, veri=context.veri)
+        return path, success, msg, quality_report, manifest_path
 
     def raporla_bitti(self, result):
-        path, success, msg = result
-        level = "success" if success else "error"
+        path, success, msg, quality_report, manifest_path = result
+        self.last_output_quality_report = quality_report
+        quality_errors = len((quality_report or {}).get("errors", []))
+        quality_warnings = len((quality_report or {}).get("warnings", []))
+        level = "success" if success and not quality_errors and not quality_warnings else ("warning" if success else "error")
         self.set_status(msg, level=level)
         if success:
-            messagebox.showinfo(
-                "Başarılı",
-                f"{msg}\n\nDosya:\n{path}\n\n"
-                "Sonraki adım: Çıktı Merkezi ile log, kesit ve görselleri aynı çıktı klasöründe toplayabilirsiniz.",
+            quality_text = f"Kalite denetimi: {quality_errors} hata, {quality_warnings} uyarı"
+            message = (
+                f"{msg}\n\nDosya:\n{path}\n\n{quality_text}\n"
+                f"Kalite manifestosu:\n{manifest_path}\n\n"
+                "Sonraki adım: Çıktı Merkezi ile log, kesit ve görselleri aynı çıktı klasöründe toplayabilirsiniz."
             )
+            if quality_errors or quality_warnings:
+                messagebox.showwarning("Rapor Oluşturuldu - Kalite Bulgusu Var", message)
+            else:
+                messagebox.showinfo("Başarılı", message)
         else:
             messagebox.showerror("Hata", msg)
 

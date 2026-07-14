@@ -14,6 +14,12 @@ from openpyxl import load_workbook
 import spt_okuma_motoru as spt_motoru
 from ai_motoru import belediye_duzeltme_analiz_et, duzeltme_metnini_kural_ile_analiz_et, duzeltme_yonlendirmeleri_olustur
 from arayuz_proje import ArayuzProjeMixin
+from cikti_kalite import (
+    cikti_dosyalari_denetle,
+    dosya_kalite_raporu,
+    kalite_manifestosu_dogrula,
+    kalite_manifestosu_yaz,
+)
 from jeofizik_sheet_motoru import (
     jeofizik_sheet_ozeti,
     jeofizik_sheet_rows_to_ss_list,
@@ -365,6 +371,64 @@ class TaskEngineTestleri(unittest.TestCase):
             self.assertEqual(snap.failed_count, 1)
         finally:
             engine.shutdown(wait=True)
+
+
+class CiktiKaliteTestleri(unittest.TestCase):
+    def test_word_ciktisinda_kalan_etiket_hata_olur(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "rapor.docx")
+            document = Document()
+            document.add_paragraph("Proje: [PROJE_ADI]")
+            document.save(path)
+
+            report = dosya_kalite_raporu(path)
+
+        self.assertEqual(report["state"], "HATA")
+        self.assertTrue(any("işlenmemiş etiket" in item["detail"] for item in report["errors"]))
+
+    def test_temiz_word_ciktisi_gecerli_sayilir(self):
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "rapor.docx")
+            document = Document()
+            document.add_heading("Zemin ve Temel Etüdü Veri Raporu", level=1)
+            document.add_paragraph("Sondaj ve arazi deneyleri tamamlanmıştır.")
+            document.save(path)
+            report = dosya_kalite_raporu(path)
+
+        self.assertEqual(report["state"], "TEMİZ")
+
+    def test_tek_renk_gorsel_uyari_olur(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "harita.png")
+            Image.new("RGB", (800, 600), "white").save(path)
+            report = dosya_kalite_raporu(path)
+
+        self.assertEqual(report["state"], "UYARI")
+        self.assertTrue(any(item["label"] == "Boş görsel" for item in report["warnings"]))
+
+    def test_manifesto_proje_degisimini_algilar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = os.path.join(tmp, "sonuc.txt")
+            Path(output).write_text("RaporPro kalite denetimi " * 10, encoding="utf-8")
+            first_data = {"schema_version": 1, "kunye": {"sahibi": "İlk Proje"}}
+            quality = cikti_dosyalari_denetle([output], veri=first_data)
+            manifest = os.path.join(tmp, "kalite.json")
+            kalite_manifestosu_yaz(manifest, quality, veri=first_data)
+
+            clean = kalite_manifestosu_dogrula(manifest, veri=first_data)
+            stale = kalite_manifestosu_dogrula(
+                manifest,
+                veri={"schema_version": 1, "kunye": {"sahibi": "Değişen Proje"}},
+            )
+
+        self.assertEqual(clean["state"], "TEMİZ")
+        self.assertTrue(any(item["label"] == "Güncelliğini yitirmiş çıktı" for item in stale["warnings"]))
 
 
 class ProjeSemaTestleri(unittest.TestCase):

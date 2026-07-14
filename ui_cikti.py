@@ -6,6 +6,7 @@ from tkinter import Toplevel, filedialog, messagebox, ttk
 
 import matplotlib.pyplot as plt
 
+from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
 from motor import GeoEngine
 from performans import perf_tracked
 from sabitler import COLOR_SUCCESS, FONT_BOLD
@@ -410,6 +411,16 @@ class CiktiMerkeziMixin:
                     errors.append(f"Ekler: {exc}")
                 done += 1
                 self.cikti_merkezi_progress(progress, done, "Ekler adımı tamamlandı")
+
+            quality_report = cikti_dosyalari_denetle(saved_files, veri=self.veri)
+            quality_manifest = os.path.join(base_folder, "RaporPro_Cikti_Kalite.json")
+            kalite_manifestosu_yaz(quality_manifest, quality_report, veri=self.veri)
+            self.last_output_quality_report = quality_report
+            saved_files.append(quality_manifest)
+            for finding in quality_report.get("errors", []) + quality_report.get("warnings", []):
+                file_name = os.path.basename(finding.get("path") or "")
+                prefix = f"{file_name}: " if file_name else ""
+                errors.append(f"Kalite {finding.get('level', 'uyarı')}: {prefix}{finding.get('detail', '')}")
 
             cancelled = bool(cancel_state.get("cancelled"))
             summary_path = self.cikti_merkezi_ozet_yaz(base_folder, saved_files, errors, cancelled)
