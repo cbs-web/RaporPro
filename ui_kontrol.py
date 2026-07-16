@@ -10,7 +10,7 @@ from cikti_kalite import (
 )
 from kalite_kontrol import build_preflight_report
 from performans import log_exception, perf_tracked
-from proje_motoru import proje_saglik_ozeti
+from proje_motoru import kontrol_grubu_durumu, proje_saglik_ozeti
 from rapor_sablonu import rapor_sablonu_durumu
 from sabitler import (
     COLOR_BG,
@@ -28,10 +28,21 @@ from yardimcilar import safe_float
 
 
 class KontrolPaneliMixin:
+    def on_kontrol_raporunu_sakla(self, report):
+        """On kontrol sonucunu uretildigi proje verisiyle birlikte sakla."""
+        self.last_preflight_report = report
+        self.last_preflight_fingerprint = proje_parmak_izi(self.veri)
+        return report
+
+    def on_kontrol_raporu_guncel_mi(self):
+        if not getattr(self, "last_preflight_report", None):
+            return False
+        return getattr(self, "last_preflight_fingerprint", None) == proje_parmak_izi(self.veri)
+
     @perf_tracked("preflight.summary")
     def ozet_on_kontrol(self):
         self.guncelle_veri_objesi()
-        self.last_preflight_report = build_preflight_report(self)
+        self.on_kontrol_raporunu_sakla(build_preflight_report(self))
         self.ozet_yenile(collect=False)
         errors = len(self.last_preflight_report.get("errors", []))
         warnings = len(self.last_preflight_report.get("warnings", []))
@@ -73,13 +84,6 @@ class KontrolPaneliMixin:
         konum_text = " / ".join([str(p).strip() for p in konum_parts if str(p or "").strip()])
         konum_ok = bool(str(kunye.get("il") or "").strip() and str(kunye.get("ilce") or "").strip())
         self._ozet_set("konum", konum_text or "Konum girilmemiş", ok=konum_ok)
-        self._ozet_set("sondaj", f"{len(sondajlar)} adet, toplam {total_depth:.2f} m", ok=len(sondajlar) > 0 and total_depth > 0)
-        self._ozet_set("litoloji", f"{lit_count}/{len(sondajlar)} sondajda litoloji var", ok=lit_count == len(sondajlar) and len(sondajlar) > 0)
-        self._ozet_set("deney", f"SPT: {spt_count} | PMT: {pmt_count} | Kaya: {kaya_count}", ok=(spt_count + pmt_count + kaya_count) > 0)
-        if jeo_sheet_ok:
-            self._ozet_set("jeofizik", f"Sheet: {jeo_sheet_summary['serim']} serim | Tabaka: {jeo_sheet_summary['layers']}", ok=True)
-        else:
-            self._ozet_set("jeofizik", f"SS: {len(ss_list)} | MT: {len(mt_list)} | Tabaka: {layer_count}", ok=(len(ss_list) + len(mt_list)) > 0)
 
         template_info = rapor_sablonu_durumu(self.word_path)
         file_map = {
@@ -95,7 +99,6 @@ class KontrolPaneliMixin:
             "word_img_jeofizik": self.word_img_jeofizik,
         }
         image_ready = sum(1 for path in [self.img_yer, self.img_tkgm, self.img_pga, getattr(self, "img_mjh", None) or self.img_yer or self.img_tkgm, self.word_img_sondaj, self.word_img_jeofizik] if path and os.path.exists(path))
-        self._ozet_set("harita", f"{image_ready}/6 görsel hazır", ok=image_ready > 0)
 
         label_keys = {
             "word_path": "word", "lab_excel_path": "lab", "jeo_excel_path": "jeo", "kml_path": "kml",
@@ -120,14 +123,59 @@ class KontrolPaneliMixin:
             self._ozet_file_set(label_keys[raw_key], status, ok)
 
         health = proje_saglik_ozeti(self.veri, file_map)
+        self._ozet_set(
+            "sondaj",
+            f"{len(sondajlar)} adet, toplam {total_depth:.2f} m",
+            state=kontrol_grubu_durumu(
+                health,
+                (
+                    "sondaj.kayit",
+                    "sondaj.numaralar",
+                    "sondaj.derinlikler",
+                    "sondaj.koordinatlar",
+                    "sondaj.kotlar",
+                ),
+            ),
+        )
+        self._ozet_set(
+            "litoloji",
+            f"{lit_count}/{len(sondajlar)} sondajda litoloji var",
+            state=kontrol_grubu_durumu(health, ("litoloji.kayit", "litoloji.kapsam")),
+        )
+        self._ozet_set(
+            "deney",
+            f"SPT: {spt_count} | PMT: {pmt_count} | Kaya: {kaya_count}",
+            state=kontrol_grubu_durumu(health, ("deney.kayit", "deney.tutarlilik")),
+        )
+        jeofizik_text = (
+            f"Sheet: {jeo_sheet_summary['serim']} serim | Tabaka: {jeo_sheet_summary['layers']}"
+            if jeo_sheet_ok
+            else f"SS: {len(ss_list)} | MT: {len(mt_list)} | Tabaka: {layer_count}"
+        )
+        self._ozet_set(
+            "jeofizik",
+            jeofizik_text,
+            state=kontrol_grubu_durumu(health, ("jeofizik.kayit", "jeofizik.tutarlilik")),
+        )
+        self._ozet_set(
+            "harita",
+            f"{image_ready}/6 görsel hazır",
+            state="ok" if image_ready == 6 else "warning",
+        )
         self._saglik_paneli_guncelle(health)
         self._workflow_paneli_guncelle(health)
         self._final_dashboard_guncelle(health)
         self._ozet_preflight_guncelle()
 
-    def _ozet_set(self, key, text, ok=True):
+    def _ozet_set(self, key, text, ok=True, state=None):
         label = self.ozet_metric_labels.get(key)
-        color = COLOR_SUCCESS if ok else COLOR_WARNING
+        if state is None:
+            state = "ok" if ok else "warning"
+        color = {
+            "ok": COLOR_SUCCESS,
+            "warning": COLOR_WARNING,
+            "error": COLOR_DANGER,
+        }.get(state, COLOR_WARNING)
         card = getattr(self, "ozet_metric_cards", {}).get(key)
         title = getattr(self, "ozet_metric_title_labels", {}).get(key)
         accent = getattr(self, "ozet_metric_accents", {}).get(key)
@@ -537,7 +585,7 @@ class KontrolPaneliMixin:
                 log_exception("preflight.center.collect", exc_value=exc)
             refreshed = build_preflight_report(self)
             report_holder["value"] = refreshed
-            self.last_preflight_report = refreshed
+            self.on_kontrol_raporunu_sakla(refreshed)
             populate()
             self.ozet_yenile(collect=False)
 
@@ -562,6 +610,28 @@ class KontrolPaneliMixin:
         if not hasattr(self, "ozet_preflight_text"):
             return
         if self.last_preflight_report:
+            if not self.on_kontrol_raporu_guncel_mi():
+                if hasattr(self, "ozet_preflight_summary_label"):
+                    self.ozet_preflight_summary_label.config(
+                        text="Veri değişti - kontrolü yenileyin",
+                        fg=COLOR_WARNING,
+                    )
+                if hasattr(self, "ozet_preflight_action_button"):
+                    self.configure_modern_button(
+                        self.ozet_preflight_action_button,
+                        text="Yeniden Çalıştır",
+                        role="warning",
+                        outline=True,
+                    )
+                self.ozet_preflight_text.config(state="normal")
+                self.ozet_preflight_text.delete("1.0", tk.END)
+                self.ozet_preflight_text.insert(
+                    "1.0",
+                    "Ön kontrolden sonra proje verileri değişti. "
+                    "Güncel sonuç için kontrolü yeniden çalıştırın.",
+                )
+                self.ozet_preflight_text.config(state="disabled")
+                return
             errors = len(self.last_preflight_report.get("errors", []) or [])
             warnings = len(self.last_preflight_report.get("warnings", []) or [])
             infos = len(self.last_preflight_report.get("info", []) or [])
@@ -601,7 +671,7 @@ class KontrolPaneliMixin:
                 log_exception("final_control.collect", exc_value=exc)
 
         preflight = build_preflight_report(self)
-        self.last_preflight_report = preflight
+        self.on_kontrol_raporunu_sakla(preflight)
         health = proje_saglik_ozeti(self.veri, self._dosya_map())
         items = []
         represented = set()

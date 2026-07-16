@@ -43,6 +43,24 @@ def proje_saglik_ozeti(veri, dosya_durumlari=None):
     }
 
 
+def kontrol_grubu_durumu(health, check_ids):
+    """Birden fazla merkezi kontrol sonucunu tek kart durumuna indirger."""
+    items = health.get("items", []) if isinstance(health, dict) else []
+    item_map = {
+        item.get("id"): item
+        for item in items
+        if isinstance(item, dict) and item.get("id")
+    }
+    selected = [item_map.get(check_id) for check_id in check_ids]
+    if not selected or any(item is None for item in selected):
+        return "warning"
+    if any(not item.get("ok") and item.get("level") == "error" for item in selected):
+        return "error"
+    if any(not item.get("ok") for item in selected):
+        return "warning"
+    return "ok"
+
+
 def hesap_ozeti(veri):
     sondajlar = veri.get("sondaj", [])
     total_depth = sum(safe_float(s.get("der")) for s in sondajlar)

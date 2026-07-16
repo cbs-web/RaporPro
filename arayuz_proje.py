@@ -154,6 +154,12 @@ class ArayuzProjeMixin:
         self.recent_projects = [path] + cleaned
         self.recent_projects_kaydet()
 
+    def _proje_kontrol_hafizasini_sifirla(self):
+        """Onceki proje veya veri surumune ait denetim sonuclarini temizle."""
+        self.last_preflight_report = None
+        self.last_preflight_fingerprint = None
+        self.last_output_quality_report = None
+
     def proje_dosyasi_yukle(self, dosya_yolu):
         with perf_timer("project.open_read_apply"):
             with open(dosya_yolu, 'r', encoding='utf-8') as f:
@@ -161,6 +167,7 @@ class ArayuzProjeMixin:
             yuklenen_veri, migrasyon = self.proje_verisini_hazirla(yuklenen_veri)
             self.veri = yuklenen_veri
             self.aktif_dosya_yolu = dosya_yolu
+            self._proje_kontrol_hafizasini_sifirla()
             self.doldur_arayuz()
             if migrasyon.degisti:
                 self._son_kayit_imzasi = None
@@ -667,7 +674,7 @@ class ArayuzProjeMixin:
         self.word_img_jeofizik = None
         self.ek_tutanak_path = None
         self.ek_arazi_deneyli_path = None
-        self.last_output_quality_report = None
+        self._proje_kontrol_hafizasini_sifirla()
 
     def yeni_proje_sihirbazi(self):
         mevcut_ayarlar = self.veri.get("ayarlar", {}).copy()
@@ -814,6 +821,7 @@ class ArayuzProjeMixin:
             self.veri["jeofizik"]["ss_list"] = [{"ad": "SS-1", "coords": [""] * 6, "layers": []}]
             self.veri["jeofizik"]["mt_list"] = [{"no": "MT-1", "y": "", "x": ""}]
         self.aktif_dosya_yolu = None
+        self._proje_kontrol_hafizasini_sifirla()
         self.doldur_arayuz()
         self.root.title(f"Zemin Rapor Pro - {label}")
         self.set_status(f"Proje şablonu uygulandı: {label}", level="success")

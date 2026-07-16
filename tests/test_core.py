@@ -104,6 +104,7 @@ from ui_haritalar import HaritalarSekmesiMixin
 from ui_rapor import RaporSekmesiMixin
 from ui_sondaj import SondajMixin
 from ui_proje_surumleri import ProjeSurumleriMixin
+from proje_motoru import kontrol_grubu_durumu, proje_saglik_ozeti
 from proje_arsiv import (
     arsiv_kaydi_ekle,
     arsiv_kayitlari_yukle,
@@ -721,7 +722,7 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
                 ],
                 "jeofizik": {
                     "ss_list": [
-                        {"coords": ["40.3", "26.3", "", "", "40.4", "26.4"]},
+                        {"coords": ["40.3", "26.3", "40.35", "26.35", "40.4", "26.4"]},
                     ],
                     "mt_list": [{"y": "40.5", "x": "26.5"}],
                 },
@@ -733,6 +734,19 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         self.assertEqual(summary["ss"], (1, 1))
         self.assertEqual(summary["mt"], (1, 1))
         self.assertEqual((summary["ready"], summary["total"]), (4, 5))
+
+    def test_harita_koordinat_ozeti_orta_noktasi_eksik_serimi_hazir_saymaz(self):
+        summary = HaritalarSekmesiMixin.harita_koordinat_ozeti(
+            {
+                "jeofizik": {
+                    "ss_list": [
+                        {"coords": ["40.3", "26.3", "", "", "40.4", "26.4"]},
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(summary["ss"], (0, 1))
 
     def test_harita_dosya_durumu_olmayan_dosyayi_hazir_saymaz(self):
         state, text = HaritalarSekmesiMixin.harita_dosya_durumu(r"C:\olmayan\harita.jpg")
@@ -785,6 +799,17 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         self.assertEqual(state, "warning")
         self.assertIn("2/6", summary)
 
+    def test_jeofizik_sismik_durum_ozeti_vp_vs_sirasini_uyarir(self):
+        state, summary = JeofizikMixin.jeofizik_ss_durum_ozeti(
+            {
+                "coords": ["40.1", "26.1", "40.2", "26.2", "40.3", "26.3"],
+                "layers": [{"vp": "200", "vs": "300", "h": "4"}],
+            }
+        )
+
+        self.assertEqual(state, "warning")
+        self.assertIn("Vp", summary)
+
     def test_jeofizik_mt_durum_ozeti_tam_kaydi_hazir_sayar(self):
         state, summary = JeofizikMixin.jeofizik_mt_durum_ozeti(
             {
@@ -801,6 +826,139 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
         self.assertEqual(state, "ok")
         self.assertIn("hazır", summary)
+
+    def test_jeofizik_mt_durum_ozeti_sifir_olcumu_uyarir(self):
+        state, summary = JeofizikMixin.jeofizik_mt_durum_ozeti(
+            {
+                "y": "40.1",
+                "x": "26.1",
+                "freq": "0",
+                "to": "0.83",
+                "ta": "0.20",
+                "tb": "0.60",
+                "hv": "2.4",
+                "sure": "20",
+            }
+        )
+
+        self.assertEqual(state, "warning")
+        self.assertIn("pozitif", summary)
+
+    def test_kontrol_grubu_hata_uyari_ve_hazir_durumlarini_ayirir(self):
+        health = {
+            "items": [
+                {"id": "a", "ok": True, "level": "ok"},
+                {"id": "b", "ok": False, "level": "warning"},
+                {"id": "c", "ok": False, "level": "error"},
+            ]
+        }
+
+        self.assertEqual(kontrol_grubu_durumu(health, ("a",)), "ok")
+        self.assertEqual(kontrol_grubu_durumu(health, ("a", "b")), "warning")
+        self.assertEqual(kontrol_grubu_durumu(health, ("a", "c")), "error")
+        self.assertEqual(kontrol_grubu_durumu(health, ("missing",)), "warning")
+
+    def test_tamamlanmis_is_akisi_kart_gruplarini_hazir_sayar(self):
+        veri = ArayuzProjeMixin().varsayilan_veri_olustur()
+        veri["kunye"].update({"sahibi": "Deneme", "il": "Çanakkale", "ilce": "Merkez"})
+        veri["sondaj"] = [
+            {
+                "no": "SK-1",
+                "der": "15",
+                "y": "40.1",
+                "x": "26.1",
+                "k": "100",
+                "litoloji": [["0", "15", "Kil"]],
+                "spt": [["1.50", "2", "3", "4", "7"]],
+                "pmt": [],
+                "kaya": [],
+                "numuneler": [],
+            }
+        ]
+        veri["jeofizik"]["ss_list"] = [
+            {
+                "ad": "SS-1",
+                "coords": ["40.1", "26.1", "40.2", "26.2", "40.3", "26.3"],
+                "layers": [
+                    {"h": "4", "vp": "500", "vs": "220"},
+                    {"h": "", "vp": "900", "vs": "350"},
+                ],
+            }
+        ]
+        veri["jeofizik"]["mt_list"] = [
+            {
+                "no": "MT-1",
+                "y": "40.2",
+                "x": "26.2",
+                "freq": "1.2",
+                "to": "0.8",
+                "ta": "0.2",
+                "tb": "0.6",
+                "hv": "2.4",
+                "sure": "20",
+            }
+        ]
+
+        health = proje_saglik_ozeti(veri, {})
+
+        self.assertEqual(
+            kontrol_grubu_durumu(
+                health,
+                (
+                    "sondaj.kayit",
+                    "sondaj.numaralar",
+                    "sondaj.derinlikler",
+                    "sondaj.koordinatlar",
+                    "sondaj.kotlar",
+                ),
+            ),
+            "ok",
+        )
+        self.assertEqual(
+            kontrol_grubu_durumu(health, ("litoloji.kayit", "litoloji.kapsam")),
+            "ok",
+        )
+        self.assertEqual(
+            kontrol_grubu_durumu(health, ("deney.kayit", "deney.tutarlilik")),
+            "ok",
+        )
+        self.assertEqual(
+            kontrol_grubu_durumu(health, ("jeofizik.kayit", "jeofizik.tutarlilik")),
+            "ok",
+        )
+
+    def test_on_kontrol_raporu_veri_degisince_eski_sayilir(self):
+        mixin = KontrolPaneliMixin.__new__(KontrolPaneliMixin)
+        mixin.veri = {"kunye": {"sahibi": "Proje A"}}
+        mixin.on_kontrol_raporunu_sakla({"checks": []})
+
+        self.assertTrue(mixin.on_kontrol_raporu_guncel_mi())
+        mixin.veri["kunye"]["sahibi"] = "Proje B"
+        self.assertFalse(mixin.on_kontrol_raporu_guncel_mi())
+
+    def test_proje_kontrol_hafizasi_yeni_projede_temizlenir(self):
+        mixin = ArayuzProjeMixin()
+        mixin.last_preflight_report = {"checks": []}
+        mixin.last_preflight_fingerprint = "eski"
+        mixin.last_output_quality_report = {"files": []}
+
+        mixin._proje_kontrol_hafizasini_sifirla()
+
+        self.assertIsNone(mixin.last_preflight_report)
+        self.assertIsNone(mixin.last_preflight_fingerprint)
+        self.assertIsNone(mixin.last_output_quality_report)
+
+    def test_jeofizik_mt_eksik_olcumleri_merkezi_kontrolde_uyarir(self):
+        report = proje_tutarlilik_raporu(
+            {
+                "jeofizik": {
+                    "mt_list": [{"no": "MT-1", "y": "40.1", "x": "26.1"}],
+                }
+            }
+        )
+
+        finding_ids = {item.get("id") for item in report.get("findings", [])}
+        self.assertIn("jeofizik.mt.0.olcum_eksik", finding_ids)
 
     def test_koordinat_penceresi_windows_tam_ekran_yontemini_kullanir(self):
         window = SimpleNamespace(
@@ -1269,7 +1427,9 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
     def test_sondaj_satir_durumu_litoloji_eksigini_uyari_olarak_gosterir(self):
         mixin = SondajMixin.__new__(SondajMixin)
 
-        state, message = mixin.sondaj_satir_genel_durumu({"no": "SK-1", "der": "15", "litoloji": []})
+        state, message = mixin.sondaj_satir_genel_durumu(
+            {"no": "SK-1", "der": "15", "y": "40.1", "x": "26.1", "k": "100", "litoloji": []}
+        )
 
         self.assertEqual(state, "warning")
         self.assertEqual(message, "Litoloji eksik")
@@ -1279,6 +1439,9 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         sondaj = {
             "no": "SK-1",
             "der": "15",
+            "y": "40.1",
+            "x": "26.1",
+            "k": "100",
             "litoloji": [["0", "15", "Kil"]],
             "spt": [],
             "pmt": [],
@@ -1289,6 +1452,20 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
         self.assertEqual(state, "ok")
         self.assertEqual(message, "Hazır")
+
+    def test_sondaj_satir_durumu_koordinat_eksigini_uyarir(self):
+        mixin = SondajMixin.__new__(SondajMixin)
+        sondaj = {
+            "no": "SK-1",
+            "der": "15",
+            "k": "100",
+            "litoloji": [["0", "15", "Kil"]],
+        }
+
+        state, message = mixin.sondaj_satir_genel_durumu(sondaj)
+
+        self.assertEqual(state, "warning")
+        self.assertEqual(message, "Koordinat eksik")
 
     def test_sondaj_satir_durumu_gecersiz_koordinati_uyari_olarak_gosterir(self):
         mixin = SondajMixin.__new__(SondajMixin)

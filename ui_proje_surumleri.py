@@ -85,6 +85,8 @@ class ProjeSurumleriMixin:
         loaded = surum_verisi_yukle(self.aktif_dosya_yolu, record)
         loaded, _migrasyon = self.proje_verisini_hazirla(loaded)
         self.veri = loaded
+        if hasattr(self, "_proje_kontrol_hafizasini_sifirla"):
+            self._proje_kontrol_hafizasini_sifirla()
         self.doldur_arayuz()
         self.proje_baslik_guncelle()
         self.set_status(

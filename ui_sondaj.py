@@ -521,6 +521,11 @@ class SondajMixin:
             if state in ("warning", "error"):
                 return "warning", message
 
+        if not str(sondaj.get("y", "")).strip() or not str(sondaj.get("x", "")).strip():
+            return "warning", "Koordinat eksik"
+        if not str(sondaj.get("k", "")).strip():
+            return "warning", "Sondaj kotu eksik"
+
         lit_state, lit_message = self._sondaj_detay_durum(sondaj, "litoloji")
         if lit_state == "empty":
             return "warning", "Litoloji eksik"

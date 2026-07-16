@@ -1140,7 +1140,7 @@ class RaporSekmesiMixin:
     def rapor_on_kontrol(self):
         self.guncelle_veri_objesi()
         report = build_preflight_report(self)
-        self.last_preflight_report = report
+        self.on_kontrol_raporunu_sakla(report)
         self.ozet_yenile(collect=False)
         self.on_kontrol_penceresi(report)
         if report["errors"]:
@@ -2780,7 +2780,7 @@ class RaporSekmesiMixin:
     def raporla(self):
         self.guncelle_veri_objesi()
         report = build_preflight_report(self)
-        self.last_preflight_report = report
+        self.on_kontrol_raporunu_sakla(report)
         self.ozet_yenile(collect=False)
         if "blocking" in report:
             blockers = report.get("blocking", [])

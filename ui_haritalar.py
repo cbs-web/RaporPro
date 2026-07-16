@@ -25,6 +25,7 @@ from sabitler import (
     SPACE_XS,
 )
 from tkgm_kml import tkgm_parsel_kml_olustur
+from tutarlilik_ortak import koordinat_durumu
 from yerbuldurur_motoru import YerbuldururMotoru
 
 
@@ -33,14 +34,8 @@ class HaritalarSekmesiMixin:
     def harita_koordinat_ozeti(veri):
         """Harita için kullanılabilir koordinat kayıtlarının sayısını döndür."""
 
-        def number(value):
-            try:
-                return float(str(value).strip().replace(",", "."))
-            except (TypeError, ValueError):
-                return 0.0
-
         def pair_ready(y, x):
-            return bool(number(y) and number(x))
+            return koordinat_durumu(y, x)[0]
 
         veri = veri if isinstance(veri, dict) else {}
         arazi = veri.get("arazi", {}) if isinstance(veri.get("arazi"), dict) else {}
@@ -53,7 +48,10 @@ class HaritalarSekmesiMixin:
         ss_ready = 0
         for item in ss_list:
             coords = item.get("coords", []) if isinstance(item, dict) else []
-            if len(coords) >= 6 and pair_ready(coords[0], coords[1]) and pair_ready(coords[4], coords[5]):
+            if len(coords) >= 6 and all(
+                pair_ready(coords[pair_idx * 2], coords[pair_idx * 2 + 1])
+                for pair_idx in range(3)
+            ):
                 ss_ready += 1
         mt_ready = sum(pair_ready(item.get("y"), item.get("x")) for item in mt_list if isinstance(item, dict))
         area_ready = int(pair_ready(arazi.get("alan_y"), arazi.get("alan_x")))

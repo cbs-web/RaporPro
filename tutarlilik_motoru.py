@@ -1,7 +1,7 @@
 # Dosya: RaporPro/tutarlilik_motoru.py
 import os
 
-from jeofizik_sheet_motoru import jeofizik_sheet_var_mi
+from jeofizik_sheet_motoru import jeofizik_sheet_ozeti
 from karot_motoru import derinlik_araligi_coz
 from sondaj_derinlik import sondaj_derinligi_kontrol_sonucu
 from tutarlilik_jeofizik import jeofizik_kontrol
@@ -283,7 +283,7 @@ def _dosya_kontrolleri(report, veri, dosya_durumlari):
         for row in veri.get("lab_sheet", {}).get("rows", []) or []
         if isinstance(row, (list, tuple))
     )
-    jeo_sheet_ready = bool(jeofizik_sheet_var_mi(veri))
+    jeo_sheet_ready = bool(jeofizik_sheet_ozeti(veri).get("ready"))
     jeofizik = veri.get("jeofizik", {}) or {}
     manual_jeo_ready = bool(jeofizik.get("ss_list") or jeofizik.get("mt_list"))
 

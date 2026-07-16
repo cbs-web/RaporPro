@@ -6,6 +6,7 @@ from jeofizik_sheet_motoru import (
     jeofizik_ss_koordinatlarini_koru,
 )
 from tutarlilik_ortak import (
+    bos_mu,
     bulgu_ekle,
     kimlik_anahtari,
     kontrol_ekle,
@@ -84,34 +85,33 @@ def jeofizik_kontrol(report, veri):
         seen_ss.add(key)
 
         coords = list(ss.get("coords", []) or [])
-        if coords:
-            if len(coords) < 6:
+        if len(coords) < 6:
+            bulgu_ekle(
+                report,
+                f"jeofizik.ss.{idx}.koordinat_sayisi",
+                "warning",
+                "Jeofizik",
+                "Serim koordinatları",
+                f"{name}: başlangıç, orta ve bitiş için 3 koordinat çifti bulunmuyor.",
+                "jeofizik",
+                "Serimin üç koordinat çiftini tamamlayın.",
+                entity=name,
+            )
+        padded = coords + [""] * max(0, 6 - len(coords))
+        for pair_idx in range(3):
+            ok, detail = koordinat_durumu(padded[pair_idx * 2], padded[pair_idx * 2 + 1])
+            if not ok:
                 bulgu_ekle(
                     report,
-                    f"jeofizik.ss.{idx}.koordinat_sayisi",
+                    f"jeofizik.ss.{idx}.koordinat.{pair_idx}",
                     "warning",
                     "Jeofizik",
-                    "Serim koordinatları",
-                    f"{name}: başlangıç, orta ve bitiş için 3 koordinat çifti bulunmuyor.",
+                    "Serim koordinatı",
+                    f"{name} {pair_idx + 1}. koordinat: {detail}",
                     "jeofizik",
-                    "Serimin üç koordinat çiftini tamamlayın.",
+                    "Jeofizik koordinatlarını kontrol edin.",
                     entity=name,
                 )
-            padded = coords + [""] * max(0, 6 - len(coords))
-            for pair_idx in range(3):
-                ok, detail = koordinat_durumu(padded[pair_idx * 2], padded[pair_idx * 2 + 1])
-                if not ok:
-                    bulgu_ekle(
-                        report,
-                        f"jeofizik.ss.{idx}.koordinat.{pair_idx}",
-                        "warning",
-                        "Jeofizik",
-                        "Serim koordinatı",
-                        f"{name} {pair_idx + 1}. koordinat: {detail}",
-                        "jeofizik",
-                        "Jeofizik koordinatlarını kontrol edin.",
-                        entity=name,
-                    )
 
         layers = list(ss.get("layers", []) or [])
         if not layers:
@@ -197,6 +197,45 @@ def jeofizik_kontrol(report, veri):
                 "MT koordinatını kontrol edin.",
                 entity=name,
             )
+        detail_fields = (
+            ("freq", "Frekans"),
+            ("to", "T0"),
+            ("ta", "Ta"),
+            ("tb", "Tb"),
+            ("hv", "H/V"),
+            ("sure", "Süre"),
+        )
+        missing_details = [label for key, label in detail_fields if bos_mu(mt.get(key))]
+        if missing_details:
+            bulgu_ekle(
+                report,
+                f"jeofizik.mt.{idx}.olcum_eksik",
+                "warning",
+                "Jeofizik",
+                "MT ölçüm bilgileri",
+                f"{name}: eksik ölçüm alanları: {', '.join(missing_details)}.",
+                "jeofizik",
+                "MT ölçüm bilgilerini tamamlayın.",
+                entity=name,
+            )
+        else:
+            invalid_details = [
+                label
+                for key, label in detail_fields
+                if (sayi_veya_none(mt.get(key)) or 0) <= 0
+            ]
+            if invalid_details:
+                bulgu_ekle(
+                    report,
+                    f"jeofizik.mt.{idx}.olcum_gecersiz",
+                    "warning",
+                    "Jeofizik",
+                    "MT ölçüm değerleri",
+                    f"{name}: pozitif sayı olması gereken alanlar: {', '.join(invalid_details)}.",
+                    "jeofizik",
+                    "MT ölçüm değerlerini pozitif sayı olarak girin.",
+                    entity=name,
+                )
 
     geophysics_ok = len(report["findings"]) == problem_before
     kontrol_ekle(

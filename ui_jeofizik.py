@@ -23,6 +23,7 @@ from sabitler import (
     SPACE_SM,
     SPACE_XS,
 )
+from tutarlilik_ortak import koordinat_durumu, sayi_veya_none
 from widgets import UndoRedoEntry
 
 
@@ -427,8 +428,22 @@ class JeofizikMixin:
             return "empty", "Veri girilmemiş"
         if coord_count < 6:
             return "warning", f"Koordinatlar eksik ({coord_count}/6)"
+        for pair_idx in range(3):
+            ok, detail = koordinat_durumu(coords[pair_idx * 2], coords[pair_idx * 2 + 1])
+            if not ok:
+                return "warning", f"{pair_idx + 1}. koordinat: {detail}"
         if not layers:
             return "warning", "Tabaka verisi girilmemiş"
+        for layer_idx, layer in enumerate(layers):
+            vp = sayi_veya_none(layer.get("vp"))
+            vs = sayi_veya_none(layer.get("vs"))
+            h = sayi_veya_none(layer.get("h"))
+            if vp is None or vp <= 0 or vs is None or vs <= 0:
+                return "warning", f"{layer_idx + 1}. tabaka Vp/Vs değeri geçersiz"
+            if vp <= vs:
+                return "warning", f"{layer_idx + 1}. tabakada Vp, Vs'den büyük olmalı"
+            if layer_idx < len(layers) - 1 and (h is None or h <= 0):
+                return "warning", f"{layer_idx + 1}. tabaka kalınlığı geçersiz"
         return "ok", f"{len(layers)} tabaka · koordinatlar hazır"
 
     @staticmethod
@@ -443,8 +458,13 @@ class JeofizikMixin:
             return "empty", "Veri girilmemiş"
         if coord_count < 2:
             return "warning", "Koordinat eksik"
+        coord_ok, coord_detail = koordinat_durumu(kayit.get("y"), kayit.get("x"))
+        if not coord_ok:
+            return "warning", coord_detail
         if detail_count < len(detail_keys):
             return "warning", f"Ölçüm bilgileri eksik ({detail_count}/{len(detail_keys)})"
+        if any((sayi_veya_none(kayit.get(key)) or 0) <= 0 for key in detail_keys):
+            return "warning", "Ölçüm bilgileri pozitif sayı olmalı"
         return "ok", "Koordinat ve ölçüm bilgileri hazır"
 
     @staticmethod

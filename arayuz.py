@@ -68,6 +68,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         self.jeo_excel_path = None 
         self.last_focused = None
         self.last_preflight_report = None
+        self.last_preflight_fingerprint = None
         self.autosave_after_id = None
         self._closing = False
         self._kilitli_kayda_izin_ver = False
