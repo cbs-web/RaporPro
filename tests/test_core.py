@@ -99,6 +99,11 @@ from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kontrol import KontrolPaneliMixin
+from ui_cikti import (
+    CiktiMerkeziMixin,
+    cikti_merkezi_hazirlik_durumlari,
+    cikti_merkezi_tahmini_dosya_sayisi,
+)
 from ui_jeofizik import JeofizikMixin
 from ui_haritalar import HaritalarSekmesiMixin
 from ui_rapor import RaporSekmesiMixin
@@ -712,6 +717,97 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_cikti_merkezi_bos_projeyi_hazir_gostermez(self):
+        states = cikti_merkezi_hazirlik_durumlari(
+            ArayuzProjeMixin().varsayilan_veri_olustur(),
+            {"maps": [None, None], "report_images": [None, None, None, None]},
+            {"blocking": [{"id": "proje"}], "warnings": ["Eksik"]},
+        )
+
+        self.assertEqual(states["report"][0], "danger")
+        self.assertEqual(states["logs"][0], "danger")
+        self.assertEqual(states["section"][0], "danger")
+        self.assertEqual(states["maps"][0], "warning")
+        self.assertEqual(states["taahhutnameler"][0], "warning")
+
+    def test_cikti_merkezi_hazir_projede_tum_gruplari_hazir_gosterir(self):
+        veri = ArayuzProjeMixin().varsayilan_veri_olustur()
+        veri["kunye"].update({"sahibi": "Deneme", "il": "Çanakkale", "ilce": "Merkez"})
+        veri["sondaj"] = [
+            {"no": "SK-1", "der": "15", "y": "40.1", "x": "26.1", "litoloji": [["0", "15", "Kil"]]},
+            {"no": "SK-2", "der": "15", "y": "40.2", "x": "26.2", "litoloji": [["0", "15", "Kum"]]},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for idx in range(6):
+                path = os.path.join(tmp, f"gorsel_{idx}.jpg")
+                with open(path, "wb") as handle:
+                    handle.write(b"hazir")
+                paths.append(path)
+
+            states = cikti_merkezi_hazirlik_durumlari(
+                veri,
+                {"maps": paths[:2], "report_images": paths[2:]},
+                {"blocking": [], "warnings": []},
+            )
+
+        self.assertTrue(all(state == "success" for state, _detail in states.values()))
+
+    def test_cikti_merkezi_tahmini_dosya_sayisini_hesaplar(self):
+        veri = {"sondaj": [{"no": "SK-1"}, {"no": "SK-2"}]}
+        selections = {
+            "report": True,
+            "logs": True,
+            "section": True,
+            "maps": True,
+            "report_images": True,
+            "taahhutnameler": True,
+            "ekler": True,
+        }
+
+        total = cikti_merkezi_tahmini_dosya_sayisi(veri, selections, map_count=2, image_count=4)
+
+        self.assertEqual(total, 14)
+
+    def test_cikti_merkezi_ana_raporu_sifir_numarali_klasore_yazar(self):
+        mixin = CiktiMerkeziMixin.__new__(CiktiMerkeziMixin)
+        mixin.veri = {"kunye": {"sahibi": "Deneme Projesi"}, "sondaj": []}
+        mixin._guvenli_dosya_adi = lambda value, fallback="dosya": str(value).replace(" ", "_")
+        mixin.cikti_merkezi_progress = mock.Mock()
+        mixin.cikti_merkezi_bitti = mock.Mock()
+        mixin.set_status = mock.Mock()
+
+        def fake_report(_context, final_path=None, autosave=False):
+            from docx import Document
+
+            document = Document()
+            document.add_paragraph("Deneme raporu")
+            document.save(final_path)
+            return True, "Rapor oluşturuldu"
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("ui_cikti.rapor_olustur", side_effect=fake_report):
+            config = {
+                "base_folder": tmp,
+                "format": "jpg",
+                "dpi": 300,
+                "report": True,
+                "report_context": SimpleNamespace(veri=copy.deepcopy(mixin.veri)),
+                "logs": False,
+                "section": False,
+                "maps": False,
+                "report_images": False,
+                "taahhutnameler": False,
+                "ekler": False,
+            }
+
+            mixin.cikti_merkezi_threaded(config, {}, {"cancelled": False})
+
+            report_dir = os.path.join(tmp, "00_Rapor")
+            reports = [name for name in os.listdir(report_dir) if name.endswith(".docx")]
+            self.assertEqual(len(reports), 1)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "RaporPro_Cikti_Kalite.json")))
+            self.assertTrue(any(name.startswith("Cikti_merkezi_ozeti_") for name in os.listdir(tmp)))
+
     def test_harita_koordinat_ozeti_gecerli_noktalari_sayar(self):
         summary = HaritalarSekmesiMixin.harita_koordinat_ozeti(
             {
