@@ -1,6 +1,6 @@
 ﻿# Dosya: RaporPro/arayuz.py
 import tkinter as tk
-from tkinter import messagebox, ttk, Canvas
+from tkinter import messagebox, ttk
 import datetime
 import json
 import os
@@ -342,16 +342,134 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         self.log_text.tag_config("warning", foreground=COLOR_WARNING)
         self.log_text.tag_config("normal", foreground=COLOR_LOG_TEXT)
 
+    def form_klavye_gecisi_ekle(self, widgets):
+        """Form alanlarında Enter ve ok tuşlarıyla dikey gezinmeyi standartlaştır."""
+        widgets = [widget for widget in widgets if widget is not None]
+
+        def focus_index(index):
+            if not widgets:
+                return "break"
+            index = max(0, min(index, len(widgets) - 1))
+            widget = widgets[index]
+            try:
+                widget.focus_set()
+                if hasattr(widget, "selection_range"):
+                    widget.selection_range(0, tk.END)
+            except Exception:
+                pass
+            return "break"
+
+        for index, widget in enumerate(widgets):
+            widget.bind("<Return>", lambda event, idx=index: focus_index(idx + 1), add="+")
+            widget.bind("<Down>", lambda event, idx=index: focus_index(idx + 1), add="+")
+            widget.bind("<Up>", lambda event, idx=index: focus_index(idx - 1), add="+")
+
+    @staticmethod
+    def _form_sayi_mi(value):
+        text = str(value or "").strip().replace(",", ".")
+        if not text:
+            return False
+        try:
+            float(text)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    def form_verilerini_uygula(self, section_name):
+        """Açık formları proje verisine uygula ve kurtarma kaydını güncelle."""
+        self.guncelle_veri_objesi(silent=True)
+        self.otomatik_kaydet()
+        if hasattr(self, "ozet_yenile"):
+            self.ozet_yenile(collect=False)
+        self.set_status(f"{section_name} bilgileri projeye uygulandı.", level="success")
+
+    def _form_entry_ekle(self, parent, row, label, key, store, width=28):
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="e", padx=(0, SPACE_SM), pady=SPACE_XS)
+        entry = UndoRedoEntry(parent, width=width)
+        entry.grid(row=row, column=1, sticky="ew", pady=SPACE_XS)
+        store[key] = entry
+        return entry
+
+    def kunye_durum_guncelle(self, event=None):
+        required = ("sahibi", "il", "ilce")
+        values = {key: entry.get().strip() for key, entry in self.e_kunye.items()}
+        missing = [key for key in required if not values.get(key)]
+        for key, entry in self.e_kunye.items():
+            entry.configure(style="Warning.TEntry" if key in missing else "Valid.TEntry")
+        filled = sum(bool(value) for value in values.values())
+        if missing:
+            labels = {"sahibi": "Proje adı", "il": "İl", "ilce": "İlçe"}
+            self.kunye_durum_var.set(f"{filled}/8 alan dolu · Eksik: {', '.join(labels[key] for key in missing)}")
+            self.kunye_durum_label.configure(foreground=COLOR_WARNING)
+        else:
+            self.kunye_durum_var.set(f"{filled}/8 alan dolu · Temel proje bilgileri hazır")
+            self.kunye_durum_label.configure(foreground=COLOR_SUCCESS)
+
     def p_kunye(self, p):
-        f = ttk.LabelFrame(p, text="Proje Künyesi", padding="20")
-        f.pack(fill="x", padx=10, pady=10)
+        page = ttk.Frame(p, padding=(16, 12))
+        page.pack(fill="both", expand=True)
+        page.columnconfigure(0, weight=1)
+
+        header = ttk.Frame(page)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        header.columnconfigure(0, weight=1)
+        title_area = ttk.Frame(header)
+        title_area.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_area, text="Proje Künyesi", style="PageTitle.TLabel").pack(anchor="w")
+        self.kunye_durum_var = tk.StringVar(value="Proje bilgileri bekleniyor")
+        self.kunye_durum_label = ttk.Label(title_area, textvariable=self.kunye_durum_var, style="Muted.TLabel")
+        self.kunye_durum_label.pack(anchor="w", pady=(2, 0))
+        apply_button = self.modern_button(
+            header,
+            "Uygula",
+            command=lambda: self.form_verilerini_uygula("Künye"),
+            role="success",
+            padx=10,
+            pady=5,
+        )
+        apply_button.grid(row=0, column=1, sticky="e")
+
+        ttk.Separator(page).grid(row=1, column=0, sticky="ew", pady=(0, SPACE_MD))
+        body = ttk.Frame(page)
+        body.grid(row=2, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=1)
+
         self.e_kunye = {}
-        fields = [("Proje Sahibi:", "sahibi"), ("İl:", "il"), ("İlçe:", "ilce"), ("Mahalle:", "mah"), ("Mevkii:", "mev"), ("Pafta:", "paf"), ("Ada:", "ada"), ("Parsel:", "par")]
-        for i, (lbl, key) in enumerate(fields):
-            r = i // 2; c = (i % 2) * 2
-            ttk.Label(f, text=lbl).grid(row=r, column=c, sticky="e", padx=5, pady=8)
-            e = UndoRedoEntry(f, width=30); e.grid(row=r, column=c+1, sticky="w", padx=5, pady=8)
-            self.e_kunye[key] = e
+        project = ttk.LabelFrame(body, text="Proje", padding=(14, 10))
+        project.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, SPACE_SM))
+        project.columnconfigure(1, weight=1)
+        project_entry = self._form_entry_ekle(project, 0, "Proje adı / sahibi", "sahibi", self.e_kunye, width=60)
+
+        location = ttk.LabelFrame(body, text="Konum", padding=(14, 10))
+        location.grid(row=1, column=0, sticky="nsew", padx=(0, SPACE_XS))
+        location.columnconfigure(1, weight=1)
+        location_fields = [
+            ("İl", "il"),
+            ("İlçe", "ilce"),
+            ("Mahalle / Köy", "mah"),
+            ("Mevkii", "mev"),
+        ]
+        location_entries = [
+            self._form_entry_ekle(location, row, label, key, self.e_kunye)
+            for row, (label, key) in enumerate(location_fields)
+        ]
+
+        cadastral = ttk.LabelFrame(body, text="Kadastro", padding=(14, 10))
+        cadastral.grid(row=1, column=1, sticky="nsew", padx=(SPACE_XS, 0))
+        cadastral.columnconfigure(1, weight=1)
+        cadastral_fields = [("Pafta", "paf"), ("Ada", "ada"), ("Parsel", "par")]
+        cadastral_entries = [
+            self._form_entry_ekle(cadastral, row, label, key, self.e_kunye)
+            for row, (label, key) in enumerate(cadastral_fields)
+        ]
+
+        navigation = [project_entry, *location_entries, *cadastral_entries]
+        self.form_klavye_gecisi_ekle(navigation)
+        for entry in navigation:
+            entry.bind("<KeyRelease>", self.kunye_durum_guncelle, add="+")
+            entry.bind("<FocusOut>", self.kunye_durum_guncelle, add="+")
+        self.kunye_durum_guncelle()
 
     def bina_blok_kolonlari(self):
         return [
@@ -379,7 +497,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         ]
 
     def bina_sonraki_blok_adi(self):
-        idx = len(getattr(self, "bina_blok_rows", []))
+        idx = len(getattr(self, "bina_blok_data", []))
         if idx < 26:
             return f"{chr(65 + idx)} Blok"
         return f"Blok {idx + 1}"
@@ -389,21 +507,72 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         values["blok_adi"] = self.bina_sonraki_blok_adi()
         return values
 
+    def _bina_blok_secili_kaydet(self):
+        idx = getattr(self, "bina_blok_secili_idx", None)
+        data = getattr(self, "bina_blok_data", [])
+        entries = getattr(self, "bina_blok_entries", {})
+        if not isinstance(idx, int) or not 0 <= idx < len(data) or not entries:
+            return
+        data[idx].update({key: entry.get().strip() for key, entry in entries.items()})
+        if not data[idx].get("blok_adi"):
+            data[idx]["blok_adi"] = f"Blok {idx + 1}"
+
+    def _bina_blok_listesi_yenile(self):
+        if not hasattr(self, "bina_blok_listbox"):
+            return
+        selected = getattr(self, "bina_blok_secili_idx", None)
+        previous_state = str(self.bina_blok_listbox.cget("state"))
+        if previous_state == "disabled":
+            self.bina_blok_listbox.configure(state="normal")
+        self.bina_blok_listbox.delete(0, tk.END)
+        for idx, block in enumerate(getattr(self, "bina_blok_data", [])):
+            name = str(block.get("blok_adi") or f"Blok {idx + 1}")
+            self.bina_blok_listbox.insert(tk.END, name)
+        if isinstance(selected, int) and 0 <= selected < self.bina_blok_listbox.size():
+            self.bina_blok_listbox.selection_set(selected)
+            self.bina_blok_listbox.activate(selected)
+        if previous_state == "disabled":
+            self.bina_blok_listbox.configure(state="disabled")
+
     def bina_blok_satir_sec(self, row_idx):
+        data = getattr(self, "bina_blok_data", [])
+        if not isinstance(row_idx, int) or not 0 <= row_idx < len(data):
+            return
+        previous = getattr(self, "bina_blok_secili_idx", None)
+        if previous != row_idx:
+            self._bina_blok_secili_kaydet()
         self.bina_blok_secili_idx = row_idx
-        for idx, row in enumerate(getattr(self, "bina_blok_rows", [])):
-            bg = "#D6EAF8" if idx == row_idx else COLOR_BG
-            try:
-                row["label"].configure(background=bg)
-            except Exception:
-                pass
+        block = data[row_idx]
+        for key, entry in getattr(self, "bina_blok_entries", {}).items():
+            entry.configure(state="normal")
+            entry.delete(0, tk.END)
+            entry.insert(0, str(block.get(key, "") or ""))
+        self._bina_blok_listesi_yenile()
+        self.bina_blok_listbox.selection_clear(0, tk.END)
+        self.bina_blok_listbox.selection_set(row_idx)
+        self.bina_blok_listbox.see(row_idx)
+        self.bina_blok_modu_guncelle(create_default=False)
+        self.bina_durum_guncelle()
+
+    def bina_blok_listesi_sec(self, event=None):
+        selection = self.bina_blok_listbox.curselection()
+        if selection:
+            self.bina_blok_satir_sec(selection[0])
+
+    def bina_blok_detay_degisti(self, event=None):
+        self._bina_blok_secili_kaydet()
+        idx = getattr(self, "bina_blok_secili_idx", None)
+        if isinstance(idx, int) and hasattr(self, "bina_blok_listbox") and idx < self.bina_blok_listbox.size():
+            name = self.bina_blok_data[idx].get("blok_adi") or f"Blok {idx + 1}"
+            self.bina_blok_listbox.delete(idx)
+            self.bina_blok_listbox.insert(idx, name)
+            self.bina_blok_listbox.selection_set(idx)
+        self.bina_durum_guncelle()
 
     def bina_blok_scroll_guncelle(self):
-        if hasattr(self, "bina_blok_canvas"):
-            self.bina_blok_canvas.update_idletasks()
-            self.bina_blok_canvas.configure(scrollregion=self.bina_blok_canvas.bbox("all"))
+        return
 
-    def bina_blok_modu_guncelle(self):
+    def bina_blok_modu_guncelle(self, create_default=True):
         enabled = bool(getattr(self, "bina_coklu_blok_var", tk.BooleanVar(value=False)).get())
         state = "normal" if enabled else "disabled"
         for btn in getattr(self, "bina_blok_buttons", []):
@@ -411,74 +580,76 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
                 btn.configure(state=state)
             except Exception:
                 pass
-        for row in getattr(self, "bina_blok_rows", []):
-            for entry in row.get("entries", {}).values():
-                try:
-                    entry.configure(state=state)
-                except Exception:
-                    pass
-        if enabled and not getattr(self, "bina_blok_rows", []):
+        if hasattr(self, "bina_blok_listbox"):
+            self.bina_blok_listbox.configure(state=state)
+        for entry in getattr(self, "bina_blok_entries", {}).values():
+            try:
+                entry.configure(state=state)
+            except Exception:
+                pass
+        if enabled and create_default and not getattr(self, "bina_blok_data", []):
             self.bina_blok_satir_ekle(self.bina_genel_bilgilerinden_blok())
+        self.bina_durum_guncelle()
 
     def bina_blok_satir_ekle(self, values=None):
-        if not hasattr(self, "bina_blok_frame"):
+        if not hasattr(self, "bina_blok_data"):
             return
+        self._bina_blok_secili_kaydet()
         values = values or {"blok_adi": self.bina_sonraki_blok_adi()}
-        row_idx = len(self.bina_blok_rows)
-        grid_row = row_idx + 1
-        row_label = ttk.Label(self.bina_blok_frame, text=str(row_idx + 1), width=4, anchor="center")
-        row_label.grid(row=grid_row, column=0, padx=1, pady=2, sticky="nsew")
-        entries = {}
-        widgets = [row_label]
-        for col_idx, (_, key, width) in enumerate(self.bina_blok_kolonlari(), start=1):
-            entry = UndoRedoEntry(self.bina_blok_frame, width=width)
-            entry.insert(0, str(values.get(key, "") or ""))
-            entry.grid(row=grid_row, column=col_idx, padx=1, pady=2, sticky="nsew")
-            entry.bind("<FocusIn>", lambda event, idx=row_idx: self.bina_blok_satir_sec(idx), add="+")
-            entry.bind("<Button-1>", lambda event, idx=row_idx: self.bina_blok_satir_sec(idx), add="+")
-            entries[key] = entry
-            widgets.append(entry)
-        self.bina_blok_rows.append({"entries": entries, "label": row_label, "widgets": widgets})
-        self.bina_blok_satir_sec(row_idx)
-        self.bina_blok_modu_guncelle()
-        self.bina_blok_scroll_guncelle()
+        block = {key: str(values.get(key, "") or "") for _, key, _ in self.bina_blok_kolonlari()}
+        if not block.get("blok_adi"):
+            block["blok_adi"] = self.bina_sonraki_blok_adi()
+        self.bina_blok_data.append(block)
+        self.bina_blok_rows = self.bina_blok_data
+        self._bina_blok_listesi_yenile()
+        self.bina_blok_satir_sec(len(self.bina_blok_data) - 1)
 
     def bina_bloklari_temizle(self):
-        for row in getattr(self, "bina_blok_rows", []):
-            for widget in row.get("widgets", []):
-                try:
-                    widget.destroy()
-                except Exception:
-                    pass
-        self.bina_blok_rows = []
+        self.bina_blok_data = []
+        self.bina_blok_rows = self.bina_blok_data
         self.bina_blok_secili_idx = None
-        self.bina_blok_scroll_guncelle()
+        self._bina_blok_listesi_yenile()
+        for entry in getattr(self, "bina_blok_entries", {}).values():
+            entry.configure(state="normal")
+            entry.delete(0, tk.END)
 
     def bina_bloklari_yukle(self, bloklar):
-        self.bina_bloklari_temizle()
-        for blok in bloklar or []:
-            if isinstance(blok, dict):
-                self.bina_blok_satir_ekle(blok)
+        self.bina_blok_data = [
+            {key: str(block.get(key, "") or "") for _, key, _ in self.bina_blok_kolonlari()}
+            for block in (bloklar or [])
+            if isinstance(block, dict)
+        ]
+        self.bina_blok_rows = self.bina_blok_data
+        self.bina_blok_secili_idx = None
+        self._bina_blok_listesi_yenile()
+        if self.bina_blok_data:
+            self.bina_blok_satir_sec(0)
+        else:
+            for entry in getattr(self, "bina_blok_entries", {}).values():
+                entry.configure(state="normal")
+                entry.delete(0, tk.END)
         self.bina_blok_modu_guncelle()
 
     def bina_bloklari_topla(self):
-        bloklar = []
-        for idx, row in enumerate(getattr(self, "bina_blok_rows", [])):
-            values = {key: entry.get().strip() for key, entry in row.get("entries", {}).items()}
+        self._bina_blok_secili_kaydet()
+        blocks = []
+        for idx, block in enumerate(getattr(self, "bina_blok_data", [])):
+            values = dict(block)
             if not values.get("blok_adi"):
                 values["blok_adi"] = f"Blok {idx + 1}"
             if any(str(value).strip() for value in values.values()):
-                bloklar.append(values)
-        return bloklar
+                blocks.append(values)
+        return blocks
 
     def bina_blok_secili_satir(self):
-        rows = getattr(self, "bina_blok_rows", [])
-        if not rows:
+        self._bina_blok_secili_kaydet()
+        data = getattr(self, "bina_blok_data", [])
+        if not data:
             return None, None
         idx = getattr(self, "bina_blok_secili_idx", None)
-        if idx is None or idx < 0 or idx >= len(rows):
-            idx = len(rows) - 1
-        return idx, rows[idx]
+        if idx is None or idx < 0 or idx >= len(data):
+            idx = len(data) - 1
+        return idx, data[idx]
 
     def bina_blok_ekle(self):
         self.bina_blok_satir_ekle({"blok_adi": self.bina_sonraki_blok_adi()})
@@ -487,146 +658,398 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         self.bina_blok_satir_ekle(self.bina_genel_bilgilerinden_blok())
 
     def bina_blok_cogalt(self):
-        idx, row = self.bina_blok_secili_satir()
-        if row is None:
+        idx, block = self.bina_blok_secili_satir()
+        if block is None:
             self.bina_blok_ekle()
             return
-        values = {key: entry.get().strip() for key, entry in row["entries"].items()}
+        values = dict(block)
         values["blok_adi"] = self.bina_sonraki_blok_adi()
         self.bina_blok_satir_ekle(values)
 
     def bina_blok_sil(self):
-        idx, row = self.bina_blok_secili_satir()
-        if row is None:
+        idx, block = self.bina_blok_secili_satir()
+        if block is None:
             messagebox.showinfo("Blok Sil", "Silinecek blok satırı yok.")
             return
         if not messagebox.askyesno("Blok Sil", "Seçili blok satırı silinsin mi?"):
             return
-        bloklar = self.bina_bloklari_topla()
-        if idx < len(bloklar):
-            del bloklar[idx]
-        self.bina_bloklari_yukle(bloklar)
+        del self.bina_blok_data[idx]
+        self.bina_blok_rows = self.bina_blok_data
+        self.bina_blok_secili_idx = None
+        self._bina_blok_listesi_yenile()
+        if self.bina_blok_data:
+            self.bina_blok_satir_sec(min(idx, len(self.bina_blok_data) - 1))
+        else:
+            for entry in self.bina_blok_entries.values():
+                entry.configure(state="normal")
+                entry.delete(0, tk.END)
+            self.bina_blok_modu_guncelle(create_default=False)
+
+    def bina_durum_guncelle(self, event=None):
+        general_values = {key: entry.get().strip() for key, entry in getattr(self, "e_bina", {}).items()}
+        filled = sum(bool(value) for value in general_values.values())
+        multi = bool(getattr(self, "bina_coklu_blok_var", tk.BooleanVar(value=False)).get())
+        blocks = getattr(self, "bina_blok_data", [])
+        if multi and not blocks:
+            text = f"{filled}/{len(general_values)} genel alan dolu · Blok bilgisi eksik"
+            color = COLOR_WARNING
+        elif multi:
+            text = f"{len(blocks)} blok · {filled}/{len(general_values)} genel alan dolu"
+            color = COLOR_SUCCESS
+        elif filled:
+            text = f"Tek yapı · {filled}/{len(general_values)} alan dolu"
+            color = COLOR_SUCCESS
+        else:
+            text = "Bina bilgileri bekleniyor"
+            color = COLOR_TEXT_MUTED
+        if hasattr(self, "bina_durum_var"):
+            self.bina_durum_var.set(text)
+            self.bina_durum_label.configure(foreground=color)
 
     def p_bina(self, p):
-        main_p = ttk.Frame(p); main_p.pack(fill="both", expand=True, padx=10, pady=10)
-        self.e_bina = {}
-        top_p = ttk.Frame(main_p); top_p.pack(fill="x")
-        left_f = ttk.LabelFrame(top_p, text="Yapı Genel Bilgileri", padding="15"); left_f.pack(side="left", fill="both", expand=True, padx=(0,5))
-        fields_l = [("Bina Kullanım Amacı", "kul"), ("Bina Kullanım Sınıfı", "sinif"), ("Bina Önem Katsayısı", "onem"), ("Yapı Malzemesi", "malz"), ("Bodrum Kat Adedi", "bod"), ("Toplam Kat Adedi", "kat"), ("Plan Boyutları", "plan"), ("Yapı Yüksekliği (Hn)", "yukseklik"), ("Bina Yükseklik Sınıfı", "yukseklik_sinif")]
-        for i, (l, k) in enumerate(fields_l):
-            ttk.Label(left_f, text=l).grid(row=i, column=0, sticky="e", padx=5, pady=5)
-            e = UndoRedoEntry(left_f, width=25); e.grid(row=i, column=1, sticky="ew", padx=5, pady=5)
-            self.e_bina[k] = e
-        right_f = ttk.LabelFrame(top_p, text="Alanlar ve Yükler", padding="15"); right_f.pack(side="right", fill="both", expand=True, padx=(5,0))
-        fields_r = [
-            ("Temel Alanı (m2)", "temel_alan"),
-            ("Toplam İnşaat Alanı (m2)", "ins"),
-            ("Olası Kazı Derinliği (m)", "der"),
-            ("Temel Tipi", "tem"),
-            ("Yerel Zemin Sınıfı", "ysinif"),
-            ("Etkili Temel Genişliği B (m)", "temel_genislik"),
-        ]
-        for i, (l, k) in enumerate(fields_r):
-            ttk.Label(right_f, text=l).grid(row=i, column=0, sticky="e", padx=5, pady=5)
-            e = UndoRedoEntry(right_f, width=25); e.grid(row=i, column=1, sticky="ew", padx=5, pady=5)
-            self.e_bina[k] = e
-        load_start_row = len(fields_r)
-        ttk.Separator(right_f, orient='horizontal').grid(row=load_start_row, column=0, columnspan=2, sticky="ew", pady=15)
-        ttk.Label(right_f, text="Binadan Temel Zeminine Aktarılan En Yükler (t/m2)", font=("Arial", 10, "bold")).grid(row=load_start_row + 1, column=0, columnspan=2, pady=(0,10))
-        load_frame = ttk.Frame(right_f); load_frame.grid(row=load_start_row + 2, column=0, columnspan=2)
-        ttk.Label(load_frame, text="Yük Tipi").grid(row=0, column=0, padx=5); ttk.Label(load_frame, text="Mim").grid(row=0, column=1, padx=5); ttk.Label(load_frame, text="Maks").grid(row=0, column=2, padx=5); ttk.Label(load_frame, text="Ort.").grid(row=0, column=3, padx=5)
-        ttk.Label(load_frame, text="(G+Q+E)").grid(row=1, column=0, padx=5, pady=5)
-        self.e_bina["gqe_min"] = UndoRedoEntry(load_frame, width=8); self.e_bina["gqe_min"].grid(row=1, column=1, padx=5)
-        self.e_bina["gqe_max"] = UndoRedoEntry(load_frame, width=8); self.e_bina["gqe_max"].grid(row=1, column=2, padx=5)
-        self.e_bina["gqe_ort"] = UndoRedoEntry(load_frame, width=8); self.e_bina["gqe_ort"].grid(row=1, column=3, padx=5)
-        ttk.Label(load_frame, text="1.4G+1.6Q").grid(row=2, column=0, padx=5, pady=5)
-        self.e_bina["comb_min"] = UndoRedoEntry(load_frame, width=8); self.e_bina["comb_min"].grid(row=2, column=1, padx=5)
-        self.e_bina["comb_max"] = UndoRedoEntry(load_frame, width=8); self.e_bina["comb_max"].grid(row=2, column=2, padx=5)
-        self.e_bina["comb_ort"] = UndoRedoEntry(load_frame, width=8); self.e_bina["comb_ort"].grid(row=2, column=3, padx=5)
+        page = ttk.Frame(p, padding=(16, 12))
+        page.pack(fill="both", expand=True)
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(2, weight=1)
 
-        blok_f = ttk.LabelFrame(main_p, text="Çoklu Blok Bilgileri", padding="10")
-        blok_f.pack(fill="both", expand=True, pady=(10, 0))
+        header = ttk.Frame(page)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        header.columnconfigure(0, weight=1)
+        title_area = ttk.Frame(header)
+        title_area.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_area, text="Bina Bilgileri", style="PageTitle.TLabel").pack(anchor="w")
+        self.bina_durum_var = tk.StringVar(value="Bina bilgileri bekleniyor")
+        self.bina_durum_label = ttk.Label(title_area, textvariable=self.bina_durum_var, style="Muted.TLabel")
+        self.bina_durum_label.pack(anchor="w", pady=(2, 0))
+        self.modern_button(
+            header,
+            "Uygula",
+            command=lambda: self.form_verilerini_uygula("Bina"),
+            role="success",
+            padx=10,
+            pady=5,
+        ).grid(row=0, column=1, sticky="e")
+        ttk.Separator(page).grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+
+        self.bina_notebook = ttk.Notebook(page)
+        self.bina_notebook.grid(row=2, column=0, sticky="nsew")
+        self.bina_general_tab = ttk.Frame(self.bina_notebook)
+        self.bina_blocks_tab = ttk.Frame(self.bina_notebook, padding=(10, 8))
+        self.bina_notebook.add(self.bina_general_tab, text="Genel Yapı Bilgileri")
+        self.bina_notebook.add(self.bina_blocks_tab, text="Çoklu Bloklar")
+
+        main_p, _ = self.scrollable_page(self.bina_general_tab, padding=(10, 8))
+        main_p.columnconfigure(0, weight=1)
+        self.e_bina = {}
+
+        def add_general_fields(parent, fields):
+            parent.columnconfigure(1, weight=1)
+            parent.columnconfigure(3, weight=1)
+            entries = []
+            for index, (label, key) in enumerate(fields):
+                row = index // 2
+                col = (index % 2) * 2
+                ttk.Label(parent, text=label).grid(
+                    row=row,
+                    column=col,
+                    sticky="e",
+                    padx=(SPACE_SM, SPACE_XS),
+                    pady=SPACE_XS,
+                )
+                entry = UndoRedoEntry(parent, width=24)
+                entry.grid(row=row, column=col + 1, sticky="ew", padx=(0, SPACE_SM), pady=SPACE_XS)
+                self.e_bina[key] = entry
+                entries.append(entry)
+            return entries
+
+        identity = ttk.LabelFrame(main_p, text="Yapı Tanımı", padding=(10, 8))
+        identity.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        identity_fields = [
+            ("Kullanım amacı", "kul"),
+            ("Kullanım sınıfı", "sinif"),
+            ("Önem katsayısı", "onem"),
+            ("Yapı malzemesi", "malz"),
+            ("Bodrum kat adedi", "bod"),
+            ("Toplam kat adedi", "kat"),
+        ]
+        general_entries = add_general_fields(identity, identity_fields)
+
+        geometry = ttk.LabelFrame(main_p, text="Geometri ve Temel", padding=(10, 8))
+        geometry.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+        geometry_fields = [
+            ("Plan boyutları", "plan"),
+            ("Yapı yüksekliği (Hn)", "yukseklik"),
+            ("Bina yükseklik sınıfı", "yukseklik_sinif"),
+            ("Temel alanı (m²)", "temel_alan"),
+            ("Toplam inşaat alanı (m²)", "ins"),
+            ("Olası kazı derinliği (m)", "der"),
+            ("Temel tipi", "tem"),
+            ("Yerel zemin sınıfı", "ysinif"),
+            ("Etkili temel genişliği B (m)", "temel_genislik"),
+        ]
+        general_entries.extend(add_general_fields(geometry, geometry_fields))
+
+        loads = ttk.LabelFrame(main_p, text="Temel Zeminine Aktarılan En Yükler (t/m²)", padding=(10, 8))
+        loads.grid(row=2, column=0, sticky="ew")
+        load_frame = ttk.Frame(loads)
+        load_frame.pack(anchor="center")
+        for column, text in enumerate(("Yük tipi", "Min", "Maks", "Ortalama")):
+            ttk.Label(load_frame, text=text, font=FONT_UI_BODY_BOLD).grid(row=0, column=column, padx=SPACE_SM)
+        load_entries = []
+        load_specs = [
+            ("G+Q+E", ("gqe_min", "gqe_max", "gqe_ort")),
+            ("1.4G+1.6Q", ("comb_min", "comb_max", "comb_ort")),
+        ]
+        for row, (label, keys) in enumerate(load_specs, start=1):
+            ttk.Label(load_frame, text=label).grid(row=row, column=0, padx=SPACE_SM, pady=SPACE_XS)
+            for column, key in enumerate(keys, start=1):
+                entry = UndoRedoEntry(load_frame, width=12)
+                entry.grid(row=row, column=column, padx=SPACE_XS, pady=SPACE_XS)
+                self.e_bina[key] = entry
+                load_entries.append(entry)
+        general_entries.extend(load_entries)
+        self.form_klavye_gecisi_ekle(general_entries)
+        for entry in general_entries:
+            entry.bind("<KeyRelease>", self.bina_durum_guncelle, add="+")
+            entry.bind("<FocusOut>", self.bina_durum_guncelle, add="+")
+
         self.bina_coklu_blok_var = tk.BooleanVar(value=False)
-        self.bina_blok_rows = []
+        self.bina_blok_data = []
+        self.bina_blok_rows = self.bina_blok_data
         self.bina_blok_secili_idx = None
         self.bina_blok_buttons = []
+        self.bina_blok_entries = {}
 
-        toolbar = ttk.Frame(blok_f)
-        toolbar.pack(fill="x", pady=(0, 6))
+        block_toolbar = ttk.Frame(self.bina_blocks_tab)
+        block_toolbar.pack(fill="x", pady=(0, SPACE_SM))
         ttk.Checkbutton(
-            toolbar,
+            block_toolbar,
             text="Projede birden fazla blok var",
             variable=self.bina_coklu_blok_var,
             command=self.bina_blok_modu_guncelle,
-        ).pack(side="left", padx=(0, 12))
-        for text, command, color in [
-            ("+ Blok", self.bina_blok_ekle, COLOR_ACCENT),
-            ("Genelden A Blok", self.bina_blok_genelden_ekle, "#7DCEA0"),
-            ("Çoğalt", self.bina_blok_cogalt, "#85C1E9"),
-            ("Sil", self.bina_blok_sil, COLOR_DANGER),
-        ]:
-            btn = tk.Button(toolbar, text=text, command=command, bg=color, fg="white" if color in (COLOR_ACCENT, COLOR_DANGER) else "#111", font=FONT_BOLD)
-            btn.pack(side="left", padx=3)
+        ).pack(side="left")
+        ttk.Label(block_toolbar, textvariable=self.bina_durum_var, style="Muted.TLabel").pack(side="right")
+
+        block_paned = tk.PanedWindow(self.bina_blocks_tab, orient=tk.HORIZONTAL, bg=COLOR_BG, sashwidth=5, bd=0)
+        block_paned.pack(fill="both", expand=True)
+        list_panel = self.ui_surface_frame(block_paned, padding=SPACE_SM)
+        block_paned.add(list_panel, width=230, minsize=190, stretch="never")
+        ttk.Label(list_panel, text="Bloklar", font=FONT_UI_SECTION).pack(anchor="w", pady=(0, SPACE_SM))
+        self.bina_blok_listbox = tk.Listbox(
+            list_panel,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            selectbackground=COLOR_PRIMARY,
+            selectforeground="white",
+            activestyle="none",
+            font=FONT_UI_BODY,
+        )
+        self.bina_blok_listbox.pack(fill="both", expand=True)
+        self.bina_blok_listbox.bind("<<ListboxSelect>>", self.bina_blok_listesi_sec)
+        list_actions = tk.Frame(list_panel, bg=COLOR_SURFACE)
+        list_actions.pack(fill="x", pady=(SPACE_SM, 0))
+        button_specs = [
+            ("Yeni", self.bina_blok_ekle, "primary", False),
+            ("Genelden", self.bina_blok_genelden_ekle, "secondary", True),
+            ("Çoğalt", self.bina_blok_cogalt, "secondary", True),
+            ("Sil", self.bina_blok_sil, "danger", True),
+        ]
+        for index, (text, command, role, outline) in enumerate(button_specs):
+            btn = self.modern_button(
+                list_actions,
+                text,
+                command=command,
+                role=role,
+                outline=outline,
+                padx=6,
+                pady=4,
+            )
+            btn.grid(row=index // 2, column=index % 2, sticky="ew", padx=2, pady=2)
+            list_actions.columnconfigure(index % 2, weight=1)
             self.bina_blok_buttons.append(btn)
-        ttk.Label(toolbar, text="Kapalıysa raporda tek bina bilgileri kullanılır.").pack(side="left", padx=10)
 
-        table_wrap = ttk.Frame(blok_f)
-        table_wrap.pack(fill="both", expand=True)
-        self.bina_blok_canvas = Canvas(table_wrap, bg=COLOR_BG, height=185, highlightthickness=0)
-        y_scroll = ttk.Scrollbar(table_wrap, orient="vertical", command=self.bina_blok_canvas.yview)
-        x_scroll = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.bina_blok_canvas.xview)
-        self.bina_blok_frame = ttk.Frame(self.bina_blok_canvas)
-        self.bina_blok_canvas.create_window((0, 0), window=self.bina_blok_frame, anchor="nw")
-        self.bina_blok_canvas.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-        self.bina_blok_canvas.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
-        table_wrap.rowconfigure(0, weight=1)
-        table_wrap.columnconfigure(0, weight=1)
-        self.bina_blok_frame.bind("<Configure>", lambda e: self.bina_blok_scroll_guncelle())
-
-        ttk.Label(self.bina_blok_frame, text="#", width=4, anchor="center", font=FONT_BOLD).grid(row=0, column=0, padx=1, pady=2, sticky="nsew")
-        for col_idx, (label, _, width) in enumerate(self.bina_blok_kolonlari(), start=1):
-            ttk.Label(self.bina_blok_frame, text=label, width=width, anchor="center", font=FONT_BOLD).grid(row=0, column=col_idx, padx=1, pady=2, sticky="nsew")
+        detail_host = ttk.Frame(block_paned)
+        block_paned.add(detail_host, minsize=610, stretch="always")
+        detail, _ = self.scrollable_page(detail_host, padding=(12, 8))
+        detail.columnconfigure(1, weight=1)
+        detail.columnconfigure(3, weight=1)
+        ttk.Label(detail, text="Seçili Blok Bilgileri", style="SectionTitle.TLabel").grid(
+            row=0,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(0, SPACE_SM),
+        )
+        block_navigation = []
+        for index, (label, key, width) in enumerate(self.bina_blok_kolonlari()):
+            row = 1 + index // 2
+            col = (index % 2) * 2
+            ttk.Label(detail, text=label).grid(
+                row=row,
+                column=col,
+                sticky="e",
+                padx=(SPACE_SM, SPACE_XS),
+                pady=SPACE_XS,
+            )
+            entry = UndoRedoEntry(detail, width=max(12, min(width, 24)))
+            entry.grid(row=row, column=col + 1, sticky="ew", padx=(0, SPACE_SM), pady=SPACE_XS)
+            entry.bind("<KeyRelease>", self.bina_blok_detay_degisti, add="+")
+            entry.bind("<FocusOut>", self.bina_blok_detay_degisti, add="+")
+            self.bina_blok_entries[key] = entry
+            block_navigation.append(entry)
+        self.form_klavye_gecisi_ekle(block_navigation)
         self.bina_blok_modu_guncelle()
+        self.bina_durum_guncelle()
+
+    def arazi_durum_guncelle(self, event=None):
+        values = {key: widget.get().strip() for key, widget in self.e_arazi.items()}
+        warnings = []
+        invalid_numeric = []
+        for key in ("egim", "min", "max", "ort", "pga"):
+            if values.get(key) and not self._form_sayi_mi(values[key]):
+                invalid_numeric.append(key)
+        if invalid_numeric:
+            warnings.append("Sayısal alanları kontrol edin")
+
+        min_value = float(values["min"].replace(",", ".")) if self._form_sayi_mi(values.get("min")) else None
+        max_value = float(values["max"].replace(",", ".")) if self._form_sayi_mi(values.get("max")) else None
+        avg_value = float(values["ort"].replace(",", ".")) if self._form_sayi_mi(values.get("ort")) else None
+        if min_value is not None and max_value is not None and min_value > max_value:
+            warnings.append("Min kot, maks kotu aşıyor")
+        if avg_value is not None and min_value is not None and max_value is not None and not min_value <= avg_value <= max_value:
+            warnings.append("Ortalama kot aralık dışında")
+        if bool(values.get("alan_y")) != bool(values.get("alan_x")):
+            warnings.append("Merkez koordinatı eksik")
+
+        required_missing = [key for key in ("zemin", "kategori") if not values.get(key)]
+        if required_missing:
+            warnings.append("Zemin grubu veya kategori eksik")
+
+        for key, widget in self.e_arazi.items():
+            if isinstance(widget, UndoRedoEntry):
+                warning = key in invalid_numeric or key in required_missing
+                widget.configure(style="Warning.TEntry" if warning else "Valid.TEntry")
+
+        filled = sum(bool(value) for value in values.values())
+        if warnings:
+            self.arazi_durum_var.set(f"{filled}/{len(values)} alan dolu · {warnings[0]}")
+            self.arazi_durum_label.configure(foreground=COLOR_WARNING)
+        else:
+            self.arazi_durum_var.set(f"{filled}/{len(values)} alan dolu · Arazi bilgileri hazır")
+            self.arazi_durum_label.configure(foreground=COLOR_SUCCESS)
 
     def p_arazi(self, p):
-        f = ttk.LabelFrame(p, text="Arazi Bilgileri", padding="20")
-        f.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        self.e_arazi = {}
-        keys = ["yon","egim","min","max","ort","zemin","pga"]
-        labels = ["Eğim Yönü", "Eğim Derecesi", "Min Kot", "Max Kot", "Ortalama Kot", "Zemin Grubu (ZA-ZF)", "PGA (g)"]
-        row_idx = 0
-        for l, k in zip(labels, keys):
-            ttk.Label(f, text=l).grid(row=row_idx, column=0, sticky="e", padx=10, pady=8)
-            e = UndoRedoEntry(f, width=40); e.grid(row=row_idx, column=1, sticky="w", padx=10, pady=8)
-            self.e_arazi[k] = e
-            row_idx += 1
-            
-        ttk.Label(f, text="Proje Alanı Merkezi Enlem (Y)").grid(row=row_idx, column=0, sticky="e", padx=10, pady=8)
-        self.e_arazi["alan_y"] = UndoRedoEntry(f, width=40); self.e_arazi["alan_y"].grid(row=row_idx, column=1, sticky="w", padx=10, pady=8)
-        row_idx += 1
-        ttk.Label(f, text="Proje Alanı Merkezi Boylam (X)").grid(row=row_idx, column=0, sticky="e", padx=10, pady=8)
-        self.e_arazi["alan_x"] = UndoRedoEntry(f, width=40); self.e_arazi["alan_x"].grid(row=row_idx, column=1, sticky="w", padx=10, pady=8)
-        row_idx += 1
+        page, _ = self.scrollable_page(p, padding=(16, 12))
+        page.columnconfigure(0, weight=1)
 
-        ttk.Label(f, text="Zemin Etüt Kategorisi").grid(row=row_idx, column=0, sticky="e", padx=10, pady=8)
-        self.e_arazi["kategori"] = ttk.Combobox(f, values=["Kategori 1", "Kategori 2", "Kategori 3"], width=38, state="readonly")
-        self.e_arazi["kategori"].grid(row=row_idx, column=1, sticky="w", padx=10, pady=8)
+        header = ttk.Frame(page)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        header.columnconfigure(0, weight=1)
+        title_area = ttk.Frame(header)
+        title_area.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_area, text="Arazi Bilgileri", style="PageTitle.TLabel").pack(anchor="w")
+        self.arazi_durum_var = tk.StringVar(value="Arazi bilgileri bekleniyor")
+        self.arazi_durum_label = ttk.Label(title_area, textvariable=self.arazi_durum_var, style="Muted.TLabel")
+        self.arazi_durum_label.pack(anchor="w", pady=(2, 0))
+        self.modern_button(
+            header,
+            "Uygula",
+            command=lambda: self.form_verilerini_uygula("Arazi"),
+            role="success",
+            padx=10,
+            pady=5,
+        ).grid(row=0, column=1, sticky="e")
+
+        ttk.Separator(page).grid(row=1, column=0, sticky="ew", pady=(0, SPACE_MD))
+        body = ttk.Frame(page)
+        body.grid(row=2, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=1)
+        self.e_arazi = {}
+
+        terrain = ttk.LabelFrame(body, text="Arazi ve Kotlar", padding=(14, 10))
+        terrain.grid(row=0, column=0, sticky="nsew", padx=(0, SPACE_XS))
+        terrain.columnconfigure(1, weight=1)
+        terrain_fields = [
+            ("Eğim yönü", "yon"),
+            ("Eğim derecesi", "egim"),
+            ("Minimum kot", "min"),
+            ("Maksimum kot", "max"),
+            ("Ortalama kot", "ort"),
+            ("Zemin grubu (ZA-ZF)", "zemin"),
+            ("PGA (g)", "pga"),
+        ]
+        terrain_entries = [
+            self._form_entry_ekle(terrain, row, label, key, self.e_arazi)
+            for row, (label, key) in enumerate(terrain_fields)
+        ]
+
+        project_area = ttk.LabelFrame(body, text="Proje Alanı", padding=(14, 10))
+        project_area.grid(row=0, column=1, sticky="nsew", padx=(SPACE_XS, 0))
+        project_area.columnconfigure(1, weight=1)
+        area_y = self._form_entry_ekle(project_area, 0, "Merkez enlem (Y)", "alan_y", self.e_arazi)
+        area_x = self._form_entry_ekle(project_area, 1, "Merkez boylam (X)", "alan_x", self.e_arazi)
+        ttk.Label(project_area, text="Zemin etüt kategorisi").grid(
+            row=2,
+            column=0,
+            sticky="e",
+            padx=(0, SPACE_SM),
+            pady=SPACE_XS,
+        )
+        self.e_arazi["kategori"] = ttk.Combobox(
+            project_area,
+            values=["Kategori 1", "Kategori 2", "Kategori 3"],
+            state="readonly",
+        )
+        self.e_arazi["kategori"].grid(row=2, column=1, sticky="ew", pady=SPACE_XS)
         self.e_arazi["kategori"].set("Kategori 2")
-        
-        frame_imar = ttk.LabelFrame(p, text="İmar Durumu ve Plan Notları", padding=10)
-        frame_imar.pack(fill="x", padx=20, pady=10)
-        ttk.Label(frame_imar, text="İmar Alanı (Raporda parantez içinde yazılır):").grid(row=0, column=0, sticky="e", padx=5, pady=5)
-        self.e_arazi["imar_alani"] = UndoRedoEntry(frame_imar, width=50)
-        self.e_arazi["imar_alani"].grid(row=0, column=1, sticky="w", padx=5, pady=5)
-        self.e_arazi["imar_alani"].insert(0, "Konut Alanı") 
-        ttk.Label(frame_imar, text="İmar Durumu (Önlemli Alanlar):").grid(row=1, column=0, sticky="e", padx=5, pady=5)
-        imar_secenekleri = ["Önlemli Alan 1.1 (ÖA-1.1) : Sıvılaşma Tehlikesi Açısından Önlemli Alanlar", "Önlemli Alan 2.1 (Ö.A-2.1) : Önlem Alınabilecek Nitelikte Stabilite Sorunlu Alanlar", "Önlemli Alan 2.2 (Ö.A-2.2) : Önlem Alınabilecek Nitelikte Kaya Düşmesi Sorunlu Alanlar", "Önlemli Alan 2.3 (Ö.A-2.3) : Önlem Alınabilecek Nitelikte Heyelan ve Kaya Düşmesi", "Önlemli Alan 5.1 (ÖA-5.1) : Önlem Alınabilecek Nitelikte Şişme, Oturma Açısından Sorunlu Alanlar"]
-        self.e_arazi["imar_durumu"] = ttk.Combobox(frame_imar, values=imar_secenekleri, width=80, state="readonly")
-        self.e_arazi["imar_durumu"].grid(row=1, column=1, sticky="w", padx=5, pady=5)
-        self.e_arazi["imar_durumu"].current(0) 
+
+        planning = ttk.LabelFrame(body, text="İmar Durumu ve Plan Notları", padding=(14, 10))
+        planning.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(SPACE_SM, 0))
+        planning.columnconfigure(1, weight=1)
+        imar_alani = self._form_entry_ekle(
+            planning,
+            0,
+            "İmar alanı",
+            "imar_alani",
+            self.e_arazi,
+            width=50,
+        )
+        imar_alani.insert(0, "Konut Alanı")
+        ttk.Label(planning, text="İmar durumu").grid(
+            row=1,
+            column=0,
+            sticky="e",
+            padx=(0, SPACE_SM),
+            pady=SPACE_XS,
+        )
+        imar_secenekleri = [
+            "Önlemli Alan 1.1 (ÖA-1.1) : Sıvılaşma Tehlikesi Açısından Önlemli Alanlar",
+            "Önlemli Alan 2.1 (Ö.A-2.1) : Önlem Alınabilecek Nitelikte Stabilite Sorunlu Alanlar",
+            "Önlemli Alan 2.2 (Ö.A-2.2) : Önlem Alınabilecek Nitelikte Kaya Düşmesi Sorunlu Alanlar",
+            "Önlemli Alan 2.3 (Ö.A-2.3) : Önlem Alınabilecek Nitelikte Heyelan ve Kaya Düşmesi",
+            "Önlemli Alan 5.1 (ÖA-5.1) : Önlem Alınabilecek Nitelikte Şişme, Oturma Açısından Sorunlu Alanlar",
+        ]
+        self.e_arazi["imar_durumu"] = ttk.Combobox(planning, values=imar_secenekleri, state="readonly")
+        self.e_arazi["imar_durumu"].grid(row=1, column=1, sticky="ew", pady=SPACE_XS)
+        self.e_arazi["imar_durumu"].current(0)
+
+        navigation = [
+            *terrain_entries,
+            area_y,
+            area_x,
+            self.e_arazi["kategori"],
+            imar_alani,
+            self.e_arazi["imar_durumu"],
+        ]
+        self.form_klavye_gecisi_ekle(navigation)
+        for widget in navigation:
+            widget.bind("<KeyRelease>", self.arazi_durum_guncelle, add="+")
+            widget.bind("<FocusOut>", self.arazi_durum_guncelle, add="+")
+            if isinstance(widget, ttk.Combobox):
+                widget.bind("<<ComboboxSelected>>", self.arazi_durum_guncelle, add="+")
+        self.arazi_durum_guncelle()
 
     def guncelle_veri_objesi(self, silent=False):
         for k,e in self.e_kunye.items(): self.veri["kunye"][k]=e.get()
@@ -664,6 +1087,10 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         for k,e in self.e_arazi.items():
             if k == "imar_durumu" or k == "kategori": e.set(self.veri["arazi"].get(k,""))
             else: e.delete(0,'end'); e.insert(0, self.veri["arazi"].get(k,""))
+        if hasattr(self, "kunye_durum_guncelle"):
+            self.kunye_durum_guncelle()
+        if hasattr(self, "arazi_durum_guncelle"):
+            self.arazi_durum_guncelle()
             
         dosyalar = self.veri.get("dosyalar", {})
         self.kml_path = self._dosya_yolu_al(dosyalar, "kml_path", "kml", "kml_file", "kml_dosya", "kml_sinir_path", "kml_siniri_path", "kml_sınır_path")

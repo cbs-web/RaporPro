@@ -937,40 +937,130 @@ class WorkbookMixin(WorkbookEskiMixin):
 
         nb.bind("<<NotebookTabChanged>>", on_workbook_tab_changed, add="+")
 
-        filter_group = ttk.LabelFrame(top, text="Filtre", padding=(4, 2))
-        excel_group = ttk.LabelFrame(top, text="Excel", padding=(4, 2))
-        row_group = ttk.LabelFrame(top, text="Satır", padding=(4, 2))
-        generate_group = ttk.LabelFrame(top, text="Uret", padding=(4, 2))
-        control_group = ttk.LabelFrame(top, text="Kontrol", padding=(4, 2))
-        apply_group = ttk.LabelFrame(top, text="Uygula", padding=(4, 2))
-        for group in (filter_group, excel_group, row_group, generate_group, control_group):
-            group.pack(side="left", padx=3, pady=1)
-        apply_group.pack(side="right", padx=3, pady=1)
+        primary_row = ttk.Frame(top)
+        primary_row.pack(fill="x")
+        filter_group = ttk.LabelFrame(primary_row, text="Görünüm", padding=(5, 3))
+        filter_group.pack(side="left")
+        apply_group = ttk.Frame(primary_row)
+        apply_group.pack(side="right")
 
         ttk.Label(filter_group, text="Sondaj").pack(side="left", padx=(0, 3))
         filter_combo = ttk.Combobox(filter_group, textvariable=filter_var, values=sondaj_filter_values(), width=12, state="readonly")
         filter_combo.pack(side="left", padx=3)
         filter_combo_ref["widget"] = filter_combo
         filter_combo.bind("<<ComboboxSelected>>", lambda event=None: apply_sondaj_filter(show_status=True))
-        tk.Button(filter_group, text="Filtrele", command=lambda: apply_sondaj_filter(show_status=True), bg="#D6EAF8", font=FONT_BOLD).pack(side="left", padx=3)
-        tk.Button(excel_group, text="Al", command=import_workbook, bg="#2E86C1", fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(excel_group, text="Aktar", command=export_workbook, bg="#1E8449", fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(row_group, text="+", command=active_add_row, bg=COLOR_ACCENT, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(row_group, text="Ekle", command=active_insert_row, bg="#5499C7", fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(row_group, text="Çoğalt", command=active_duplicate_rows, bg="#85C1E9", fg="#111", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(row_group, text="Sil", command=active_delete_rows, bg=COLOR_DANGER, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(row_group, text="Sütun Temizle", command=active_clear_column, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(row_group, text="Akıllı", command=active_smart_row, bg="#AF7AC5", fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(generate_group, text="SPT", command=generate_spt_rows, bg="#F7DC6F", fg="#111", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(generate_group, text="Litoloji", command=generate_litoloji_missing_rows, bg="#FADBD8", fg="#111", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(control_group, text="Boyut", command=lambda: ensure_active_sheet().set_all_cell_sizes_to_text(), bg="#D5DBDB", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(control_group, text="Kontrol", command=lambda: validate_workbook(show_status=True), bg=COLOR_WARNING, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(generate_group, text="Paket", command=generate_selected_sondaj_package, bg="#7DCEA0", fg="#111", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(generate_group, text="N30", command=lambda: (auto_spt_n30(), validate_workbook(show_status=True)), bg="#F9E79F", fg="#111", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(control_group, text="İlk Sorun", command=go_to_first_issue, bg="#F5B7B1", fg="#111", font=FONT_BOLD).pack(side="left", padx=2)
-        ttk.Label(top, textvariable=wb_info_var, foreground="#1F618D").pack(side="left", padx=8)
-        tk.Button(apply_group, text="Uygula", command=lambda: apply_workbook(False), bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
-        tk.Button(apply_group, text="Kapat", command=lambda: apply_workbook(True), bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(side="left", padx=2)
+        ttk.Label(primary_row, textvariable=wb_info_var, style="Muted.TLabel").pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=SPACE_SM,
+        )
+        self.modern_button(
+            apply_group,
+            "Uygula",
+            command=lambda: apply_workbook(False),
+            role="success",
+            padx=8,
+            pady=4,
+        ).pack(side="left", padx=2)
+        self.modern_button(
+            apply_group,
+            "Uygula ve Kapat",
+            command=lambda: apply_workbook(True),
+            role="primary",
+            padx=8,
+            pady=4,
+        ).pack(side="left", padx=2)
+
+        action_row = ttk.Frame(top)
+        action_row.pack(fill="x", pady=(SPACE_XS, 0))
+        excel_group = ttk.LabelFrame(action_row, text="Dosya", padding=(4, 2))
+        row_group = ttk.LabelFrame(action_row, text="Satır", padding=(4, 2))
+        control_group = ttk.LabelFrame(action_row, text="Kontrol", padding=(4, 2))
+        for group in (excel_group, row_group, control_group):
+            group.pack(side="left", padx=(0, SPACE_XS))
+
+        self.modern_button(
+            excel_group,
+            "Excel'den Al",
+            command=import_workbook,
+            role="primary",
+            outline=True,
+            padx=6,
+            pady=3,
+        ).pack(side="left", padx=2)
+        self.modern_button(
+            excel_group,
+            "Excel'e Aktar",
+            command=export_workbook,
+            role="success",
+            outline=True,
+            padx=6,
+            pady=3,
+        ).pack(side="left", padx=2)
+        for text, command, role, outline in (
+            ("Yeni Satır", active_add_row, "primary", False),
+            ("Alta Ekle", active_insert_row, "secondary", True),
+            ("Çoğalt", active_duplicate_rows, "secondary", True),
+            ("Sil", active_delete_rows, "danger", True),
+        ):
+            self.modern_button(
+                row_group,
+                text,
+                command=command,
+                role=role,
+                outline=outline,
+                padx=6,
+                pady=3,
+            ).pack(side="left", padx=2)
+        self.modern_button(
+            control_group,
+            "Sütunları Sığdır",
+            command=lambda: ensure_active_sheet().set_all_cell_sizes_to_text(),
+            role="secondary",
+            outline=True,
+            padx=6,
+            pady=3,
+        ).pack(side="left", padx=2)
+        self.modern_button(
+            control_group,
+            "Kontrol Et",
+            command=lambda: validate_workbook(show_status=True),
+            role="warning",
+            padx=6,
+            pady=3,
+        ).pack(side="left", padx=2)
+        self.modern_button(
+            control_group,
+            "İlk Sorun",
+            command=go_to_first_issue,
+            role="danger",
+            outline=True,
+            padx=6,
+            pady=3,
+        ).pack(side="left", padx=2)
+
+        automation_row = ttk.Frame(top)
+        automation_row.pack(fill="x", pady=(SPACE_XS, 0))
+        generate_group = ttk.LabelFrame(automation_row, text="Hızlı Üretim", padding=(4, 2))
+        generate_group.pack(side="left")
+        automation_buttons = [
+            ("Akıllı Satır", active_smart_row, "accent", False),
+            ("SPT Satırları", generate_spt_rows, "warning", True),
+            ("Litoloji Tamamla", generate_litoloji_missing_rows, "warning", True),
+            ("Sondaj Paketi", generate_selected_sondaj_package, "success", True),
+            ("N30 Hesapla", lambda: (auto_spt_n30(), validate_workbook(show_status=True)), "secondary", True),
+        ]
+        for text, command, role, outline in automation_buttons:
+            self.modern_button(
+                generate_group,
+                text,
+                command=command,
+                role=role,
+                outline=outline,
+                padx=6,
+                pady=3,
+            ).pack(side="left", padx=2)
 
         def focus_initial_target():
             sheet_key = initial_sheet if initial_sheet in sheet_defs else None
