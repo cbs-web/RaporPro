@@ -1129,6 +1129,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
             self.lbl_pga.config(text=os.path.basename(self.img_pga) if self.img_pga else "-", foreground=COLOR_SUCCESS if self.img_pga else "#333")
         if hasattr(self, 'lbl_mjh'):
             self.lbl_mjh.config(text=os.path.basename(self.img_mjh) if self.img_mjh else "-", foreground=COLOR_SUCCESS if self.img_mjh else "#333")
+        if hasattr(self, "rapor_etiketlerini_guncelle"):
+            self.rapor_etiketlerini_guncelle()
             
         self.sondaj_tablosunu_ciz(); self.jeo_yenile(); self.mt_yenile()
         self.ozet_yenile(collect=False)

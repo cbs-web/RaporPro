@@ -100,6 +100,7 @@ from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kontrol import KontrolPaneliMixin
 from ui_jeofizik import JeofizikMixin
+from ui_rapor import RaporSekmesiMixin
 from ui_sondaj import SondajMixin
 from ui_proje_surumleri import ProjeSurumleriMixin
 from proje_arsiv import (
@@ -709,6 +710,29 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_rapor_hazirlik_ozeti_eksik_kaynaklari_uyarir(self):
+        state, text = RaporSekmesiMixin.rapor_hazirlik_ozeti(
+            template_ready=True,
+            lab_ready=False,
+            jeo_ready=False,
+            visual_ready=2,
+        )
+
+        self.assertEqual(state, "warning")
+        self.assertIn("laboratuvar", text)
+        self.assertIn("4 görsel", text)
+
+    def test_rapor_hazirlik_ozeti_tam_kaynaklari_hazir_sayar(self):
+        state, text = RaporSekmesiMixin.rapor_hazirlik_ozeti(
+            template_ready=True,
+            lab_ready=True,
+            jeo_ready=True,
+            visual_ready=6,
+        )
+
+        self.assertEqual(state, "ok")
+        self.assertIn("hazır", text)
+
     def test_jeofizik_sismik_durum_ozeti_tam_kaydi_hazir_sayar(self):
         state, summary = JeofizikMixin.jeofizik_ss_durum_ozeti(
             {

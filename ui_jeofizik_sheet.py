@@ -39,10 +39,14 @@ class JeofizikSheetMixin:
         if sheet_text:
             suffix = f" + {os.path.basename(path)}" if path else ""
             self.lbl_jeo_excel.config(text=f"{sheet_text}{suffix}", foreground=COLOR_SUCCESS if sheet_ready else COLOR_WARNING)
-        elif path:
+        elif path and os.path.isfile(path):
             self.lbl_jeo_excel.config(text=os.path.basename(path), foreground=COLOR_SUCCESS)
+        elif path:
+            self.lbl_jeo_excel.config(text=f"{os.path.basename(path)} (bulunamadı)", foreground=COLOR_WARNING)
         else:
             self.lbl_jeo_excel.config(text="Jeofizik Excel secilmedi", foreground="red")
+        if hasattr(self, "rapor_durum_guncelle"):
+            self.rapor_durum_guncelle()
 
     def _jeofizik_sheet_kaydet(self, rows):
         rows = jeofizik_sheet_rows_temizle(rows)

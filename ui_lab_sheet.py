@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from performans import perf_tracked
-from sabitler import COLOR_ACCENT, COLOR_DANGER, COLOR_SUCCESS, FONT_BOLD
+from sabitler import COLOR_ACCENT, COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
 
 
 LAB_SHEET_DEFAULT_ROWS = 80
@@ -49,10 +49,14 @@ class LabSheetMixin:
             row_count = len(lab_sheet_rows_temizle(self.veri.get("lab_sheet", {}).get("rows", [])))
             suffix = f" + {os.path.basename(path)}" if path else ""
             self.lbl_lab.config(text=f"LAB Sheet hazir ({row_count} satir){suffix}", foreground=COLOR_SUCCESS)
-        elif path:
+        elif path and os.path.isfile(path):
             self.lbl_lab.config(text=os.path.basename(path), foreground=COLOR_SUCCESS)
+        elif path:
+            self.lbl_lab.config(text=f"{os.path.basename(path)} (bulunamadı)", foreground=COLOR_WARNING)
         else:
             self.lbl_lab.config(text="Laboratuvar Excel seçilmedi", foreground="red")
+        if hasattr(self, "rapor_durum_guncelle"):
+            self.rapor_durum_guncelle()
 
     @perf_tracked("lab_sheet.open")
     def lab_sheet_ac(self):

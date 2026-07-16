@@ -13,7 +13,25 @@ from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
 from rapor_metin_revizyon import metin_revizyon_analiz_et, metin_revizyonlari_uygula
 from rapor_revizyon import revizyonlu_rapor_olustur
 from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
-from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, DEFAULT_EXPORT_DPI, FONT_BOLD
+from sabitler import (
+    COLOR_BG,
+    COLOR_BORDER,
+    COLOR_DANGER,
+    COLOR_PRIMARY,
+    COLOR_SUCCESS,
+    COLOR_SURFACE,
+    COLOR_TEXT_MUTED,
+    COLOR_WARNING,
+    DEFAULT_EXPORT_DPI,
+    FONT_BOLD,
+    FONT_UI_BODY,
+    FONT_UI_BODY_BOLD,
+    FONT_UI_SECTION,
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XS,
+)
 from performans import perf_tracked
 from proje_motoru import hesap_ozeti, proje_saglik_ozeti, rapor_onizleme_metni
 from kalite_kontrol import build_preflight_report
@@ -50,6 +68,94 @@ from yonetmelik_motoru import (
 
 
 class RaporSekmesiMixin:
+    @staticmethod
+    def rapor_hazirlik_ozeti(template_ready, lab_ready, jeo_ready, visual_ready, visual_total=6):
+        """Rapor kaynaklarının kısa durum metnini ve seviyesini döndür."""
+        source_ready = sum(bool(value) for value in (template_ready, lab_ready, jeo_ready))
+        visual_ready = max(0, min(int(visual_ready or 0), int(visual_total or 0)))
+        missing = []
+        if not template_ready:
+            missing.append("şablon")
+        if not lab_ready:
+            missing.append("laboratuvar")
+        if not jeo_ready:
+            missing.append("jeofizik")
+        if visual_ready < visual_total:
+            missing.append(f"{visual_total - visual_ready} görsel")
+        if missing:
+            return "warning", f"Kaynaklar {source_ready}/3 · Görseller {visual_ready}/{visual_total} · Eksik: {', '.join(missing)}"
+        return "ok", f"Rapor kaynakları hazır · Görseller {visual_ready}/{visual_total}"
+
+    def rapor_durum_guncelle(self):
+        def file_ready(path):
+            return bool(path and os.path.isfile(path))
+
+        template_ready = bool(rapor_sablonu_durumu(getattr(self, "word_path", None)).get("ready"))
+        lab_rows = self.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(self, "veri", None), dict) else []
+        lab_sheet_ready = any(any(str(cell).strip() for cell in row) for row in lab_rows or [])
+        lab_ready = lab_sheet_ready or file_ready(getattr(self, "lab_excel_path", None))
+        jeo_sheet_ready = bool(hasattr(self, "_jeofizik_sheet_ready") and self._jeofizik_sheet_ready())
+        jeo_ready = jeo_sheet_ready or file_ready(getattr(self, "jeo_excel_path", None))
+        visual_attrs = ("img_yer", "img_tkgm", "img_pga", "img_mjh", "word_img_sondaj", "word_img_jeofizik")
+        visual_ready = sum(file_ready(getattr(self, attr, None)) for attr in visual_attrs)
+        state, text = self.rapor_hazirlik_ozeti(
+            template_ready,
+            lab_ready,
+            jeo_ready,
+            visual_ready,
+            len(visual_attrs),
+        )
+        if hasattr(self, "rapor_durum_var"):
+            self.rapor_durum_var.set(text)
+            self.rapor_durum_label.configure(foreground=COLOR_SUCCESS if state == "ok" else COLOR_WARNING)
+        if hasattr(self, "rapor_gorsel_ozet_var"):
+            self.rapor_gorsel_ozet_var.set(f"{visual_ready}/{len(visual_attrs)} görsel hazır")
+        if hasattr(self, "lbl_sondaj_haritasi"):
+            path = getattr(self, "word_img_sondaj", None)
+            self.lbl_sondaj_haritasi.config(
+                text=os.path.basename(path) if file_ready(path) else ("Dosya bulunamadı" if path else "Hazırlanmadı"),
+                foreground=COLOR_SUCCESS if file_ready(path) else COLOR_WARNING,
+            )
+        if hasattr(self, "lbl_jeofizik_haritasi"):
+            path = getattr(self, "word_img_jeofizik", None)
+            self.lbl_jeofizik_haritasi.config(
+                text=os.path.basename(path) if file_ready(path) else ("Dosya bulunamadı" if path else "Hazırlanmadı"),
+                foreground=COLOR_SUCCESS if file_ready(path) else COLOR_WARNING,
+            )
+
+    def rapor_etiketlerini_guncelle(self):
+        self.rapor_sablon_etiketini_guncelle()
+        if hasattr(self, "_lab_label_guncelle"):
+            self._lab_label_guncelle()
+        elif hasattr(self, "lbl_lab"):
+            path = getattr(self, "lab_excel_path", None)
+            self.lbl_lab.config(
+                text=os.path.basename(path) if path else "Laboratuvar verisi seçilmedi",
+                foreground=COLOR_SUCCESS if path else COLOR_DANGER,
+            )
+        if hasattr(self, "_jeofizik_label_guncelle"):
+            self._jeofizik_label_guncelle()
+        elif hasattr(self, "lbl_jeo_excel"):
+            path = getattr(self, "jeo_excel_path", None)
+            self.lbl_jeo_excel.config(
+                text=os.path.basename(path) if path else "Jeofizik verisi seçilmedi",
+                foreground=COLOR_SUCCESS if path else COLOR_DANGER,
+            )
+        for attr, path in (
+            ("lbl_yer", getattr(self, "img_yer", None)),
+            ("lbl_tkgm", getattr(self, "img_tkgm", None)),
+            ("lbl_pga", getattr(self, "img_pga", None)),
+            ("lbl_mjh", getattr(self, "img_mjh", None)),
+        ):
+            if hasattr(self, attr):
+                ready = bool(path and os.path.isfile(path))
+                getattr(self, attr).config(
+                    text=os.path.basename(path) if ready else ("Dosya bulunamadı" if path else "Seçilmedi"),
+                    foreground=COLOR_SUCCESS if ready else COLOR_WARNING,
+                )
+        self.ek_etiketlerini_guncelle()
+        self.rapor_durum_guncelle()
+
     def rapor_sablon_etiketini_guncelle(self):
         """Etkin rapor şablonunu arayüzde kaynak türüyle birlikte göster."""
         info = rapor_sablonu_durumu(getattr(self, "word_path", None))
@@ -59,6 +165,8 @@ class RaporSekmesiMixin:
                 text += " (özel dosya bulunamadı)"
             color = COLOR_WARNING if info.get("fallback") else (COLOR_SUCCESS if info.get("ready") else "red")
             self.lbl_sab.config(text=text, foreground=color)
+        if hasattr(self, "rapor_durum_var"):
+            self.rapor_durum_guncelle()
         return info
 
     def dahili_rapor_sablonunu_kullan(self):
@@ -73,81 +181,64 @@ class RaporSekmesiMixin:
             self.set_status("Dahili rapor şablonu kullanılacak.", level="success")
         else:
             self.set_status("Dahili rapor şablonu bulunamadı.", level="error")
+        self.rapor_etiketlerini_guncelle()
 
     def p_rapor(self, p):
-        container = ttk.Frame(p)
-        container.pack(fill="both", expand=True)
-        canvas = tk.Canvas(container, bg=COLOR_BG, highlightthickness=0)
-        scroll = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        center_frame = ttk.Frame(canvas, padding=14)
-        content_window = canvas.create_window((0, 0), window=center_frame, anchor="n")
+        page = ttk.Frame(p, padding=(16, 12))
+        page.pack(fill="both", expand=True)
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(2, weight=1)
         file_labels = []
         drop_targets = []
 
-        def update_scrollregion(_event=None):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        def update_width(event=None):
-            width = event.width if event else canvas.winfo_width()
-            content_width = max(380, min(width - 26, 920))
-            canvas.itemconfigure(content_window, width=content_width)
-            canvas.coords(content_window, max(width / 2, content_width / 2), 0)
-            for label in file_labels:
-                try:
-                    label.configure(wraplength=max(260, content_width - 260))
-                except Exception:
-                    pass
-
-        center_frame.bind("<Configure>", update_scrollregion)
-        canvas.bind("<Configure>", update_width)
-
-        def file_row(parent, title, label_attr, empty_text, button_text, command):
-            row = ttk.Frame(parent)
-            row.pack(fill="x", pady=4)
-            ttk.Label(row, text=title, width=20, font=FONT_BOLD).pack(side="left", padx=(0, 8))
-            label = ttk.Label(row, text=empty_text, foreground="red", anchor="w", justify="left")
-            label.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        def source_row(parent, title, label_attr, empty_text, buttons):
+            row = tk.Frame(
+                parent,
+                bg=COLOR_SURFACE,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+                padx=SPACE_MD,
+                pady=SPACE_SM,
+            )
+            row.pack(fill="x", pady=(0, SPACE_XS))
+            row.columnconfigure(1, weight=1)
+            tk.Label(
+                row,
+                text=title,
+                bg=COLOR_SURFACE,
+                fg=COLOR_PRIMARY,
+                font=FONT_UI_BODY_BOLD,
+                width=18,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=(0, SPACE_SM))
+            label = tk.Label(
+                row,
+                text=empty_text,
+                bg=COLOR_SURFACE,
+                fg=COLOR_WARNING,
+                font=FONT_UI_BODY,
+                anchor="w",
+                justify="left",
+            )
+            label.grid(row=0, column=1, sticky="ew", padx=(0, SPACE_SM))
             file_labels.append(label)
             setattr(self, label_attr, label)
-            btn = self.modern_button(row, text=button_text, command=command, role="neutral", outline=True, width=18)
-            btn.pack(side="right")
-            self.tooltip_ekle(btn, f"{title} için dosya seç")
+            action_frame = tk.Frame(row, bg=COLOR_SURFACE)
+            action_frame.grid(row=0, column=2, sticky="e")
+            for text, command, role, outline in buttons:
+                self.modern_button(
+                    action_frame,
+                    text,
+                    command=command,
+                    role=role,
+                    outline=outline,
+                    padx=7,
+                    pady=4,
+                ).pack(side="left", padx=2)
             return row
 
-        def update_drop_label():
-            if hasattr(self, "lbl_rapor_drop"):
-                self.lbl_rapor_drop.config(text="Dosyaları buraya bırakabilirsiniz", foreground="#2874A6")
-
-        def refresh_report_labels():
-            self.rapor_sablon_etiketini_guncelle()
-            if hasattr(self, "lbl_lab"):
-                self.lbl_lab.config(
-                    text=os.path.basename(self.lab_excel_path) if self.lab_excel_path else "Laboratuvar Excel seçilmedi",
-                    foreground=COLOR_SUCCESS if self.lab_excel_path else "red",
-                )
-                if hasattr(self, "_lab_label_guncelle"):
-                    self._lab_label_guncelle()
-            if hasattr(self, "lbl_jeo_excel"):
-                self.lbl_jeo_excel.config(
-                    text=os.path.basename(self.jeo_excel_path) if self.jeo_excel_path else "Jeofizik Excel seçilmedi",
-                    foreground=COLOR_SUCCESS if self.jeo_excel_path else "red",
-                )
-                if hasattr(self, "_jeofizik_label_guncelle"):
-                    self._jeofizik_label_guncelle()
-            for attr, path in [
-                ("lbl_yer", self.img_yer),
-                ("lbl_tkgm", self.img_tkgm),
-                ("lbl_pga", self.img_pga),
-                ("lbl_mjh", self.img_mjh),
-            ]:
-                if hasattr(self, attr):
-                    label = getattr(self, attr)
-                    label.config(text=os.path.basename(path) if path else "-", foreground=COLOR_SUCCESS if path else "#555555")
-            self.ek_etiketlerini_guncelle()
+        def report_tab_select(tab):
+            self.rapor_main_notebook.select(tab)
 
         def assign_dropped_file(path):
             if not path or not os.path.exists(path):
@@ -204,7 +295,7 @@ class RaporSekmesiMixin:
                 message = assign_dropped_file(path)
                 if message:
                     messages.append(message)
-            refresh_report_labels()
+            self.rapor_etiketlerini_guncelle()
             if messages:
                 self.set_status("Rapor dosyaları eklendi: " + ", ".join(messages[:4]), level="success")
             else:
@@ -227,134 +318,298 @@ class RaporSekmesiMixin:
                 except Exception:
                     continue
             if enabled:
-                update_drop_label()
+                self.lbl_rapor_drop.config(text="Sürükle-bırak etkin", foreground=COLOR_SUCCESS)
 
-        header = ttk.Frame(center_frame)
-        header.pack(fill="x", pady=(0, 10))
-        ttk.Label(header, text="Rapor Hazırlığı", font=("Segoe UI", 15, "bold"), foreground=COLOR_PRIMARY).pack(side="left")
-        self.lbl_rapor_drop = ttk.Label(header, text="", foreground="#777777")
-        self.lbl_rapor_drop.pack(side="right")
+        header = ttk.Frame(page)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        header.columnconfigure(0, weight=1)
+        title_area = ttk.Frame(header)
+        title_area.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_area, text="Rapor ve Belgeler", style="PageTitle.TLabel").pack(anchor="w")
+        self.rapor_durum_var = tk.StringVar(value="Rapor kaynakları kontrol ediliyor")
+        self.rapor_durum_label = ttk.Label(title_area, textvariable=self.rapor_durum_var, style="Muted.TLabel")
+        self.rapor_durum_label.pack(anchor="w", pady=(2, 0))
+        self.lbl_rapor_drop = ttk.Label(header, text="", style="Muted.TLabel")
+        self.lbl_rapor_drop.grid(row=0, column=1, sticky="e")
+        ttk.Separator(page).grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
 
-        flow = ttk.LabelFrame(center_frame, text="Ana Akış", padding=12)
-        flow.pack(fill="x", pady=(0, 10))
-        drop_targets.extend([flow, center_frame, canvas])
-        template_row = file_row(flow, "Rapor Şablonu", "lbl_sab", "Dahili şablon hazırlanıyor...", "Özel Seç", self.sablon_sec)
-        builtin_btn = self.modern_button(
-            template_row,
-            text="Dahili Kullan",
-            command=self.dahili_rapor_sablonunu_kullan,
+        self.rapor_main_notebook = ttk.Notebook(page)
+        self.rapor_main_notebook.grid(row=2, column=0, sticky="nsew")
+        self.rapor_hazirlik_tab = ttk.Frame(self.rapor_main_notebook)
+        self.rapor_belgeler_tab = ttk.Frame(self.rapor_main_notebook)
+        self.rapor_ekler_tab = ttk.Frame(self.rapor_main_notebook)
+        self.rapor_main_notebook.add(self.rapor_hazirlik_tab, text="Rapor Hazırlığı")
+        self.rapor_main_notebook.add(self.rapor_belgeler_tab, text="Belgeler")
+        self.rapor_main_notebook.add(self.rapor_ekler_tab, text="Ekler")
+
+        preparation, _ = self.scrollable_page(self.rapor_hazirlik_tab, padding=(10, 8))
+        preparation.columnconfigure(0, weight=1)
+        source_box = ttk.LabelFrame(preparation, text="Veri Kaynakları", padding=(10, 8))
+        source_box.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        drop_targets.extend([page, source_box, self.rapor_hazirlik_tab])
+        source_row(
+            source_box,
+            "Rapor şablonu",
+            "lbl_sab",
+            "Dahili şablon hazırlanıyor",
+            [
+                ("Özel Seç", self.sablon_sec, "secondary", True),
+                ("Dahili Kullan", self.dahili_rapor_sablonunu_kullan, "accent", True),
+            ],
+        )
+        source_row(
+            source_box,
+            "Laboratuvar",
+            "lbl_lab",
+            "Laboratuvar verisi seçilmedi",
+            [
+                ("Excel Seç", self.lab_excel_sec, "secondary", True),
+                ("LAB Sheet", self.lab_sheet_ac, "accent", True),
+            ],
+        )
+        source_row(
+            source_box,
+            "Jeofizik",
+            "lbl_jeo_excel",
+            "Jeofizik verisi seçilmedi",
+            [
+                ("Excel Seç", self.jeo_excel_sec, "secondary", True),
+                ("Jeofizik Sheet", self.jeofizik_sheet_ac, "accent", True),
+            ],
+        )
+
+        visuals = ttk.LabelFrame(preparation, text="Rapor Görselleri", padding=(10, 8))
+        visuals.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+        drop_targets.append(visuals)
+        visual_header = ttk.Frame(visuals)
+        visual_header.pack(fill="x", pady=(0, SPACE_XS))
+        self.rapor_gorsel_ozet_var = tk.StringVar(value="0/6 görsel hazır")
+        ttk.Label(visual_header, textvariable=self.rapor_gorsel_ozet_var, style="Muted.TLabel").pack(side="right")
+        visual_grid = ttk.Frame(visuals)
+        visual_grid.pack(fill="x")
+        image_cards = []
+
+        def visual_card(title, label_attr, command, button_text="Seç"):
+            card = tk.Frame(
+                visual_grid,
+                bg=COLOR_SURFACE,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+                padx=SPACE_SM,
+                pady=SPACE_SM,
+            )
+            tk.Label(card, text=title, bg=COLOR_SURFACE, fg=COLOR_PRIMARY, font=FONT_UI_BODY_BOLD).pack(anchor="w")
+            label = tk.Label(
+                card,
+                text="Seçilmedi",
+                bg=COLOR_SURFACE,
+                fg=COLOR_WARNING,
+                font=FONT_UI_BODY,
+                anchor="w",
+            )
+            label.pack(fill="x", pady=(2, SPACE_XS))
+            setattr(self, label_attr, label)
+            file_labels.append(label)
+            self.modern_button(
+                card,
+                button_text,
+                command=command,
+                role="secondary",
+                outline=True,
+                padx=6,
+                pady=3,
+            ).pack(fill="x")
+            image_cards.append(card)
+
+        visual_card("Yerbuldurur", "lbl_yer", lambda: self.resim_sec("yer"))
+        visual_card("TKGM", "lbl_tkgm", lambda: self.resim_sec("tkgm"))
+        visual_card("PGA", "lbl_pga", lambda: self.resim_sec("pga"))
+        visual_card("Mühendislik Jeolojisi", "lbl_mjh", lambda: self.resim_sec("mjh"))
+        visual_card(
+            "Sondaj Haritası",
+            "lbl_sondaj_haritasi",
+            lambda: self.nb.select(self.tab_haritalar),
+            "Haritalara Git",
+        )
+        visual_card(
+            "Jeofizik Haritası",
+            "lbl_jeofizik_haritasi",
+            lambda: self.nb.select(self.tab_haritalar),
+            "Haritalara Git",
+        )
+        self.responsive_widget_grid(visual_grid, image_cards, min_width=210, max_cols=3, padx=4, pady=4)
+
+        report_actions = ttk.LabelFrame(preparation, text="Rapor İşlemleri", padding=(10, 8))
+        report_actions.grid(row=2, column=0, sticky="ew")
+        primary_actions = ttk.Frame(report_actions)
+        primary_actions.pack(fill="x")
+        self.modern_button(
+            primary_actions,
+            "Tamamlama Merkezi",
+            command=self.tamamlama_merkezi_penceresi,
+            role="warning",
+            outline=True,
+        ).pack(side="left", fill="x", expand=True, padx=(0, SPACE_XS))
+        self.modern_button(
+            primary_actions,
+            "Rapor Önizleme",
+            command=self.rapor_onizleme_penceresi,
             role="accent",
             outline=True,
-            width=14,
-        )
-        builtin_btn.pack(side="right", padx=(0, 6))
-        self.tooltip_ekle(builtin_btn, "Programa gömülü varsayılan rapor şablonunu kullan")
-        file_row(flow, "Lab Excel", "lbl_lab", "Laboratuvar Excel seçilmedi", "Seç", self.lab_excel_sec)
-        lab_sheet_row = ttk.Frame(flow)
-        lab_sheet_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(lab_sheet_row, text="", width=20).pack(side="left", padx=(0, 8))
-        lab_sheet_info = ttk.Label(lab_sheet_row, text="Excel'den kopyalayıp programa yapıştırmak için LAB Sheet'i açın.", foreground="#555555")
-        lab_sheet_info.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        lab_sheet_btn = self.modern_button(lab_sheet_row, text="LAB Sheet", command=self.lab_sheet_ac, role="accent", outline=True, width=18)
-        lab_sheet_btn.pack(side="right")
-        self.tooltip_ekle(lab_sheet_btn, "Laboratuvar verisini program içindeki sheet'e yapıştır")
-        file_row(flow, "Jeofizik Excel", "lbl_jeo_excel", "Jeofizik Excel seçilmedi", "Seç", self.jeo_excel_sec)
-        jeo_sheet_row = ttk.Frame(flow)
-        jeo_sheet_row.pack(fill="x", pady=(0, 4))
-        ttk.Label(jeo_sheet_row, text="", width=20).pack(side="left", padx=(0, 8))
-        jeo_sheet_info = ttk.Label(jeo_sheet_row, text="Sismik parametre Excel'ini kopyalayıp programa yapıştırmak için Jeofizik Sheet'i açın.", foreground="#555555")
-        jeo_sheet_info.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        jeo_sheet_btn = self.modern_button(jeo_sheet_row, text="Jeofizik Sheet", command=self.jeofizik_sheet_ac, role="accent", outline=True, width=18)
-        jeo_sheet_btn.pack(side="right")
-        self.tooltip_ekle(jeo_sheet_btn, "Jeofizik sismik parametre verisini program içindeki sheet'e yapıştır")
-
-        f_img = ttk.LabelFrame(center_frame, text="Görseller", padding=12)
-        f_img.pack(fill="x", pady=(0, 10))
-        drop_targets.append(f_img)
-        image_grid = ttk.Frame(f_img)
-        image_grid.pack(fill="x")
-        image_cards = []
-        for k, txt, cmd in [
-            ("yer", "Yerbuldurur", lambda: self.resim_sec("yer")),
-            ("tkgm", "TKGM", lambda: self.resim_sec("tkgm")),
-            ("pga", "PGA", lambda: self.resim_sec("pga")),
-            ("mjh", "MJH", lambda: self.resim_sec("mjh")),
-        ]:
-            card = ttk.Frame(image_grid)
-            l = ttk.Label(card, text="-", anchor="w", justify="left")
-            l.pack(fill="x", pady=(0, 4))
-            file_labels.append(l)
-            self.modern_button(card, text=txt, command=cmd, role="neutral", outline=True).pack(fill="x")
-            if k == "yer":
-                self.lbl_yer = l
-            elif k == "tkgm":
-                self.lbl_tkgm = l
-            elif k == "pga":
-                self.lbl_pga = l
-            elif k == "mjh":
-                self.lbl_mjh = l
-            image_cards.append(card)
-        self.responsive_widget_grid(image_grid, image_cards, min_width=180, max_cols=4, padx=4, pady=4)
-
-        actions = ttk.LabelFrame(center_frame, text="Rapor İşlemleri", padding=12)
-        actions.pack(fill="x", pady=(0, 10))
-        primary_row = ttk.Frame(actions)
-        primary_row.pack(fill="x")
-        self.modern_button(primary_row, text="Tamamlama Merkezi", command=self.tamamlama_merkezi_penceresi, role="warning").pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.modern_button(primary_row, text="Önizleme", command=self.rapor_onizleme_penceresi, role="accent").pack(side="left", fill="x", expand=True, padx=4)
+        ).pack(side="left", fill="x", expand=True, padx=SPACE_XS)
+        self.modern_button(
+            primary_actions,
+            "Raporu Oluştur",
+            command=self.raporla,
+            role="success",
+        ).pack(side="left", fill="x", expand=True, padx=(SPACE_XS, 0))
+        secondary_actions = ttk.Frame(report_actions)
+        secondary_actions.pack(fill="x", pady=(SPACE_SM, 0))
+        self.modern_button(
+            secondary_actions,
+            "Rapor Revizyon Merkezi",
+            command=self.rapor_revizyon_merkezi_birlesik_penceresi,
+            role="primary",
+            outline=True,
+        ).pack(side="left", fill="x", expand=True, padx=(0, SPACE_XS))
+        self.modern_button(
+            secondary_actions,
+            "Yönetmelik Merkezi",
+            command=self.yonetmelik_merkezi_penceresi,
+            role="secondary",
+            outline=True,
+        ).pack(side="left", fill="x", expand=True, padx=SPACE_XS)
         self.toolbar_menu(
-            primary_row,
-            "Gelişmiş",
+            secondary_actions,
+            "Diğer İşlemler",
             [
-                ("Yönetmelik Merkezi", self.yonetmelik_merkezi_penceresi),
-                ("Rapor Revizyon Merkezi", self.rapor_revizyon_merkezi_birlesik_penceresi),
                 ("Düzeltme Etiketleri", self.duzeltme_etiketleri_penceresi),
                 ("Sadece Grafikleri Çıkar", self.grafikleri_kaydet),
+                ("Belgeler Sekmesine Git", lambda: report_tab_select(self.rapor_belgeler_tab)),
+                ("Ekler Sekmesine Git", lambda: report_tab_select(self.rapor_ekler_tab)),
             ],
             bg="#ECF0F1",
             fg="#111111",
             role="secondary",
-            tooltip="Rapor ek işlemleri",
+            tooltip="Rapor için ek işlemler",
         )
 
-        btn_rapor = self.modern_button(
-            center_frame,
-            text="Raporu Oluştur",
-            role="success",
-            pady=10,
-            command=self.raporla,
-        )
-        btn_rapor.pack(fill="x", pady=(0, 12))
-        self.tooltip_ekle(btn_rapor, "Ön kontrol uygunsa Word raporunu üretir")
-        taahhut = ttk.LabelFrame(center_frame, text="Taahhütnameler", padding=12)
-        taahhut.pack(fill="x", pady=(0, 10))
-        taahhut_row = ttk.Frame(taahhut)
-        taahhut_row.pack(fill="x")
-        self.modern_button(taahhut_row, text="Jeoloji", command=lambda: self.taahhutname_kaydet("jeoloji"), role="primary", outline=True).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.modern_button(taahhut_row, text="Jeofizik", command=lambda: self.taahhutname_kaydet("jeofizik"), role="accent", outline=True).pack(side="left", fill="x", expand=True, padx=4)
-        self.modern_button(taahhut_row, text="İkisini Oluştur", command=self.taahhutnameleri_kaydet, role="success").pack(side="left", fill="x", expand=True, padx=(4, 0))
-        ttk.Label(
+        documents, _ = self.scrollable_page(self.rapor_belgeler_tab, padding=(10, 8))
+        documents.columnconfigure(0, weight=1)
+        taahhut = ttk.LabelFrame(documents, text="Taahhütnameler", padding=(12, 10))
+        taahhut.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        taahhut.columnconfigure((0, 1, 2), weight=1)
+        self.modern_button(
             taahhut,
-            text="Yapı adresi ve yapı sahibinin adresi proje künyesindeki Mahalle / İlçe / İl bilgisinden alınır.",
-            foreground="#555555",
-        ).pack(anchor="w", pady=(8, 0))
+            "Jeoloji Taahhütnamesi",
+            command=lambda: self.taahhutname_kaydet("jeoloji"),
+            role="primary",
+            outline=True,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, SPACE_XS))
+        self.modern_button(
+            taahhut,
+            "Jeofizik Taahhütnamesi",
+            command=lambda: self.taahhutname_kaydet("jeofizik"),
+            role="accent",
+            outline=True,
+        ).grid(row=0, column=1, sticky="ew", padx=SPACE_XS)
+        self.modern_button(
+            taahhut,
+            "İkisini Oluştur",
+            command=self.taahhutnameleri_kaydet,
+            role="success",
+        ).grid(row=0, column=2, sticky="ew", padx=(SPACE_XS, 0))
 
-        ekler = ttk.LabelFrame(center_frame, text="Ekler", padding=12)
-        ekler.pack(fill="x", pady=(0, 10))
-        drop_targets.append(ekler)
-        ek_action_row = ttk.Frame(ekler)
-        ek_action_row.pack(fill="x")
-        self.modern_button(ek_action_row, text="Normal Ekler", command=lambda: self.ekler_merkezi_penceresi(EK_SET_NORMAL), role="primary", outline=True).pack(side="left", fill="x", expand=True, padx=(0, 5))
-        self.modern_button(ek_action_row, text="Arazi Deneyli Ekler", command=lambda: self.ekler_merkezi_penceresi(EK_SET_ARAZI_DENEYLI), role="accent", outline=True).pack(side="left", fill="x", expand=True, padx=5)
-        self.modern_button(ek_action_row, text="Tutanak Oluştur", command=self.tutanaklari_kaydet, role="warning", outline=True).pack(side="left", fill="x", expand=True, padx=5)
-        self.modern_button(ek_action_row, text="Ekler PDF Oluştur", command=self.ekler_pdf_kaydet, role="success").pack(side="left", fill="x", expand=True, padx=(5, 0))
-        ek_status_row = ttk.Frame(ekler)
-        ek_status_row.pack(fill="x", pady=(8, 0))
-        self.lbl_ek_durum = ttk.Label(ek_status_row, text="-", foreground="#555555")
-        self.lbl_ek_durum.pack(side="left", fill="x", expand=True)
-        refresh_report_labels()
+        tutanak = ttk.LabelFrame(documents, text="Sondaj Tutanakları", padding=(12, 10))
+        tutanak.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+        self.modern_button(
+            tutanak,
+            "Tutanakları Oluştur",
+            command=self.tutanaklari_kaydet,
+            role="warning",
+            outline=True,
+        ).pack(fill="x")
+
+        revision = ttk.LabelFrame(documents, text="İdare Düzeltmeleri", padding=(12, 10))
+        revision.grid(row=2, column=0, sticky="ew")
+        revision.columnconfigure((0, 1, 2), weight=1)
+        self.modern_button(
+            revision,
+            "Revizyon Merkezi",
+            command=self.rapor_revizyon_merkezi_birlesik_penceresi,
+            role="primary",
+        ).grid(row=0, column=0, sticky="ew", padx=(0, SPACE_XS))
+        self.modern_button(
+            revision,
+            "Düzeltme Etiketleri",
+            command=self.duzeltme_etiketleri_penceresi,
+            role="secondary",
+            outline=True,
+        ).grid(row=0, column=1, sticky="ew", padx=SPACE_XS)
+        self.modern_button(
+            revision,
+            "Yönetmelik Merkezi",
+            command=self.yonetmelik_merkezi_penceresi,
+            role="secondary",
+            outline=True,
+        ).grid(row=0, column=2, sticky="ew", padx=(SPACE_XS, 0))
+
+        annexes, _ = self.scrollable_page(self.rapor_ekler_tab, padding=(10, 8))
+        annexes.columnconfigure(0, weight=1)
+        drop_targets.append(self.rapor_ekler_tab)
+        status_box = tk.Frame(
+            annexes,
+            bg=COLOR_SURFACE,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+            padx=SPACE_MD,
+            pady=SPACE_MD,
+        )
+        status_box.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        tk.Label(
+            status_box,
+            text="Ek Dosyalarının Durumu",
+            bg=COLOR_SURFACE,
+            fg=COLOR_PRIMARY,
+            font=FONT_UI_SECTION,
+        ).pack(anchor="w")
+        self.lbl_ek_durum = tk.Label(
+            status_box,
+            text="-",
+            bg=COLOR_SURFACE,
+            fg=COLOR_TEXT_MUTED,
+            font=FONT_UI_BODY,
+            justify="left",
+            anchor="w",
+        )
+        self.lbl_ek_durum.pack(fill="x", pady=(3, 0))
+
+        annex_actions = ttk.LabelFrame(annexes, text="Ek İşlemleri", padding=(12, 10))
+        annex_actions.grid(row=1, column=0, sticky="ew")
+        annex_actions.columnconfigure((0, 1, 2), weight=1)
+        self.modern_button(
+            annex_actions,
+            "Normal Ekler",
+            command=lambda: self.ekler_merkezi_penceresi(EK_SET_NORMAL),
+            role="primary",
+            outline=True,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, SPACE_XS))
+        self.modern_button(
+            annex_actions,
+            "Arazi Deneyli Ekler",
+            command=lambda: self.ekler_merkezi_penceresi(EK_SET_ARAZI_DENEYLI),
+            role="accent",
+            outline=True,
+        ).grid(row=0, column=1, sticky="ew", padx=SPACE_XS)
+        self.modern_button(
+            annex_actions,
+            "Ekler PDF Oluştur",
+            command=self.ekler_pdf_kaydet,
+            role="success",
+        ).grid(row=0, column=2, sticky="ew", padx=(SPACE_XS, 0))
+
+        self.rapor_etiketlerini_guncelle()
         enable_report_drop()
-        self.root.after_idle(update_width)
 
     @perf_tracked("report.preview")
     def rapor_onizleme_penceresi(self):
@@ -376,6 +631,7 @@ class RaporSekmesiMixin:
             self.word_path = f
             self.veri.setdefault("dosyalar", {})["word_path"] = f
             self.rapor_sablon_etiketini_guncelle()
+            self.rapor_durum_guncelle()
             self.set_status(f"Özel rapor şablonu seçildi: {os.path.basename(f)}", level="success")
 
     def lab_excel_sec(self):
@@ -386,6 +642,7 @@ class RaporSekmesiMixin:
                 self._lab_label_guncelle()
             else:
                 self.lbl_lab.config(text=os.path.basename(f), foreground=COLOR_SUCCESS)
+            self.rapor_durum_guncelle()
 
     def jeo_excel_sec(self):
         f = filedialog.askopenfilename(filetypes=[("Excel Dosyaları", "*.xlsx;*.xls;*.csv")])
@@ -395,6 +652,7 @@ class RaporSekmesiMixin:
                 self._jeofizik_label_guncelle()
             else:
                 self.lbl_jeo_excel.config(text=os.path.basename(f), foreground=COLOR_SUCCESS)
+            self.rapor_durum_guncelle()
 
     def resim_sec(self, tur):
         f = filedialog.askopenfilename(filetypes=[("Resim", "*.jpg;*.png;*.jpeg")])
@@ -412,6 +670,7 @@ class RaporSekmesiMixin:
             elif tur == "mjh":
                 self.img_mjh = f
                 self.lbl_mjh.config(text=t, foreground=COLOR_SUCCESS)
+            self.rapor_durum_guncelle()
 
     def ek_etiketlerini_guncelle(self):
         if not hasattr(self, "lbl_ek_durum"):
@@ -427,6 +686,8 @@ class RaporSekmesiMixin:
             text=f"Otomatik seçim: {label} ({os.path.basename(source) if source else 'dosya yok'}) - {file_count} bağlı dosya - {template_state}",
             foreground=COLOR_SUCCESS if source and os.path.exists(source) else "red",
         )
+        if hasattr(self, "rapor_durum_var"):
+            self.rapor_durum_guncelle()
 
     def ek_dosyasi_sec(self, tur):
         f = filedialog.askopenfilename(filetypes=[("Ek Dosyaları", "*.doc;*.docx;*.pdf"), ("Tüm Dosyalar", "*.*")])
