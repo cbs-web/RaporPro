@@ -99,6 +99,7 @@ from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kontrol import KontrolPaneliMixin
+from ui_jeofizik import JeofizikMixin
 from ui_sondaj import SondajMixin
 from ui_proje_surumleri import ProjeSurumleriMixin
 from proje_arsiv import (
@@ -708,6 +709,45 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_jeofizik_sismik_durum_ozeti_tam_kaydi_hazir_sayar(self):
+        state, summary = JeofizikMixin.jeofizik_ss_durum_ozeti(
+            {
+                "coords": ["40.1", "26.1", "40.2", "26.2", "40.3", "26.3"],
+                "layers": [{"vp": "500", "vs": "220", "h": "4", "rho": "1.9"}],
+            }
+        )
+
+        self.assertEqual(state, "ok")
+        self.assertIn("1 tabaka", summary)
+
+    def test_jeofizik_sismik_durum_ozeti_eksik_koordinati_uyarir(self):
+        state, summary = JeofizikMixin.jeofizik_ss_durum_ozeti(
+            {
+                "coords": ["40.1", "26.1", "", "", "", ""],
+                "layers": [{"vp": "500", "vs": "220", "h": "4", "rho": "1.9"}],
+            }
+        )
+
+        self.assertEqual(state, "warning")
+        self.assertIn("2/6", summary)
+
+    def test_jeofizik_mt_durum_ozeti_tam_kaydi_hazir_sayar(self):
+        state, summary = JeofizikMixin.jeofizik_mt_durum_ozeti(
+            {
+                "y": "40.1",
+                "x": "26.1",
+                "freq": "1.2",
+                "to": "0.83",
+                "ta": "0.20",
+                "tb": "0.60",
+                "hv": "2.4",
+                "sure": "20",
+            }
+        )
+
+        self.assertEqual(state, "ok")
+        self.assertIn("hazır", summary)
+
     def test_koordinat_penceresi_windows_tam_ekran_yontemini_kullanir(self):
         window = SimpleNamespace(
             state=mock.Mock(),
