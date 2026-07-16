@@ -22,6 +22,26 @@ if HGM_ORTOFOTO_TILE_URL:
     TILE_SERVERS["HGM Ortofoto"] = {"url": HGM_ORTOFOTO_TILE_URL, "max_zoom": 22}
 
 
+def pencereyi_tam_ekran_yap(win):
+    """Pencereyi işletim sisteminin desteklediği yöntemle büyüt."""
+    try:
+        win.state("zoomed")
+        return
+    except Exception:
+        pass
+    try:
+        win.attributes("-zoomed", True)
+        return
+    except Exception:
+        pass
+    try:
+        width = win.winfo_screenwidth()
+        height = win.winfo_screenheight()
+        win.geometry(f"{width}x{height}+0+0")
+    except Exception:
+        pass
+
+
 def ensure_hgm_tile_headers():
     requests_module = getattr(tkintermapview_map_widget, "requests", None)
     if requests_module is None or getattr(requests_module.get, "_raporpro_hgm_headers", False):
@@ -45,6 +65,7 @@ class TopluHarita(tk.Toplevel):
         super().__init__(master)
         self.title("CBS - Toplu Koordinat ve Serim Seçimi")
         self.geometry("1300x800")
+        self.after_idle(lambda: pencereyi_tam_ekran_yap(self))
         self.kml_path = kml_path
         self.map_data = map_data or {"sondaj": [], "ss": [], "mt": []}
         self.initial_results = self.map_data.get("initial", {})

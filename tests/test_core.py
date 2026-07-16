@@ -94,6 +94,7 @@ from ekler import (
 )
 from harita_cikti import eski_paylasimli_temp_harita_yolu_mu, yeni_harita_cikti_yolu
 from harita_ayarlari import hgm_ortofoto_url_kaydet, hgm_ortofoto_url_yukle
+from harita_motoru import pencereyi_tam_ekran_yap
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, ss_harita_etiketi
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
@@ -707,6 +708,32 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_koordinat_penceresi_windows_tam_ekran_yontemini_kullanir(self):
+        window = SimpleNamespace(
+            state=mock.Mock(),
+            attributes=mock.Mock(),
+            geometry=mock.Mock(),
+        )
+
+        pencereyi_tam_ekran_yap(window)
+
+        window.state.assert_called_once_with("zoomed")
+        window.attributes.assert_not_called()
+        window.geometry.assert_not_called()
+
+    def test_koordinat_penceresi_tam_ekran_yedek_geometrisini_kullanir(self):
+        window = SimpleNamespace(
+            state=mock.Mock(side_effect=RuntimeError),
+            attributes=mock.Mock(side_effect=RuntimeError),
+            winfo_screenwidth=mock.Mock(return_value=1920),
+            winfo_screenheight=mock.Mock(return_value=1080),
+            geometry=mock.Mock(),
+        )
+
+        pencereyi_tam_ekran_yap(window)
+
+        window.geometry.assert_called_once_with("1920x1080+0+0")
+
     def test_buton_ikon_eslemesi_yenile_ve_yeni_metinlerini_ayirir(self):
         icons = IconManager()
 
