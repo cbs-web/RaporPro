@@ -12,6 +12,7 @@ from task_engine import TkTaskEngine
 from widgets import UndoRedoEntry
 
 from ui_cikti import CiktiMerkeziMixin
+from ui_gorev_merkezi import GorevMerkeziMixin
 from ui_haritalar import HaritalarSekmesiMixin
 from ui_jeofizik import JeofizikMixin
 from ui_jeofizik_sheet import JeofizikSheetMixin
@@ -43,7 +44,7 @@ AUTOSAVE_PATH = str(
 AUTOSAVE_DIR = os.path.dirname(AUTOSAVE_PATH)
 # ============================================================================
 # ÖZEL SPT VERİ GİRİŞ PENCERESİ (OTOMATİK HESAPLAMA VE DERİNLİK ARTIŞI)
-class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
+class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
     @perf_tracked("ui.__init__")
     def __init__(self, root):
         self.root = root
@@ -80,7 +81,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
             self.root,
             status_callback=self.set_status,
             state_callback=self._task_engine_state_changed,
-            max_workers=2,
+            max_workers=3,
         )
         self._startup_yonetmelik_error = None
         try:
@@ -266,6 +267,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
             None,
             ("Kaydet", self.veri_kaydet),
             ("Farklı Kaydet", self.proje_farkli_kaydet),
+            ("Taşınabilir Proje Paketi", self.tasinabilir_proje_paketi_olustur),
             ("Kurtarma Kaydını Aç", self.otomatik_kayit_yukle),
             ("Sürüm Geçmişi", self.surum_gecmisi_penceresi),
             None,
@@ -284,6 +286,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         self.toolbar_menu(toolbar, "Kontrol", [
             ("Tamamlama Merkezi", self.tamamlama_merkezi_penceresi),
             ("Proje Özeti", lambda: self._workflow_git("ozet")),
+            ("Görev Merkezi", self.gorev_merkezi_penceresi),
             ("Günlükler", self.gunluk_penceresi),
         ], bg="#FADBD8", tooltip="Eksikleri ve rapor hazırlığını kontrol eder", role="warning")
         self.toolbar_menu(toolbar, "Çıktı", [
@@ -314,7 +317,9 @@ class RaporRobotuArayuz(ArayuzTemelMixin, ArayuzProjeMixin, ProjeSurumleriMixin,
         self.tooltip_ekle(self.autosave_status_label, "Otomatik kayıt ve proje kayıt durumunu gösterir")
         self.task_status_label = tk.Label(toolbar, textvariable=self.task_status_var, bg="#E9EEF2", fg="#333333", font=("Arial", 8, "bold"))
         self.task_status_label.pack(side="right", padx=10)
-        self.tooltip_ekle(self.task_status_label, "Arka planda çalışan uzun işlemleri gösterir")
+        self.task_status_label.configure(cursor="hand2")
+        self.task_status_label.bind("<Button-1>", lambda _event: self.gorev_merkezi_penceresi())
+        self.tooltip_ekle(self.task_status_label, "Arka plan görevlerini açmak için tıklayın")
         
         main_splitter = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashwidth=4, bg=COLOR_BG)
         main_splitter.pack(fill="both", expand=True)

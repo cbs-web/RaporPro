@@ -25,6 +25,12 @@ from proje_surumleri import (
     surum_kaydi_olustur,
 )
 from proje_sema import PROJE_SEMA_SURUMU, proje_verisini_migre_et
+from proje_paketi import (
+    paket_proje_mi,
+    paket_proje_verisini_kayda_hazirla,
+    paket_proje_verisini_yukle,
+    proje_paketi_olustur,
+)
 from rapor_sablonu import etkin_rapor_sablonu_yolu
 from kalite_kontrol import backup_project_file
 from workbook_motoru import (
@@ -164,6 +170,7 @@ class ArayuzProjeMixin:
         with perf_timer("project.open_read_apply"):
             with open(dosya_yolu, 'r', encoding='utf-8') as f:
                 yuklenen_veri = json.load(f)
+            yuklenen_veri = paket_proje_verisini_yukle(yuklenen_veri, dosya_yolu)
             yuklenen_veri, migrasyon = self.proje_verisini_hazirla(yuklenen_veri)
             self.veri = yuklenen_veri
             self.aktif_dosya_yolu = dosya_yolu
@@ -255,6 +262,69 @@ class ArayuzProjeMixin:
         refresh()
         if self.recent_projects:
             lb.selection_set(0)
+
+    def tasinabilir_proje_paketi_olustur(self):
+        """Acik projeyi bagli dosyalariyla baska bilgisayarda acilabilir hale getir."""
+        self.guncelle_veri_objesi(silent=True)
+        if not self.aktif_dosya_yolu:
+            messagebox.showinfo(
+                "Taşınabilir Proje Paketi",
+                "Paket oluşturabilmek için proje önce bir kez kaydedilmelidir.",
+            )
+            if not self.proje_farkli_kaydet():
+                return
+        parent_dir = filedialog.askdirectory(
+            title="Taşınabilir proje paketinin oluşturulacağı klasörü seçin",
+        )
+        if not parent_dir:
+            return
+
+        veri_snapshot = copy.deepcopy(self.veri)
+        source_project_path = self.aktif_dosya_yolu
+
+        def completed(info):
+            self.recent_project_ekle(info["project_path"])
+            missing = info.get("missing", [])
+            message = (
+                "Taşınabilir proje paketi hazır.\n\n"
+                f"Klasör: {info['folder']}\n"
+                f"Kopyalanan dosya: {info['copied_file_count']}\n"
+                f"Paketlenen bağlantı: {info['reference_count']}\n"
+                f"Eksik bağlantı: {len(missing)}"
+            )
+            self.set_status(
+                f"Taşınabilir proje paketi oluşturuldu: {os.path.basename(info['folder'])}",
+                level="warning" if missing else "success",
+            )
+            if missing:
+                first = "\n".join(
+                    f"- {item.get('value', '-')}"
+                    for item in missing[:8]
+                )
+                suffix = f"\n- ... ve {len(missing) - 8} bağlantı daha" if len(missing) > 8 else ""
+                messagebox.showwarning(
+                    "Taşınabilir Proje Paketi",
+                    f"{message}\n\nBulunamayan ilk bağlantılar:\n{first}{suffix}",
+                )
+            else:
+                messagebox.showinfo("Taşınabilir Proje Paketi", message)
+
+        self.arka_plan_gorevi_baslat(
+            "Taşınabilir proje paketi",
+            proje_paketi_olustur,
+            veri_snapshot,
+            source_project_path,
+            parent_dir,
+            with_context=True,
+            resource="project-files",
+            status_start="Proje ve bağlı dosyalar paketleniyor.",
+            status_success="Taşınabilir proje paketi hazır.",
+            status_error="Taşınabilir proje paketi oluşturulamadı: {error}",
+            status_cancel="Taşınabilir proje paketi iptal edildi.",
+            on_success=completed,
+            on_error=lambda exc: messagebox.showerror("Taşınabilir Proje Paketi", str(exc)),
+        )
+        self.gorev_merkezi_penceresi()
 
     def kisayol_calistir(self, command):
         try:
@@ -484,6 +554,8 @@ class ArayuzProjeMixin:
             title = f"Zemin Rapor Pro - {os.path.basename(self.aktif_dosya_yolu)}"
         else:
             title = "Zemin Rapor Pro - Yeni Proje"
+        if paket_proje_mi(self.veri):
+            title += " [TAŞINABİLİR]"
         if self.proje_kilitli_mi():
             title += " [KİLİTLİ]"
         self.root.title(title)
@@ -586,7 +658,8 @@ class ArayuzProjeMixin:
                 backup_path, backup_error = backup_project_file(self.aktif_dosya_yolu, keep=self.get_yedek_sayisi())
                 if backup_error:
                     self.set_status(f"Yedekleme uyarısı: {backup_error}", level="warning")
-                atomic_json_dump(self.veri, self.aktif_dosya_yolu, indent=4, ensure_ascii=False)
+                kayit_verisi = paket_proje_verisini_kayda_hazirla(self.veri, self.aktif_dosya_yolu)
+                atomic_json_dump(kayit_verisi, self.aktif_dosya_yolu, indent=4, ensure_ascii=False)
                 self.proje_surum_kaydi_yaz("Proje kaydedildi")
                 self.kayit_imzasi_guncelle()
                 self.set_status(f"Kaydedildi: {os.path.basename(self.aktif_dosya_yolu)}", level="success")
@@ -626,7 +699,8 @@ class ArayuzProjeMixin:
                 backup_path, backup_error = backup_project_file(dosya_yolu, keep=self.get_yedek_sayisi())
                 if backup_error:
                     self.set_status(f"Yedekleme uyarısı: {backup_error}", level="warning")
-                atomic_json_dump(self.veri, dosya_yolu, indent=4, ensure_ascii=False)
+                kayit_verisi = paket_proje_verisini_kayda_hazirla(self.veri, dosya_yolu)
+                atomic_json_dump(kayit_verisi, dosya_yolu, indent=4, ensure_ascii=False)
                 if onceki_proje_yolu and os.path.normcase(os.path.abspath(onceki_proje_yolu)) != os.path.normcase(os.path.abspath(dosya_yolu)):
                     try:
                         surum_deposunu_kopyala(onceki_proje_yolu, dosya_yolu)
@@ -634,7 +708,7 @@ class ArayuzProjeMixin:
                         log_exception("project.version.copy", exc_value=exc)
                 self.aktif_dosya_yolu = dosya_yolu
                 self.proje_surum_kaydi_yaz("Farklı kaydet" if onceki_proje_yolu else "İlk proje kaydı")
-                self.root.title(f"Zemin Rapor Pro - {os.path.basename(dosya_yolu)}")
+                self.proje_baslik_guncelle()
                 self.kayit_imzasi_guncelle()
                 self.set_status(f"Yeni proje olarak kaydedildi: {dosya_yolu}", level="success")
                 self.last_save_time = datetime.datetime.now()

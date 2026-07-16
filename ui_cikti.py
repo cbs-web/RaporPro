@@ -1,3 +1,4 @@
+import copy
 import datetime
 import os
 import shutil
@@ -30,6 +31,7 @@ from sabitler import (
     SPACE_XS,
 )
 from taahhutname import tum_taahhutnameleri_olustur
+from task_engine import TaskCancelledError
 from tutanaklar import tutanak_dosya_adi, tutanaklari_olustur
 from ekler import EK_SET_ARAZI_DENEYLI, EK_SET_NORMAL, ek_icerik_haritasi, ek_pdf_dosya_adi, ekler_pdf_olustur
 from tutarlilik_ortak import koordinat_durumu, sayi_veya_none
@@ -508,6 +510,10 @@ class CiktiMerkeziMixin:
         refresh_readiness()
 
     def cikti_merkezi_baslat(self, config):
+        config = dict(config)
+        config["veri_snapshot"] = copy.deepcopy(self.veri)
+        config["map_sources"] = list(self.cikti_merkezi_harita_kaynaklari())
+        config["report_image_sources"] = list(self.cikti_merkezi_rapor_gorselleri())
         total = 0
         if config.get("report"):
             total += 1
@@ -531,6 +537,7 @@ class CiktiMerkeziMixin:
         detail_var = tk.StringVar(value=f"0 / {total}")
         progress_var = tk.DoubleVar(value=0)
         cancel_state = {"cancelled": False}
+        task_handle = {"value": None}
 
         body = ttk.Frame(progress_win, padding=SPACE_LG)
         body.pack(fill="both", expand=True)
@@ -563,6 +570,13 @@ class CiktiMerkeziMixin:
 
         def cancel():
             cancel_state["cancelled"] = True
+            handle = task_handle.get("value")
+            if handle is not None:
+                engine = getattr(self, "task_engine", None)
+                if engine is not None:
+                    engine.cancel(handle.task_id)
+                else:
+                    handle.cancel()
             status_var.set("İptal ediliyor...")
             cancel_btn.config(state="disabled")
 
@@ -607,19 +621,31 @@ class CiktiMerkeziMixin:
         }
         progress_win.protocol("WM_DELETE_WINDOW", cancel)
         self.set_status("Çıktı Merkezi başlatıldı.", level="info")
-        self.arka_plan_gorevi_baslat(
+        task_handle["value"] = self.arka_plan_gorevi_baslat(
             "Çıktı Merkezi",
             self.cikti_merkezi_threaded,
             config,
             progress,
             cancel_state,
+            with_context=True,
+            resource="render",
             status_start="Çıktı Merkezi arka planda başlatıldı.",
             status_success="Çıktı Merkezi işlemi bitti.",
             status_error="Çıktı Merkezi tamamlanamadı: {error}",
+            status_cancel="Çıktı Merkezi iptal edildi.",
+            on_cancel=lambda: self.cikti_merkezi_bitti(
+                progress,
+                progress.get("cancel_message", "Çıktı Merkezi iptal edildi."),
+                "warning",
+            ),
             on_error=lambda exc: self.cikti_merkezi_bitti(progress, str(exc), "error"),
         )
 
     def cikti_merkezi_progress(self, progress, done, text):
+        task_context = progress.get("task_context") if progress else None
+        if task_context is not None:
+            task_context.report(done, progress.get("total", 0), text)
+
         def apply_update():
             try:
                 win = progress.get("window")
@@ -694,9 +720,10 @@ class CiktiMerkeziMixin:
             ("MJH", getattr(self, "img_mjh", None)),
         ]
 
-    def cikti_merkezi_kesit_sondajlari(self):
-        options = dict(self.veri.get("kesit_ayarlari", {}) or {})
-        sondajlar = self.veri.get("sondaj", [])
+    def cikti_merkezi_kesit_sondajlari(self, veri=None):
+        veri = veri if isinstance(veri, dict) else self.veri
+        options = dict(veri.get("kesit_ayarlari", {}) or {})
+        sondajlar = veri.get("sondaj", [])
         selected_names = options.get("selected_sondajlar") or []
         selected = [s for s in sondajlar if s.get("no", "") in selected_names]
         if len(selected) < 2:
@@ -743,14 +770,31 @@ class CiktiMerkeziMixin:
         return summary_path
 
     @perf_tracked("outputs.center_export")
-    def cikti_merkezi_threaded(self, config, progress, cancel_state):
+    def cikti_merkezi_threaded(self, config, progress, cancel_state, task_context=None):
         done = 0
         saved_files = []
         errors = []
         base_folder = config["base_folder"]
+        veri_snapshot = config.get("veri_snapshot")
+        if not isinstance(veri_snapshot, dict):
+            veri_snapshot = copy.deepcopy(self.veri)
+        map_sources = config.get("map_sources")
+        if not isinstance(map_sources, list):
+            map_sources = list(self.cikti_merkezi_harita_kaynaklari())
+        report_image_sources = config.get("report_image_sources")
+        if not isinstance(report_image_sources, list):
+            report_image_sources = list(self.cikti_merkezi_rapor_gorselleri())
         fmt = config.get("format", "jpg")
         ext = "jpg" if fmt in ("jpg", "jpeg") else fmt
         dpi = config.get("dpi", 300)
+        progress["task_context"] = task_context
+
+        def is_cancelled():
+            return bool(
+                cancel_state.get("cancelled")
+                or (task_context is not None and task_context.cancelled)
+            )
+
         try:
             folders = {
                 "report": os.path.join(base_folder, "00_Rapor"),
@@ -775,7 +819,7 @@ class CiktiMerkeziMixin:
                 if enabled:
                     os.makedirs(folders[key], exist_ok=True)
 
-            if config.get("report") and not cancel_state.get("cancelled"):
+            if config.get("report") and not is_cancelled():
                 self.cikti_merkezi_progress(progress, done, "Ana Word raporu hazırlanıyor...")
                 context = config.get("report_context")
                 if context is None:
@@ -799,14 +843,14 @@ class CiktiMerkeziMixin:
                 self.cikti_merkezi_progress(progress, done, "Ana rapor adımı tamamlandı")
 
             if config.get("logs"):
-                for idx, sondaj in enumerate(self.veri.get("sondaj", []), start=1):
-                    if cancel_state.get("cancelled"):
+                for idx, sondaj in enumerate(veri_snapshot.get("sondaj", []), start=1):
+                    if is_cancelled():
                         break
                     sondaj_no = sondaj.get("no") or f"SK-{idx}"
                     self.cikti_merkezi_progress(progress, done, f"Log hazırlanıyor: {sondaj_no}")
                     figures = []
                     try:
-                        figures = GeoEngine.ciz_profesyonel_log(sondaj, self.veri)
+                        figures = GeoEngine.ciz_profesyonel_log(sondaj, veri_snapshot)
                         safe_no = self._guvenli_dosya_adi(sondaj_no, f"SK_{idx}")
                         for page_idx, fig in enumerate(figures, start=1):
                             suffix = f"_Sayfa{page_idx}" if len(figures) > 1 else ""
@@ -824,9 +868,9 @@ class CiktiMerkeziMixin:
                     done += 1
                     self.cikti_merkezi_progress(progress, done, f"Log kaydedildi: {sondaj_no}")
 
-            if config.get("section") and not cancel_state.get("cancelled"):
+            if config.get("section") and not is_cancelled():
                 self.cikti_merkezi_progress(progress, done, "Kesit hazırlanıyor...")
-                selected, options = self.cikti_merkezi_kesit_sondajlari()
+                selected, options = self.cikti_merkezi_kesit_sondajlari(veri_snapshot)
                 if len(selected) < 2:
                     errors.append("Kesit: en az iki sondaj bulunamadı")
                 else:
@@ -849,9 +893,9 @@ class CiktiMerkeziMixin:
                 done += 1
                 self.cikti_merkezi_progress(progress, done, "Kesit adımı tamamlandı")
 
-            if config.get("maps") and not cancel_state.get("cancelled"):
-                for label, source in self.cikti_merkezi_harita_kaynaklari():
-                    if cancel_state.get("cancelled"):
+            if config.get("maps") and not is_cancelled():
+                for label, source in map_sources:
+                    if is_cancelled():
                         break
                     self.cikti_merkezi_progress(progress, done, f"Harita kopyalanıyor: {label}")
                     try:
@@ -861,9 +905,9 @@ class CiktiMerkeziMixin:
                     done += 1
                     self.cikti_merkezi_progress(progress, done, f"Harita adımı tamamlandı: {label}")
 
-            if config.get("report_images") and not cancel_state.get("cancelled"):
-                for label, source in self.cikti_merkezi_rapor_gorselleri():
-                    if cancel_state.get("cancelled"):
+            if config.get("report_images") and not is_cancelled():
+                for label, source in report_image_sources:
+                    if is_cancelled():
                         break
                     self.cikti_merkezi_progress(progress, done, f"Rapor görseli kopyalanıyor: {label}")
                     try:
@@ -873,31 +917,32 @@ class CiktiMerkeziMixin:
                     done += 1
                     self.cikti_merkezi_progress(progress, done, f"Görsel adımı tamamlandı: {label}")
 
-            if config.get("taahhutnameler") and not cancel_state.get("cancelled"):
+            if config.get("taahhutnameler") and not is_cancelled():
                 self.cikti_merkezi_progress(progress, done, "Taahhütnameler hazırlanıyor...")
                 taahhut_ext = ".pdf" if config.get("taahhut_format") == "PDF" else ".xlsx"
                 taahhut_label = "PDF" if taahhut_ext == ".pdf" else "Excel"
                 try:
-                    saved_files.extend(tum_taahhutnameleri_olustur(self.veri, folders["taahhutnameler"], taahhut_ext))
+                    saved_files.extend(tum_taahhutnameleri_olustur(veri_snapshot, folders["taahhutnameler"], taahhut_ext))
                 except Exception as exc:
                     errors.append(f"Taahhütnameler {taahhut_label}: {exc}")
                 done += 1
                 self.cikti_merkezi_progress(progress, done, "Taahhütname adımı tamamlandı")
 
-            if config.get("ekler") and not cancel_state.get("cancelled"):
+            if config.get("ekler") and not is_cancelled():
                 self.cikti_merkezi_progress(progress, done, "Ekler PDF hazırlanıyor...")
                 try:
-                    tutanak_path = os.path.join(folders["ekler"], tutanak_dosya_adi(self.veri, ".docx"))
-                    tutanaklari_olustur(self.veri, tutanak_path, getattr(self, "word_img_sondaj", None))
+                    tutanak_path = os.path.join(folders["ekler"], tutanak_dosya_adi(veri_snapshot, ".docx"))
+                    sondaj_haritasi = dict(map_sources).get("Sondaj_Haritasi")
+                    tutanaklari_olustur(veri_snapshot, tutanak_path, sondaj_haritasi)
                     saved_files.append(tutanak_path)
                     abs_tutanak = os.path.normcase(os.path.abspath(tutanak_path))
                     for set_key in (EK_SET_NORMAL, EK_SET_ARAZI_DENEYLI):
-                        files = ek_icerik_haritasi(self.veri, set_key).setdefault("10", [])
+                        files = ek_icerik_haritasi(veri_snapshot, set_key).setdefault("10", [])
                         existing = {os.path.normcase(os.path.abspath(item)) for item in files if item}
                         if abs_tutanak not in existing:
                             files.append(tutanak_path)
-                    ek_path = os.path.join(folders["ekler"], ek_pdf_dosya_adi(self.veri))
-                    info = ekler_pdf_olustur(self.veri, ek_path)
+                    ek_path = os.path.join(folders["ekler"], ek_pdf_dosya_adi(veri_snapshot))
+                    info = ekler_pdf_olustur(veri_snapshot, ek_path)
                     saved_files.append(info["path"])
                     for warning in info.get("warnings", []):
                         errors.append(f"Ekler: {warning}")
@@ -906,9 +951,9 @@ class CiktiMerkeziMixin:
                 done += 1
                 self.cikti_merkezi_progress(progress, done, "Ekler adımı tamamlandı")
 
-            quality_report = cikti_dosyalari_denetle(saved_files, veri=self.veri)
+            quality_report = cikti_dosyalari_denetle(saved_files, veri=veri_snapshot)
             quality_manifest = os.path.join(base_folder, "RaporPro_Cikti_Kalite.json")
-            kalite_manifestosu_yaz(quality_manifest, quality_report, veri=self.veri)
+            kalite_manifestosu_yaz(quality_manifest, quality_report, veri=veri_snapshot)
             self.last_output_quality_report = quality_report
             saved_files.append(quality_manifest)
             for finding in quality_report.get("errors", []) + quality_report.get("warnings", []):
@@ -916,7 +961,7 @@ class CiktiMerkeziMixin:
                 prefix = f"{file_name}: " if file_name else ""
                 errors.append(f"Kalite {finding.get('level', 'uyarı')}: {prefix}{finding.get('detail', '')}")
 
-            cancelled = bool(cancel_state.get("cancelled"))
+            cancelled = is_cancelled()
             summary_path = self.cikti_merkezi_ozet_yaz(base_folder, saved_files, errors, cancelled)
             if cancelled:
                 msg = (
@@ -924,8 +969,8 @@ class CiktiMerkeziMixin:
                     f"Kaydedilen dosya: {len(saved_files)}\n"
                     f"Özet: {summary_path}"
                 )
-                self.cikti_merkezi_bitti(progress, msg, "warning")
-                self.set_status(f"Çıktı Merkezi iptal edildi: {len(saved_files)} dosya.", level="warning")
+                progress["cancel_message"] = msg
+                raise TaskCancelledError("Çıktı Merkezi kullanıcı tarafından iptal edildi.")
             elif errors:
                 preview = "\n".join(f"- {item}" for item in errors[:8])
                 suffix = f"\n- ... ve {len(errors) - 8} bulgu daha" if len(errors) > 8 else ""
@@ -948,6 +993,8 @@ class CiktiMerkeziMixin:
                 )
                 self.cikti_merkezi_bitti(progress, msg, "success")
                 self.set_status(f"Çıktı Merkezi tamamlandı: {len(saved_files)} dosya.", level="success")
+        except TaskCancelledError:
+            raise
         except Exception as exc:
             self.cikti_merkezi_bitti(progress, str(exc), "error")
             self.set_status(f"Çıktı Merkezi hatası: {exc}", level="error")

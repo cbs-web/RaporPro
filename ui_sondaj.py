@@ -12,6 +12,7 @@ from motor import GeoEngine
 from pmt_excel_motoru import pmt_excel_dosyalarini_oku, pmt_kayitlarini_veriye_aktar
 from performans import perf_timer, perf_tracked
 from sabitler import *
+from task_engine import TaskCancelledError
 from karot_motoru import derinlik_baslangic
 from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
 from widgets import UndoRedoEntry
@@ -750,8 +751,9 @@ class SondajMixin:
             return "Zemin"
         return "Kaya" if (sondaj or {}).get("kaya") else "Zemin"
 
-    def sondaj_delgi_capi_degeri(self, sondaj):
-        ayarlar = self.veri.get("ayarlar", {}) if hasattr(self, "veri") else {}
+    def sondaj_delgi_capi_degeri(self, sondaj, veri=None):
+        kaynak = veri if isinstance(veri, dict) else (self.veri if hasattr(self, "veri") else {})
+        ayarlar = kaynak.get("ayarlar", {})
         text = str(ayarlar.get("delgi_capi") or (sondaj or {}).get("delgi_capi") or "76mm").strip().replace(" ", "")
         if text.lower() in ("76", "76mm"):
             return "76mm"
@@ -759,10 +761,11 @@ class SondajMixin:
             return "89mm"
         return "76mm"
 
-    def sondaj_log_verisi(self, sondaj):
-        proje = dict(self.veri)
+    def sondaj_log_verisi(self, sondaj, veri=None):
+        kaynak = veri if isinstance(veri, dict) else self.veri
+        proje = dict(kaynak)
         ayarlar = dict(proje.get("ayarlar", {}))
-        ayarlar["delgi_capi"] = self.sondaj_delgi_capi_degeri(sondaj)
+        ayarlar["delgi_capi"] = self.sondaj_delgi_capi_degeri(sondaj, kaynak)
         proje["ayarlar"] = ayarlar
         return proje
 
@@ -1305,6 +1308,8 @@ class SondajMixin:
         tk.Button(btns, text="Vazgeç", command=win.destroy, bg="#ECF0F1").pack(side="right", padx=5)
 
     def toplu_log_kaydet_baslat(self, sondajlar, config):
+        config = dict(config)
+        config["veri_snapshot"] = copy.deepcopy(self.veri)
         progress_win = Toplevel(self.root)
         self.pencere_hazirla(progress_win, "Toplu Log Kaydı", "460x170", (430, 160), modal=True)
 
@@ -1313,6 +1318,7 @@ class SondajMixin:
         detail_var = tk.StringVar(value="0 / 0")
         progress_var = tk.DoubleVar(value=0)
         cancel_state = {"cancelled": False}
+        task_handle = {"value": None}
 
         body = ttk.Frame(progress_win, padding=14)
         body.pack(fill="both", expand=True)
@@ -1323,6 +1329,13 @@ class SondajMixin:
 
         def cancel():
             cancel_state["cancelled"] = True
+            handle = task_handle.get("value")
+            if handle is not None:
+                engine = getattr(self, "task_engine", None)
+                if engine is not None:
+                    engine.cancel(handle.task_id)
+                else:
+                    handle.cancel()
             status_var.set("İptal ediliyor...")
             cancel_btn.config(state="disabled")
 
@@ -1338,22 +1351,34 @@ class SondajMixin:
             "total": total,
         }
         self.set_status(f"Toplu log kaydı başlatıldı: {total} sondaj", level="info")
-        self.arka_plan_gorevi_baslat(
+        task_handle["value"] = self.arka_plan_gorevi_baslat(
             "Toplu Log Kaydet",
             self.toplu_log_kaydet_threaded,
             sondajlar,
             config,
             progress,
             cancel_state,
+            with_context=True,
+            resource="render",
             status_start="Toplu log kaydı arka planda başlatıldı.",
             status_success="Toplu log kaydı işlemi bitti.",
             status_error="Toplu log kaydı tamamlanamadı: {error}",
+            status_cancel="Toplu log kaydı iptal edildi.",
+            on_cancel=lambda: self._toplu_log_progress_bitti(
+                progress,
+                progress.get("cancel_message", "Toplu log kaydı iptal edildi."),
+                "warning",
+            ),
             on_error=lambda exc: self._toplu_log_progress_bitti(progress, str(exc), "error"),
         )
 
     def _toplu_log_progress_guncelle(self, progress, done, text):
         if not progress:
             return
+        task_context = progress.get("task_context")
+        if task_context is not None:
+            task_context.report(done, progress.get("total", 0), text)
+
         def apply_update():
             try:
                 win = progress.get("window")
@@ -1418,11 +1443,20 @@ class SondajMixin:
         return summary_path
 
     @perf_tracked("sondaj.logs_export_all")
-    def toplu_log_kaydet_threaded(self, sondajlar, config, progress=None, cancel_state=None):
+    def toplu_log_kaydet_threaded(self, sondajlar, config, progress=None, cancel_state=None, task_context=None):
         saved_count = 0
         saved_files = []
         errors = []
         plot_lock_acquired = False
+        if progress is not None:
+            progress["task_context"] = task_context
+
+        def is_cancelled():
+            return bool(
+                (cancel_state and cancel_state.get("cancelled"))
+                or (task_context is not None and task_context.cancelled)
+            )
+
         try:
             GeoEngine.plot_lock.acquire()
             plot_lock_acquired = True
@@ -1431,10 +1465,13 @@ class SondajMixin:
             ext = "jpg" if fmt in ("jpg", "jpeg") else fmt
             dpi = config.get("dpi", 300)
             prefix = config.get("prefix", "Log")
+            veri_snapshot = config.get("veri_snapshot")
+            if not isinstance(veri_snapshot, dict):
+                veri_snapshot = copy.deepcopy(self.veri)
             total = len(sondajlar)
             os.makedirs(klasor, exist_ok=True)
             for idx, sondaj in enumerate(sondajlar, start=1):
-                if cancel_state and cancel_state.get("cancelled"):
+                if is_cancelled():
                     break
                 sondaj_no = sondaj.get("no") or f"SK-{idx}"
                 self._toplu_log_progress_guncelle(progress, idx - 1, f"Log hazırlanıyor: {sondaj_no}")
@@ -1442,7 +1479,10 @@ class SondajMixin:
                 figures = []
                 try:
                     with perf_timer("sondaj.log_draw", sondaj_no):
-                        figures = GeoEngine.ciz_profesyonel_log(sondaj, self.sondaj_log_verisi(sondaj))
+                        figures = GeoEngine.ciz_profesyonel_log(
+                            sondaj,
+                            self.sondaj_log_verisi(sondaj, veri_snapshot),
+                        )
                     safe_no = self._guvenli_dosya_adi(sondaj_no, f"SK_{idx}")
                     for page_idx, fig in enumerate(figures, start=1):
                         suffix = f"_Sayfa{page_idx}" if len(figures) > 1 else ""
@@ -1461,13 +1501,13 @@ class SondajMixin:
                             plt.close(fig)
                         except Exception:
                             pass
-            cancelled = bool(cancel_state and cancel_state.get("cancelled"))
+            cancelled = is_cancelled()
             summary_path = self.toplu_log_ozet_yaz(klasor, config, saved_files, errors, cancelled)
             if cancelled:
                 msg = f"Toplu log kaydı iptal edildi.\n\nKaydedilen sayfa: {saved_count}\nKlasör: {klasor}\nÖzet: {summary_path}"
-                self._toplu_log_progress_bitti(progress, msg, "warning")
-                self.set_status(f"Toplu log kaydı iptal edildi: {saved_count} sayfa.", level="warning")
-                return
+                if progress is not None:
+                    progress["cancel_message"] = msg
+                raise TaskCancelledError("Toplu log kaydı kullanıcı tarafından iptal edildi.")
             if errors:
                 msg = f"{saved_count} log sayfası kaydedildi.\nÖzet: {summary_path}\n\nHata alınan sondajlar:\n" + "\n".join(errors[:10])
                 if len(errors) > 10:
@@ -1479,6 +1519,8 @@ class SondajMixin:
                 msg = f"Tüm loglar kaydedildi:\n{klasor}\n\nToplam sayfa: {saved_count}\nÖzet: {summary_path}\n\nSonraki adım: Çıktı Merkezi ile logları, kesiti ve haritaları aynı klasörde toplayabilirsiniz."
                 self._toplu_log_progress_bitti(progress, msg, "success")
                 self.set_status(f"Toplu log kaydı tamamlandı: {saved_count} sayfa.", level="success")
+        except TaskCancelledError:
+            raise
         except Exception as exc:
             error_text = str(exc)
             self._toplu_log_progress_bitti(progress, error_text, "error")

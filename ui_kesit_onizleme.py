@@ -80,6 +80,7 @@ class KesitOnizlemeMixin:
             self.kesit_onizle_figuru_uret,
             worker_sondajlar,
             worker_options,
+            resource="render",
             status_start="Kesit önizleme arka planda hazırlanıyor.",
             status_success="Kesit önizleme hazırlandı.",
             status_error="Kesit önizleme hazırlanamadı: {error}",

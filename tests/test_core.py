@@ -131,13 +131,20 @@ from proje_sema import (
     ProjeSemaHatasi,
     proje_verisini_migre_et,
 )
+from proje_paketi import (
+    PAKET_META_KEY,
+    paket_proje_mi,
+    paket_proje_verisini_kayda_hazirla,
+    paket_proje_verisini_yukle,
+    proje_paketi_olustur,
+)
 from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
 from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import excel_workbook_yaz as wb_excel_workbook_yaz
 from workbook_motoru import validate_rows as wb_validate_rows
 from workbook_motoru import WORKBOOK_SHEET_DEFS
-from task_engine import TkTaskEngine
+from task_engine import TaskCancelledError, TkTaskEngine
 from tutarlilik_motoru import laboratuvar_kayitlarini_ayikla, proje_tutarlilik_raporu
 from tutarlilik_ortak import refu_mu
 from uygulama_yollari import eski_veriyi_kopyala, kullanici_yolu
@@ -352,6 +359,160 @@ class TutarlilikMotoruTestleri(unittest.TestCase):
             self.assertEqual(visual_warnings, [])
 
 
+class TasinabilirProjePaketiTestleri(unittest.TestCase):
+    def test_bagli_dosyalari_kopyalar_ve_goreli_yol_yazar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "kaynak")
+            output_dir = os.path.join(tmp, "paketler")
+            os.makedirs(source_dir)
+            os.makedirs(output_dir)
+            word_path = os.path.join(source_dir, "rapor.docx")
+            kml_path = os.path.join(source_dir, "sinir.kml")
+            ek_path = os.path.join(source_dir, "ek.pdf")
+            for path, content in (
+                (word_path, b"word"),
+                (kml_path, b"kml"),
+                (ek_path, b"pdf"),
+            ):
+                with open(path, "wb") as handle:
+                    handle.write(content)
+            source_project = os.path.join(source_dir, "proje.json")
+            veri = {
+                "kunye": {"sahibi": "Paket Testi"},
+                "dosyalar": {
+                    "word_path": word_path,
+                    "kml_path": "sinir.kml",
+                },
+                "ek_icerikleri": {"normal": {"1": [ek_path, word_path]}},
+                "ayarlar": {},
+            }
+            atomic_json_dump(veri, source_project, indent=2, ensure_ascii=False)
+
+            info = proje_paketi_olustur(veri, source_project, output_dir)
+
+            self.assertTrue(os.path.isfile(info["project_path"]))
+            self.assertEqual(info["copied_file_count"], 3)
+            self.assertEqual(info["reference_count"], 4)
+            with open(info["project_path"], "r", encoding="utf-8") as handle:
+                packaged = json.load(handle)
+            self.assertTrue(paket_proje_mi(packaged))
+            self.assertFalse(os.path.isabs(packaged["dosyalar"]["word_path"]))
+            self.assertFalse(os.path.isabs(packaged["dosyalar"]["kml_path"]))
+
+            loaded = paket_proje_verisini_yukle(packaged, info["project_path"])
+            self.assertTrue(os.path.isabs(loaded["dosyalar"]["word_path"]))
+            self.assertTrue(os.path.isfile(loaded["dosyalar"]["word_path"]))
+            self.assertTrue(os.path.isfile(loaded["ek_icerikleri"]["normal"]["1"][0]))
+
+            save_data = paket_proje_verisini_kayda_hazirla(loaded, info["project_path"])
+            self.assertFalse(os.path.isabs(save_data["dosyalar"]["word_path"]))
+            self.assertNotIn("_runtime_root", save_data[PAKET_META_KEY])
+
+    def test_eksik_baglantiyi_manifestoya_yazar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_project = os.path.join(tmp, "proje.json")
+            output_dir = os.path.join(tmp, "paketler")
+            os.makedirs(output_dir)
+            veri = {
+                "kunye": {"sahibi": "Eksik Dosya"},
+                "dosyalar": {"kml_path": "bulunamayan.kml"},
+                "ayarlar": {},
+            }
+            atomic_json_dump(veri, source_project, indent=2, ensure_ascii=False)
+
+            info = proje_paketi_olustur(veri, source_project, output_dir)
+
+            self.assertEqual(len(info["missing"]), 1)
+            self.assertEqual(info["missing"][0]["value"], "bulunamayan.kml")
+
+    def test_paket_disina_farkli_kaydet_normal_proje_uretir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_root = os.path.join(tmp, "paket")
+            other_root = os.path.join(tmp, "diger")
+            os.makedirs(package_root)
+            os.makedirs(other_root)
+            asset = os.path.join(package_root, "asset.txt")
+            with open(asset, "w", encoding="utf-8") as handle:
+                handle.write("test")
+            veri = {
+                "dosyalar": {"word_path": asset},
+                PAKET_META_KEY: {
+                    "version": 1,
+                    "_runtime_root": package_root,
+                    "references": [{
+                        "data_path": ["dosyalar", "word_path"],
+                        "relative_path": "asset.txt",
+                    }],
+                },
+            }
+
+            result = paket_proje_verisini_kayda_hazirla(
+                veri,
+                os.path.join(other_root, "kopya.json"),
+            )
+
+            self.assertNotIn(PAKET_META_KEY, result)
+            self.assertEqual(result["dosyalar"]["word_path"], asset)
+
+    def test_iptal_edilen_yarim_paket_temizlenir(self):
+        class CancelAfterFirst:
+            def __init__(self):
+                self.checks = 0
+
+            def report(self, *_args):
+                return None
+
+            def check_cancelled(self):
+                self.checks += 1
+                if self.checks > 1:
+                    raise TaskCancelledError("iptal")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = os.path.join(tmp, "kaynak")
+            output_dir = os.path.join(tmp, "paketler")
+            os.makedirs(source_dir)
+            os.makedirs(output_dir)
+            files = []
+            for name in ("a.txt", "b.txt"):
+                path = os.path.join(source_dir, name)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(name)
+                files.append(path)
+            veri = {
+                "kunye": {"sahibi": "Iptal Testi"},
+                "dosyalar": {"word_path": files[0], "kml_path": files[1]},
+                "ayarlar": {},
+            }
+
+            with self.assertRaises(TaskCancelledError):
+                proje_paketi_olustur(
+                    veri,
+                    os.path.join(source_dir, "proje.json"),
+                    output_dir,
+                    task_context=CancelAfterFirst(),
+                )
+
+            self.assertEqual(os.listdir(output_dir), [])
+
+    def test_paket_referansi_klasor_disina_cikamaz(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_path = os.path.join(tmp, "proje.json")
+            veri = {
+                "dosyalar": {"word_path": "../../disarida.docx"},
+                PAKET_META_KEY: {
+                    "version": 1,
+                    "references": [{
+                        "data_path": ["dosyalar", "word_path"],
+                        "relative_path": "../../disarida.docx",
+                    }],
+                },
+            }
+
+            loaded = paket_proje_verisini_yukle(veri, project_path)
+
+            self.assertEqual(loaded["dosyalar"]["word_path"], "../../disarida.docx")
+
+
 class TaskEngineTestleri(unittest.TestCase):
     def test_basari_sayacini_ve_callbacki_gunceller(self):
         done = threading.Event()
@@ -385,6 +546,103 @@ class TaskEngineTestleri(unittest.TestCase):
             self.assertEqual(snap.completed_count, 0)
             self.assertEqual(snap.failed_count, 1)
         finally:
+            engine.shutdown(wait=True)
+
+    def test_ilerleme_bildirimi_snapshotta_gorunur(self):
+        reported = threading.Event()
+        release = threading.Event()
+        done = threading.Event()
+
+        def worker(task_context=None):
+            task_context.report(2, 5, "Iki dosya tamamlandi")
+            reported.set()
+            release.wait(2)
+            return "ok"
+
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1, log_failures=False)
+        try:
+            engine.run(
+                "ilerleme",
+                worker,
+                with_context=True,
+                on_success=lambda _result: done.set(),
+            )
+            self.assertTrue(reported.wait(2))
+            task = engine.snapshot().active_tasks[0]
+            self.assertEqual(task.completed, 2)
+            self.assertEqual(task.total, 5)
+            self.assertEqual(task.message, "Iki dosya tamamlandi")
+            release.set()
+            self.assertTrue(done.wait(2))
+        finally:
+            release.set()
+            engine.shutdown(wait=True)
+
+    def test_kooperatif_gorev_iptal_edilebilir(self):
+        started = threading.Event()
+        cancelled = threading.Event()
+
+        def worker(task_context=None):
+            started.set()
+            while True:
+                task_context.check_cancelled()
+                threading.Event().wait(0.01)
+
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=1, log_failures=False)
+        try:
+            handle = engine.run(
+                "iptal",
+                worker,
+                with_context=True,
+                on_cancel=lambda: cancelled.set(),
+            )
+            self.assertTrue(started.wait(2))
+            self.assertTrue(engine.cancel(handle.task_id))
+            self.assertTrue(cancelled.wait(2))
+            snap = engine.snapshot()
+            self.assertEqual(snap.active_count, 0)
+            self.assertEqual(snap.cancelled_count, 1)
+            self.assertEqual(engine.list_tasks()[0].state, "cancelled")
+        finally:
+            engine.shutdown(wait=True)
+
+    def test_ayni_kaynak_gorevleri_sirayla_calistirir(self):
+        first_started = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        all_done = threading.Event()
+        completed = []
+        execution = []
+
+        def first():
+            execution.append("first_start")
+            first_started.set()
+            release_first.wait(2)
+            execution.append("first_end")
+            return 1
+
+        def second():
+            execution.append("second_start")
+            second_started.set()
+            return 2
+
+        def finished(value):
+            completed.append(value)
+            if len(completed) == 2:
+                all_done.set()
+
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=2, log_failures=False)
+        try:
+            engine.run("bir", first, resource="render", on_success=finished)
+            self.assertTrue(first_started.wait(2))
+            engine.run("iki", second, resource="render", on_success=finished)
+            self.assertFalse(second_started.wait(0.1))
+            release_first.set()
+            self.assertTrue(all_done.wait(2))
+            self.assertEqual(execution, ["first_start", "first_end", "second_start"])
+            self.assertEqual(sorted(completed), [1, 2])
+        finally:
+            release_first.set()
             engine.shutdown(wait=True)
 
 

@@ -338,7 +338,18 @@ class ArayuzTemelMixin:
         except Exception:
             active = 0
         if hasattr(self, "task_status_var"):
-            self.task_status_var.set(f"İşlem: {active} görev çalışıyor" if active else "İşlem: hazır")
+            if active:
+                tasks = getattr(snapshot, "active_tasks", ()) or ()
+                first = tasks[0] if tasks else None
+                detail = ""
+                if first is not None:
+                    if getattr(first, "total", 0):
+                        detail = f" · {first.name} {first.completed:g}/{first.total:g}"
+                    else:
+                        detail = f" · {first.name}"
+                self.task_status_var.set(f"İşlem: {active} görev{detail}")
+            else:
+                self.task_status_var.set("İşlem: hazır")
         if hasattr(self, "task_status_label"):
             self.task_status_label.config(fg=COLOR_WARNING if active else "#333333")
 
@@ -347,14 +358,25 @@ class ArayuzTemelMixin:
         if engine is None:
             on_success = kwargs.pop("on_success", None)
             on_error = kwargs.pop("on_error", None)
+            kwargs.pop("on_cancel", None)
             on_done = kwargs.pop("on_done", None)
             status_start = kwargs.pop("status_start", None)
             status_success = kwargs.pop("status_success", None)
             status_error = kwargs.pop("status_error", None)
+            kwargs.pop("status_cancel", None)
+            with_context = bool(kwargs.pop("with_context", False))
+            kwargs.pop("cancellable", None)
+            kwargs.pop("resource", None)
             if status_start:
                 self.set_status(status_start)
             try:
-                result = func(*args, **kwargs)
+                if with_context:
+                    from task_engine import TaskContext
+
+                    context = TaskContext(0, lambda *_args, **_kwargs: None, cancellable=False)
+                    result = func(*args, task_context=context, **kwargs)
+                else:
+                    result = func(*args, **kwargs)
             except Exception as exc:
                 if status_error:
                     self.set_status(status_error.format(error=exc), level="error")
