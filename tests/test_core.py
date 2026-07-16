@@ -100,6 +100,7 @@ from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kontrol import KontrolPaneliMixin
 from ui_jeofizik import JeofizikMixin
+from ui_haritalar import HaritalarSekmesiMixin
 from ui_rapor import RaporSekmesiMixin
 from ui_sondaj import SondajMixin
 from ui_proje_surumleri import ProjeSurumleriMixin
@@ -710,6 +711,35 @@ class ProjeSurumGecmisiTestleri(unittest.TestCase):
 
 
 class YardimciFonksiyonTestleri(unittest.TestCase):
+    def test_harita_koordinat_ozeti_gecerli_noktalari_sayar(self):
+        summary = HaritalarSekmesiMixin.harita_koordinat_ozeti(
+            {
+                "arazi": {"alan_y": "40.1", "alan_x": "26.1"},
+                "sondaj": [
+                    {"y": "40.2", "x": "26.2"},
+                    {"y": "", "x": "26.3"},
+                ],
+                "jeofizik": {
+                    "ss_list": [
+                        {"coords": ["40.3", "26.3", "", "", "40.4", "26.4"]},
+                    ],
+                    "mt_list": [{"y": "40.5", "x": "26.5"}],
+                },
+            }
+        )
+
+        self.assertEqual(summary["alan"], (1, 1))
+        self.assertEqual(summary["sondaj"], (1, 2))
+        self.assertEqual(summary["ss"], (1, 1))
+        self.assertEqual(summary["mt"], (1, 1))
+        self.assertEqual((summary["ready"], summary["total"]), (4, 5))
+
+    def test_harita_dosya_durumu_olmayan_dosyayi_hazir_saymaz(self):
+        state, text = HaritalarSekmesiMixin.harita_dosya_durumu(r"C:\olmayan\harita.jpg")
+
+        self.assertEqual(state, "warning")
+        self.assertEqual(text, "Dosya bulunamadı")
+
     def test_rapor_hazirlik_ozeti_eksik_kaynaklari_uyarir(self):
         state, text = RaporSekmesiMixin.rapor_hazirlik_ozeti(
             template_ready=True,

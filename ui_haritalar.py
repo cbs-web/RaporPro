@@ -3,43 +3,169 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from sabitler import COLOR_BG, COLOR_PRIMARY, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD, PROJE_KLASORU
-from performans import perf_timer, perf_tracked
+from harita_motoru import DEFAULT_TILE_SERVER, TILE_SERVERS
 from harita_referans import kml_koordinatlari_oku, ss_harita_etiketi
 from harita_resim_cache import display_image_read
+from performans import perf_timer, perf_tracked
 from resim_isaretleyici import ResimIsaretleyici
+from sabitler import (
+    COLOR_BORDER,
+    COLOR_DANGER,
+    COLOR_PRIMARY,
+    COLOR_SUCCESS,
+    COLOR_SURFACE,
+    COLOR_TEXT_MUTED,
+    COLOR_WARNING,
+    FONT_BOLD,
+    FONT_UI_BODY,
+    FONT_UI_BODY_BOLD,
+    PROJE_KLASORU,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XS,
+)
 from tkgm_kml import tkgm_parsel_kml_olustur
 from yerbuldurur_motoru import YerbuldururMotoru
 
 
 class HaritalarSekmesiMixin:
+    @staticmethod
+    def harita_koordinat_ozeti(veri):
+        """Harita için kullanılabilir koordinat kayıtlarının sayısını döndür."""
+
+        def number(value):
+            try:
+                return float(str(value).strip().replace(",", "."))
+            except (TypeError, ValueError):
+                return 0.0
+
+        def pair_ready(y, x):
+            return bool(number(y) and number(x))
+
+        veri = veri if isinstance(veri, dict) else {}
+        arazi = veri.get("arazi", {}) if isinstance(veri.get("arazi"), dict) else {}
+        sondajlar = veri.get("sondaj", []) if isinstance(veri.get("sondaj"), list) else []
+        jeofizik = veri.get("jeofizik", {}) if isinstance(veri.get("jeofizik"), dict) else {}
+        ss_list = jeofizik.get("ss_list", []) if isinstance(jeofizik.get("ss_list"), list) else []
+        mt_list = jeofizik.get("mt_list", []) if isinstance(jeofizik.get("mt_list"), list) else []
+
+        sondaj_ready = sum(pair_ready(item.get("y"), item.get("x")) for item in sondajlar if isinstance(item, dict))
+        ss_ready = 0
+        for item in ss_list:
+            coords = item.get("coords", []) if isinstance(item, dict) else []
+            if len(coords) >= 6 and pair_ready(coords[0], coords[1]) and pair_ready(coords[4], coords[5]):
+                ss_ready += 1
+        mt_ready = sum(pair_ready(item.get("y"), item.get("x")) for item in mt_list if isinstance(item, dict))
+        area_ready = int(pair_ready(arazi.get("alan_y"), arazi.get("alan_x")))
+
+        total = 1 + len(sondajlar) + len(ss_list) + len(mt_list)
+        ready = area_ready + sondaj_ready + ss_ready + mt_ready
+        return {
+            "alan": (area_ready, 1),
+            "sondaj": (sondaj_ready, len(sondajlar)),
+            "ss": (ss_ready, len(ss_list)),
+            "mt": (mt_ready, len(mt_list)),
+            "ready": ready,
+            "total": total,
+        }
+
+    @staticmethod
+    def harita_dosya_durumu(path, empty_text="Oluşturulmadı"):
+        """Harita dosyasının durum seviyesini ve kısa metnini döndür."""
+        if path and os.path.isfile(path):
+            return "ok", os.path.basename(path)
+        if path:
+            return "warning", "Dosya bulunamadı"
+        return "empty", empty_text
+
     def p_haritalar(self, p):
-        outer = ttk.Frame(p, padding=16)
-        outer.pack(fill="both", expand=True)
+        page, _canvas = self.scrollable_page(p, padding=(16, 12))
+        page.columnconfigure(0, weight=1)
 
-        header = ttk.Frame(outer)
-        header.pack(fill="x", pady=(0, 10))
-        ttk.Label(header, text="Haritalar", font=("Segoe UI", 15, "bold"), foreground=COLOR_PRIMARY).pack(side="left")
-        self.lbl_harita_kml = ttk.Label(header, text="")
-        self.lbl_harita_kml.pack(side="right")
+        header = ttk.Frame(page)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        header.columnconfigure(0, weight=1)
+        title_area = ttk.Frame(header)
+        title_area.grid(row=0, column=0, sticky="w")
+        ttk.Label(title_area, text="Haritalar", style="PageTitle.TLabel").pack(anchor="w")
+        self.harita_durum_var = tk.StringVar(value="Harita hazırlığı kontrol ediliyor")
+        self.lbl_harita_durum = ttk.Label(title_area, textvariable=self.harita_durum_var, style="Muted.TLabel")
+        self.lbl_harita_durum.pack(anchor="w", pady=(2, 0))
+        self.modern_button(
+            header,
+            "Yenile",
+            command=self.harita_durum_yenile,
+            role="secondary",
+            outline=True,
+            padx=8,
+            pady=4,
+        ).grid(row=0, column=1, sticky="e")
 
-        setup = ttk.LabelFrame(outer, text="Hazırlık", padding=12)
-        setup.pack(fill="x", pady=(0, 10))
+        setup = ttk.LabelFrame(page, text="Altlık ve Sınır", padding=(12, 10))
+        setup.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+        setup.columnconfigure(1, weight=1)
 
-        kml_row = ttk.Frame(setup)
-        kml_row.pack(fill="x", pady=4)
-        ttk.Label(kml_row, text="KML Sınır", width=18, font=FONT_BOLD).pack(side="left", padx=(0, 8))
-        self.lbl_harita_kml_detay = ttk.Label(kml_row, text="-", foreground="#555555")
-        self.lbl_harita_kml_detay.pack(side="left", fill="x", expand=True)
-        self.modern_button(kml_row, text="KML Seç", command=self.kml_sec, role="neutral", outline=True, width=16).pack(side="right")
+        ttk.Label(setup, text="KML sınırı", font=FONT_UI_BODY_BOLD).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, SPACE_SM),
+            pady=SPACE_XS,
+        )
+        self.lbl_harita_kml_detay = ttk.Label(setup, text="-", style="Muted.TLabel")
+        self.lbl_harita_kml_detay.grid(row=0, column=1, sticky="ew", pady=SPACE_XS)
+        kml_actions = ttk.Frame(setup)
+        kml_actions.grid(row=0, column=2, sticky="e", pady=SPACE_XS)
+        self.modern_button(
+            kml_actions,
+            "KML Seç",
+            command=self.kml_sec,
+            role="secondary",
+            outline=True,
+            padx=7,
+            pady=4,
+        ).pack(side="left", padx=(0, SPACE_XS))
+        self.modern_button(
+            kml_actions,
+            "TKGM'den Al",
+            command=self.tkgm_kml_al,
+            role="accent",
+            outline=True,
+            padx=7,
+            pady=4,
+        ).pack(side="left")
 
-        self.modern_button(kml_row, text="TKGM'den Al", command=self.tkgm_kml_al, role="accent", outline=True, width=16).pack(side="right", padx=(0, 6))
-
-        form_frame = ttk.Frame(setup)
-        form_frame.pack(fill="x", pady=4)
-        ttk.Label(form_frame, text="Formasyon", width=18, font=FONT_BOLD).pack(side="left", padx=(0, 8))
+        option_row = ttk.Frame(setup)
+        option_row.grid(row=1, column=0, columnspan=3, sticky="ew", pady=SPACE_XS)
+        option_row.columnconfigure(1, weight=1)
+        option_row.columnconfigure(3, weight=1)
+        ttk.Label(option_row, text="Uydu altlığı", font=FONT_UI_BODY_BOLD).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, SPACE_SM),
+        )
+        current_tile = self.veri.get("ayarlar", {}).get("harita_altlik", DEFAULT_TILE_SERVER)
+        if current_tile not in TILE_SERVERS:
+            current_tile = DEFAULT_TILE_SERVER
+        self.harita_altlik_var = tk.StringVar(value=current_tile)
+        self.cmb_harita_altlik = ttk.Combobox(
+            option_row,
+            textvariable=self.harita_altlik_var,
+            values=list(TILE_SERVERS.keys()),
+            state="readonly",
+            width=28,
+        )
+        self.cmb_harita_altlik.grid(row=0, column=1, sticky="ew", padx=(0, SPACE_MD))
+        self.cmb_harita_altlik.bind("<<ComboboxSelected>>", self.harita_altlik_secildi)
+        ttk.Label(option_row, text="Jeoloji formasyonu", font=FONT_UI_BODY_BOLD).grid(
+            row=0,
+            column=2,
+            sticky="w",
+            padx=(0, SPACE_SM),
+        )
         self.cmb_formasyon = ttk.Combobox(
-            form_frame,
+            option_row,
             values=[
                 "Qal (Alüvyon)",
                 "Tmal (Alçıtepe Üyesi)",
@@ -50,57 +176,259 @@ class HaritalarSekmesiMixin:
             width=30,
             state="readonly",
         )
-        self.cmb_formasyon.pack(side="left", fill="x", expand=True)
+        self.cmb_formasyon.grid(row=0, column=3, sticky="ew")
         self.cmb_formasyon.current(0)
 
-        actions = ttk.LabelFrame(outer, text="Çizim", padding=12)
-        actions.pack(fill="x", pady=(0, 10))
+        coordinates = ttk.LabelFrame(page, text="Çalışma Noktaları", padding=(12, 10))
+        coordinates.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_SM))
+        coord_header = ttk.Frame(coordinates)
+        coord_header.pack(fill="x", pady=(0, SPACE_XS))
+        self.lbl_harita_koordinat_ozet = ttk.Label(coord_header, text="-", font=FONT_UI_BODY_BOLD)
+        self.lbl_harita_koordinat_ozet.pack(side="left")
+        self.modern_button(
+            coord_header,
+            "Tüm Koordinatları Seç",
+            command=self.toplu_harita_ac,
+            role="primary",
+            padx=8,
+            pady=4,
+        ).pack(side="right")
+
+        coord_grid = ttk.Frame(coordinates)
+        coord_grid.pack(fill="x")
+        self.harita_coord_labels = {}
+        coord_cards = []
+        for key, title in (
+            ("alan", "Çalışma Alanı"),
+            ("sondaj", "Sondajlar"),
+            ("ss", "Sismik Serimler"),
+            ("mt", "Mikrotremör"),
+        ):
+            card = tk.Frame(
+                coord_grid,
+                bg=COLOR_SURFACE,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+                padx=SPACE_MD,
+                pady=SPACE_SM,
+            )
+            tk.Label(
+                card,
+                text=title,
+                bg=COLOR_SURFACE,
+                fg=COLOR_PRIMARY,
+                font=FONT_UI_BODY_BOLD,
+            ).pack(anchor="w")
+            status = tk.Label(
+                card,
+                text="-",
+                bg=COLOR_SURFACE,
+                fg=COLOR_TEXT_MUTED,
+                font=FONT_UI_BODY,
+            )
+            status.pack(anchor="w", pady=(2, 0))
+            self.harita_coord_labels[key] = status
+            coord_cards.append(card)
+        self.responsive_widget_grid(coord_grid, coord_cards, min_width=180, max_cols=4, padx=4, pady=4)
+
+        actions = ttk.LabelFrame(page, text="Harita Çizimi", padding=(12, 10))
+        actions.grid(row=3, column=0, sticky="ew", pady=(0, SPACE_SM))
         action_grid = ttk.Frame(actions)
         action_grid.pack(fill="x")
 
         cards = []
-        for title, status_attr, color, command in [
-            ("Vaziyet Planı", "lbl_harita_vaziyet", "#3498DB", lambda: self.harita_cizici_ac("vaziyet")),
-            ("Müh. Jeoloji", "lbl_harita_jeoloji", "#E67E22", lambda: self.harita_cizici_ac("jeoloji")),
-            ("Yerbuldurur", "lbl_harita_yerbuldurur", "#9B59B6", self.yerbuldurur_ac),
+        for title, status_attr, role, command in [
+            ("Araştırma Noktaları Vaziyet Planı", "lbl_harita_vaziyet", "accent", lambda: self.harita_cizici_ac("vaziyet")),
+            ("Mühendislik Jeolojisi", "lbl_harita_jeoloji", "warning", lambda: self.harita_cizici_ac("jeoloji")),
+            ("Yerbuldurur Haritası", "lbl_harita_yerbuldurur", "primary", self.yerbuldurur_ac),
         ]:
-            card = ttk.Frame(action_grid, padding=6)
-            self.modern_button(card, text=title, role=self._role_from_color(color, "accent"), pady=12, command=command).pack(fill="x")
-            status = ttk.Label(card, text="-", foreground="#555555", anchor="center")
+            card = tk.Frame(
+                action_grid,
+                bg=COLOR_SURFACE,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+                padx=SPACE_SM,
+                pady=SPACE_SM,
+            )
+            self.modern_button(card, text=title, role=role, pady=9, command=command).pack(fill="x")
+            status = tk.Label(
+                card,
+                text="-",
+                bg=COLOR_SURFACE,
+                fg=COLOR_TEXT_MUTED,
+                font=FONT_UI_BODY,
+                anchor="center",
+            )
             status.pack(fill="x", pady=(6, 0))
             setattr(self, status_attr, status)
             cards.append(card)
-        self.responsive_widget_grid(action_grid, cards, min_width=210, max_cols=3, padx=6, pady=4)
+        self.responsive_widget_grid(action_grid, cards, min_width=230, max_cols=3, padx=4, pady=4)
+
+        outputs = ttk.LabelFrame(page, text="Rapor Çıktıları", padding=(12, 10))
+        outputs.grid(row=4, column=0, sticky="ew")
+        output_header = ttk.Frame(outputs)
+        output_header.pack(fill="x", pady=(0, SPACE_XS))
+        self.lbl_harita_cikti_ozet = ttk.Label(output_header, text="-", font=FONT_UI_BODY_BOLD)
+        self.lbl_harita_cikti_ozet.pack(side="left")
+        self.modern_button(
+            output_header,
+            "Rapor Sekmesine Git",
+            command=lambda: self.nb.select(self.tab_rapor),
+            role="secondary",
+            outline=True,
+            padx=7,
+            pady=4,
+        ).pack(side="right")
+
+        output_grid = ttk.Frame(outputs)
+        output_grid.pack(fill="x")
+        self.harita_output_labels = {}
+        output_cards = []
+        for key, title in (
+            ("sondaj", "Sondaj Lokasyon"),
+            ("jeofizik", "Jeofizik Lokasyon"),
+            ("mjh", "Mühendislik Jeolojisi"),
+            ("yer", "Yerbuldurur"),
+        ):
+            card = tk.Frame(
+                output_grid,
+                bg=COLOR_SURFACE,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+                padx=SPACE_MD,
+                pady=SPACE_SM,
+            )
+            tk.Label(
+                card,
+                text=title,
+                bg=COLOR_SURFACE,
+                fg=COLOR_PRIMARY,
+                font=FONT_UI_BODY_BOLD,
+            ).pack(anchor="w")
+            status = tk.Label(
+                card,
+                text="-",
+                bg=COLOR_SURFACE,
+                fg=COLOR_TEXT_MUTED,
+                font=FONT_UI_BODY,
+                anchor="w",
+                justify="left",
+            )
+            status.pack(fill="x", pady=(2, 0))
+            self.harita_output_labels[key] = status
+            output_cards.append(card)
+        self.responsive_widget_grid(output_grid, output_cards, min_width=190, max_cols=4, padx=4, pady=4)
 
         self.harita_durum_yenile()
 
     def harita_durum_yenile(self):
         kml_path = getattr(self, "kml_path", None)
-        kml_secili = bool(kml_path)
-        kml_ok = bool(kml_secili and os.path.exists(kml_path))
-        if kml_ok:
-            kml_text = os.path.basename(kml_path)
-            kml_color = COLOR_SUCCESS
-        elif kml_secili:
-            kml_text = f"{os.path.basename(kml_path)} (bulunamadı)"
-            kml_color = COLOR_WARNING
-        else:
-            kml_text = "KML seçilmedi"
-            kml_color = "red"
-        for attr in ("lbl_harita_kml", "lbl_harita_kml_detay"):
-            if hasattr(self, attr):
-                getattr(self, attr).config(text=kml_text, foreground=kml_color)
+        kml_state, kml_text = self.harita_dosya_durumu(kml_path, "KML seçilmedi")
+        status_colors = {"ok": COLOR_SUCCESS, "warning": COLOR_WARNING, "empty": COLOR_DANGER}
+        kml_color = status_colors[kml_state]
+        if hasattr(self, "lbl_harita_kml_detay"):
+            self.lbl_harita_kml_detay.config(text=kml_text, foreground=kml_color)
+
+        tile_name = self.veri.get("ayarlar", {}).get("harita_altlik", DEFAULT_TILE_SERVER)
+        if tile_name not in TILE_SERVERS:
+            tile_name = DEFAULT_TILE_SERVER
+        if hasattr(self, "harita_altlik_var") and self.harita_altlik_var.get() != tile_name:
+            self.harita_altlik_var.set(tile_name)
+        if hasattr(self, "lbl_harita_altlik"):
+            self.lbl_harita_altlik.config(text=f"Seçili: {tile_name}", foreground=COLOR_SUCCESS)
+
+        coord_summary = self.harita_koordinat_ozeti(getattr(self, "veri", {}))
+        coord_ready = coord_summary["ready"]
+        coord_total = coord_summary["total"]
+        coord_all_ready = bool(coord_total and coord_ready == coord_total)
+        if hasattr(self, "lbl_harita_koordinat_ozet"):
+            self.lbl_harita_koordinat_ozet.config(
+                text=f"Koordinatlar: {coord_ready}/{coord_total} hazır",
+                foreground=COLOR_SUCCESS if coord_all_ready else COLOR_WARNING,
+            )
+        for key, label in getattr(self, "harita_coord_labels", {}).items():
+            ready, total = coord_summary[key]
+            if total == 0:
+                text, color = "Kayıt yok", COLOR_TEXT_MUTED
+            else:
+                text = f"{ready}/{total} hazır"
+                color = COLOR_SUCCESS if ready == total else COLOR_WARNING
+            label.config(text=text, foreground=color)
 
         harita_cizimleri = self.veri.get("harita_cizimleri", {}) if isinstance(self.veri, dict) else {}
-        yerbuldurur_empty = "KML bekliyor" if not kml_secili else ("KML dosyası bulunamadı" if not kml_ok else "Çizim yok")
-        status_map = [
-            ("lbl_harita_vaziyet", bool(harita_cizimleri.get("vaziyet") or getattr(self, "word_img_sondaj", None)), "Hazır", "Çizim yok"),
-            ("lbl_harita_jeoloji", bool(harita_cizimleri.get("jeoloji") or getattr(self, "img_mjh", None)), "Hazır", "Çizim yok"),
-            ("lbl_harita_yerbuldurur", bool(harita_cizimleri.get("yerbuldurur") or getattr(self, "img_yer", None)), "Hazır", yerbuldurur_empty),
-        ]
-        for attr, ok, ok_text, empty_text in status_map:
-            if hasattr(self, attr):
-                getattr(self, attr).config(text=ok_text if ok else empty_text, foreground=COLOR_SUCCESS if ok else COLOR_WARNING)
+        drawing_map = (
+            (
+                "lbl_harita_vaziyet",
+                "vaziyet",
+                getattr(self, "word_img_sondaj", None) or getattr(self, "word_img_jeofizik", None),
+                "Çizim yok",
+            ),
+            ("lbl_harita_jeoloji", "jeoloji", getattr(self, "img_mjh", None), "Çizim yok"),
+            (
+                "lbl_harita_yerbuldurur",
+                "yerbuldurur",
+                getattr(self, "img_yer", None),
+                "KML bekliyor" if kml_state != "ok" else "Çizim yok",
+            ),
+        )
+        for attr, key, output_path, empty_text in drawing_map:
+            if not hasattr(self, attr):
+                continue
+            state = harita_cizimleri.get(key, {}) if isinstance(harita_cizimleri.get(key), dict) else {}
+            state_path = state.get("img_path")
+            if state_path and os.path.isfile(state_path):
+                text, color = "Düzenleme kaydı hazır", COLOR_SUCCESS
+            elif output_path and os.path.isfile(output_path):
+                text = "Rapor çıktısı hazır" if not state else "Rapor çıktısı hazır · altlık eksik"
+                color = COLOR_SUCCESS if not state else COLOR_WARNING
+            elif state:
+                text, color = "Altlık dosyası bulunamadı", COLOR_WARNING
+            else:
+                text, color = empty_text, COLOR_WARNING
+            getattr(self, attr).config(text=text, foreground=color)
+
+        output_paths = {
+            "sondaj": getattr(self, "word_img_sondaj", None),
+            "jeofizik": getattr(self, "word_img_jeofizik", None),
+            "mjh": getattr(self, "img_mjh", None),
+            "yer": getattr(self, "img_yer", None),
+        }
+        output_ready = 0
+        for key, label in getattr(self, "harita_output_labels", {}).items():
+            state, text = self.harita_dosya_durumu(output_paths.get(key))
+            if state == "ok":
+                output_ready += 1
+            label.config(text=text, foreground=status_colors[state])
+        if hasattr(self, "lbl_harita_cikti_ozet"):
+            self.lbl_harita_cikti_ozet.config(
+                text=f"Word için hazır: {output_ready}/{len(output_paths)}",
+                foreground=COLOR_SUCCESS if output_ready == len(output_paths) else COLOR_WARNING,
+            )
+
+        if hasattr(self, "harita_durum_var"):
+            kml_summary = "KML hazır" if kml_state == "ok" else "KML eksik"
+            self.harita_durum_var.set(
+                f"{kml_summary} · Koordinatlar {coord_ready}/{coord_total} · Rapor çıktıları {output_ready}/{len(output_paths)}"
+            )
+            self.lbl_harita_durum.configure(
+                foreground=COLOR_SUCCESS
+                if kml_state == "ok" and coord_all_ready and output_ready == len(output_paths)
+                else COLOR_WARNING
+            )
+
+    def harita_altlik_secildi(self, _event=None):
+        self.harita_altlik_kaydet(self.harita_altlik_var.get(), notify=True)
+
+    def harita_altlik_kaydet(self, name, notify=False):
+        if name not in TILE_SERVERS:
+            name = DEFAULT_TILE_SERVER
+        self.veri.setdefault("ayarlar", {})["harita_altlik"] = name
+        if hasattr(self, "harita_altlik_var") and self.harita_altlik_var.get() != name:
+            self.harita_altlik_var.set(name)
+        if hasattr(self, "lbl_harita_altlik"):
+            self.lbl_harita_altlik.config(text=f"Seçili: {name}", foreground=COLOR_SUCCESS)
+        if notify:
+            self.set_status(f"Harita altlığı seçildi: {name}", level="success")
 
     def tkgm_kml_al(self):
         self.guncelle_veri_objesi()

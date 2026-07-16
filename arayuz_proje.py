@@ -311,6 +311,7 @@ class ArayuzProjeMixin:
                 "cikti_merkezi_klasor": "",
                 "cikti_merkezi_format": "JPG",
                 "cikti_merkezi_dpi": "300",
+                "harita_altlik": "Google Uydu",
                 "rapor_buyuk_baslik_yeni_sayfa": "1",
                 "taahhut_ilgili_idare": "",
                 "taahhut_tarih": "",

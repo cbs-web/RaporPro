@@ -61,7 +61,15 @@ def ensure_hgm_tile_headers():
 
 
 class TopluHarita(tk.Toplevel):
-    def __init__(self, master, kml_path=None, map_data=None, callback=None):
+    def __init__(
+        self,
+        master,
+        kml_path=None,
+        map_data=None,
+        callback=None,
+        tile_server=None,
+        tile_server_callback=None,
+    ):
         super().__init__(master)
         self.title("CBS - Toplu Koordinat ve Serim Seçimi")
         self.geometry("1300x800")
@@ -70,6 +78,8 @@ class TopluHarita(tk.Toplevel):
         self.map_data = map_data or {"sondaj": [], "ss": [], "mt": []}
         self.initial_results = self.map_data.get("initial", {})
         self.callback = callback
+        self.initial_tile_server = tile_server if tile_server in TILE_SERVERS else DEFAULT_TILE_SERVER
+        self.tile_server_callback = tile_server_callback
         
         self.active_id = None
         self.active_mod = None
@@ -125,7 +135,7 @@ class TopluHarita(tk.Toplevel):
         tile_frame = tk.Frame(info_frame, bg="#34495E")
         tile_frame.pack(side="right", padx=(8, 12), pady=7)
         tk.Label(tile_frame, text="Altlık", fg="white", bg="#34495E", font=("Arial", 9, "bold")).pack(side="left", padx=(0, 5))
-        self.tile_server_var = tk.StringVar(value=DEFAULT_TILE_SERVER)
+        self.tile_server_var = tk.StringVar(value=self.initial_tile_server)
         self.cmb_tile_server = ttk.Combobox(
             tile_frame,
             textvariable=self.tile_server_var,
@@ -140,7 +150,7 @@ class TopluHarita(tk.Toplevel):
 
         self.map_widget = tkintermapview.TkinterMapView(map_frame, corner_radius=0)
         self.map_widget.pack(fill="both", expand=True)
-        self.altlik_uygula(DEFAULT_TILE_SERVER, show_status=False)
+        self.altlik_uygula(self.initial_tile_server, show_status=False)
         self.map_widget.set_position(39.9334, 32.8597) 
         self.map_widget.set_zoom(6)
         self.map_widget.add_left_click_map_command(self.on_map_click)
@@ -232,6 +242,8 @@ class TopluHarita(tk.Toplevel):
 
     def altlik_degistir(self, event=None):
         self.altlik_uygula(self.tile_server_var.get())
+        if callable(self.tile_server_callback):
+            self.tile_server_callback(getattr(self, "active_tile_server", DEFAULT_TILE_SERVER))
 
     def gorsel_bindirme_ac(self):
         if not self.kml_path or not os.path.exists(self.kml_path):

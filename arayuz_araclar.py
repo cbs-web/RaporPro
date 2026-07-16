@@ -6,7 +6,7 @@ from tkinter import filedialog, messagebox, ttk, Toplevel
 from sabitler import *
 from yardimcilar import *
 from performans import perf_tracked
-from harita_motoru import TopluHarita
+from harita_motoru import DEFAULT_TILE_SERVER, TopluHarita
 from harita_referans import ss_harita_etiketi
 from kalite_kontrol import analyze_word_template, format_template_analysis, get_supported_tags
 from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
@@ -54,7 +54,17 @@ class ArayuzAraclarMixin:
             "mt": [m.get("no", f"MT-{i+1}") for i, m in enumerate(self.veri["jeofizik"]["mt_list"])],
             "initial": initial,
         }
-        TopluHarita(self.root, kml_path=self.kml_path, map_data=map_data, callback=self.toplu_koordinat_kaydet)
+        tile_server = self.veri.get("ayarlar", {}).get("harita_altlik", DEFAULT_TILE_SERVER)
+        if hasattr(self, "harita_altlik_var"):
+            tile_server = self.harita_altlik_var.get() or tile_server
+        TopluHarita(
+            self.root,
+            kml_path=self.kml_path,
+            map_data=map_data,
+            callback=self.toplu_koordinat_kaydet,
+            tile_server=tile_server,
+            tile_server_callback=getattr(self, "harita_altlik_kaydet", None),
+        )
 
     def toplu_koordinat_kaydet(self, results):
         if results.get("alan"):
