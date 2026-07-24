@@ -50,6 +50,7 @@ from kesit_korelasyon import (
     normalize_section_layers,
     turkce_buyuk_harf,
 )
+from kesit_topografya import topografya_profili_hazirla, topografya_profili_ornekle
 
 
 class GeoEngineKesitMixin:
@@ -95,6 +96,8 @@ class GeoEngineKesitMixin:
         show_legend = option_bool("show_legend", True)
         show_yass = option_bool("show_yass", True)
         show_yass_labels = option_bool("show_yass_labels", True)
+        show_topography_profile = option_bool("show_topography_profile", False)
+        topography_source = str(options.get("topography_source", "sondaj") or "sondaj").strip().lower()
         avoid_label_collisions = option_bool("avoid_label_collisions", True)
         hide_same_unit_seams = option_bool("hide_same_unit_seams", True)
         auto_lens = option_bool("auto_lens", True)
@@ -433,6 +436,7 @@ class GeoEngineKesitMixin:
 
             return line_len, project
 
+        project_to_line = None
         try:
             if use_line_projection:
                 start_y = safe_float(options.get("line_start_y"))
@@ -541,6 +545,39 @@ class GeoEngineKesitMixin:
         w_well = well_width
         
         xs, ys = [s["_plot_x"] for s in sondajlar], [s["_kot"] for s in sondajlar]
+
+        topography_x = list(xs)
+        topography_y = list(ys)
+        topography_info = {
+            "points": [
+                {"station": x, "elevation": y}
+                for x, y in zip(xs, ys)
+            ],
+            "source": "sondaj",
+            "warning": "",
+        }
+        if show_topography_profile:
+            station_scale = (
+                1.0
+                if print_scale_enabled or not use_distance_axis
+                else 1.0 / vertical_exaggeration
+            )
+            topography_info = topografya_profili_hazirla(
+                source=topography_source,
+                manual_points=options.get("topography_points") or [],
+                coordinate_points=options.get("topography_coordinate_points") or [],
+                borehole_points=[
+                    {"station": x, "elevation": y}
+                    for x, y in zip(xs, ys)
+                ],
+                project_to_line=project_to_line,
+                station_scale=station_scale,
+            )
+            topography_x, topography_y = topografya_profili_ornekle(
+                topography_info.get("points") or []
+            )
+            if topography_info.get("warning") and log_callback:
+                log_callback(topography_info["warning"], "warning")
         
         full_min_x_plot = xs[0] - MARGIN
         full_max_x_plot = xs[-1] + MARGIN
@@ -562,22 +599,34 @@ class GeoEngineKesitMixin:
             min_x_plot = requested_x_min
             max_x_plot = requested_x_max
         
-        try:
-            from scipy.interpolate import make_interp_spline
-            if len(xs) >= 3:
-                xs_arr, ys_arr = np.array(xs), np.array(ys); sort_idx = np.argsort(xs_arr)
-                ux, idx = np.unique(xs_arr[sort_idx], return_index=True); uy = ys_arr[sort_idx][idx]
-                if len(ux) >= 3:
-                    spline_degree = min(3, len(ux) - 1)
-                    X_ = np.linspace(ux.min(), ux.max(), 100); Y_ = make_interp_spline(ux, uy, k=spline_degree)(X_)
-                    ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
+        if show_topography_profile and len(topography_x) >= 2:
+            surface_line, = ax.plot(
+                topography_x,
+                topography_y,
+                color="#202020",
+                linestyle="-",
+                lw=1.8,
+                alpha=0.95,
+                zorder=30,
+            )
+            surface_line._geo_live_group = "topography"
+        else:
+            try:
+                from scipy.interpolate import make_interp_spline
+                if len(xs) >= 3:
+                    xs_arr, ys_arr = np.array(xs), np.array(ys); sort_idx = np.argsort(xs_arr)
+                    ux, idx = np.unique(xs_arr[sort_idx], return_index=True); uy = ys_arr[sort_idx][idx]
+                    if len(ux) >= 3:
+                        spline_degree = min(3, len(ux) - 1)
+                        X_ = np.linspace(ux.min(), ux.max(), 100); Y_ = make_interp_spline(ux, uy, k=spline_degree)(X_)
+                        ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                    else:
+                        ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
                 else:
                     ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
-            else: 
+            except Exception as exc:
+                log_exception("motor.section_surface_spline", exc_value=exc)
                 ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
-        except Exception as exc:
-            log_exception("motor.section_surface_spline", exc_value=exc)
-            ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
         
         yass_points = []
         if show_yass:
@@ -601,6 +650,7 @@ class GeoEngineKesitMixin:
 
         all_y = [s["_kot"] for s in sondajlar] + [s["_kot"] - safe_float(s.get("der",15)) for s in sondajlar]
         all_y.extend(point["elevation"] for point in yass_points)
+        all_y.extend(topography_y)
         
         min_y_visual = min(all_y) - 1.5 
         used_codes = set()
@@ -2190,6 +2240,12 @@ class GeoEngineKesitMixin:
         fig._geo_page_plan = page_plan
         fig._geo_full_x_limits = (full_min_x_plot, full_max_x_plot)
         fig._geo_print_title_block_axes = title_block_ax
+        fig._geo_topography_profile = {
+            "enabled": show_topography_profile,
+            "source": topography_info.get("source", "sondaj"),
+            "points": list(topography_info.get("points") or []),
+            "warning": topography_info.get("warning", ""),
+        }
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

@@ -3,6 +3,7 @@ from tkinter import Listbox, Toplevel, messagebox, ttk
 
 from harita_referans import kml_koordinatlari_oku
 from kesit_kalite import build_section_quality_report, format_section_quality_report
+from kesit_topografya import kml_yukseklik_noktalari_oku, topografya_metnini_oku
 from ui_kesit_yardimci import kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kesit_onizleme import KesitOnizlemeMixin
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
@@ -21,6 +22,21 @@ class KesitCizimMixin(KesitOnizlemeMixin):
 
         selected = options.get("selected_sondajlar") or []
         selected_key = "|".join(norm(item) for item in selected)
+        topography_points = options.get("topography_points") or []
+        topography_key = "|".join(
+            f"{norm_float(item.get('station'))}:{norm_float(item.get('elevation'))}"
+            for item in topography_points
+            if isinstance(item, dict)
+        )
+        topography_coordinate_points = options.get("topography_coordinate_points") or []
+        topography_coordinate_key = "|".join(
+            (
+                f"{norm_float(item.get('lat'))}:{norm_float(item.get('lon'))}:"
+                f"{norm_float(item.get('elevation'))}"
+            )
+            for item in topography_coordinate_points
+            if isinstance(item, dict)
+        )
         mode = norm(options.get("mode", "schematic"))
         geometry_parts = [
             mode,
@@ -41,6 +57,10 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             norm(options.get("two_well_lens", True)),
             norm_float(options.get("lens_max_thickness", 2.0)),
             norm_float(options.get("lens_closure_ratio", 0.58)),
+            norm(options.get("show_topography_profile", False)),
+            norm(options.get("topography_source", "sondaj")),
+            topography_key,
+            topography_coordinate_key,
         ]
         if mode == "line_projection":
             geometry_parts.extend([
@@ -119,9 +139,11 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         tab_sondajlar = ttk.Frame(section_nb, padding=8)
         tab_ayarlar = ttk.Frame(section_nb, padding=8)
         tab_hat = ttk.Frame(section_nb, padding=8)
+        tab_topografya = ttk.Frame(section_nb, padding=8)
         section_nb.add(tab_sondajlar, text="Sondajlar")
         section_nb.add(tab_ayarlar, text="Çizim / Etiket / Export")
         section_nb.add(tab_hat, text="Kesit Hattı")
+        section_nb.add(tab_topografya, text="Topoğrafya")
 
         top = ttk.LabelFrame(tab_sondajlar, text="Sondajlar", padding=10)
         top.pack(fill="both", expand=True)
@@ -571,8 +593,155 @@ class KesitCizimMixin(KesitOnizlemeMixin):
 
         ttk.Button(line_opt, text="Haritadan Hat Çiz", command=open_map_line_selector).grid(row=5, column=0, columnspan=2, sticky="ew", padx=5, pady=(6, 0))
 
+        topography_sources = {
+            "Sondaj kotları": "sondaj",
+            "Manuel station/kot": "manual",
+            "KML yükseklikleri": "kml",
+        }
+        saved_topography_source = str(saved_kesit.get("topography_source", "sondaj") or "sondaj")
+        topography_source_label = next(
+            (label for label, value in topography_sources.items() if value == saved_topography_source),
+            "Sondaj kotları",
+        )
+        show_topography_var = tk.BooleanVar(
+            value=str(saved_kesit.get("show_topography_profile", False)).strip().lower()
+            not in ("", "0", "false", "no", "off", "hayir", "hayır")
+        )
+        topography_source_var = tk.StringVar(value=topography_source_label)
+        topography_kml_points = [
+            dict(item)
+            for item in (saved_kesit.get("topography_coordinate_points") or [])
+            if isinstance(item, dict)
+        ]
+
+        topography_frame = ttk.LabelFrame(tab_topografya, text="Topoğrafik Profil", padding=10)
+        topography_frame.pack(fill="both", expand=True)
+        ttk.Checkbutton(
+            topography_frame,
+            text="Topoğrafik profili kullan",
+            variable=show_topography_var,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 8))
+        ttk.Label(topography_frame, text="Kaynak").grid(row=1, column=0, sticky="e", padx=4, pady=4)
+        cmb_topography_source = ttk.Combobox(
+            topography_frame,
+            textvariable=topography_source_var,
+            values=tuple(topography_sources),
+            state="readonly",
+            width=24,
+        )
+        cmb_topography_source.grid(row=1, column=1, sticky="w", padx=4, pady=4)
+
+        ttk.Label(topography_frame, text="Station (m) / Kot (m)").grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(10, 4)
+        )
+        topography_text_frame = ttk.Frame(topography_frame)
+        topography_text_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=4, pady=4)
+        topography_text = tk.Text(
+            topography_text_frame,
+            height=13,
+            wrap="none",
+            font=("Consolas", 10),
+        )
+        topography_scroll_y = ttk.Scrollbar(
+            topography_text_frame,
+            orient="vertical",
+            command=topography_text.yview,
+        )
+        topography_scroll_x = ttk.Scrollbar(
+            topography_text_frame,
+            orient="horizontal",
+            command=topography_text.xview,
+        )
+        topography_text.configure(
+            yscrollcommand=topography_scroll_y.set,
+            xscrollcommand=topography_scroll_x.set,
+        )
+        topography_text.grid(row=0, column=0, sticky="nsew")
+        topography_scroll_y.grid(row=0, column=1, sticky="ns")
+        topography_scroll_x.grid(row=1, column=0, sticky="ew")
+        topography_text_frame.rowconfigure(0, weight=1)
+        topography_text_frame.columnconfigure(0, weight=1)
+        for point in saved_kesit.get("topography_points") or []:
+            if not isinstance(point, dict):
+                continue
+            station = point.get("station", "")
+            elevation = point.get("elevation", "")
+            topography_text.insert(tk.END, f"{station}\t{elevation}\n")
+
+        topography_status_var = tk.StringVar(
+            value=(
+                f"KML kot noktası: {len(topography_kml_points)}"
+                if topography_kml_points
+                else "KML kot noktası yüklenmedi"
+            )
+        )
+        ttk.Label(topography_frame, textvariable=topography_status_var).grid(
+            row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(4, 0)
+        )
+
+        def kml_yuksekliklerini_yukle():
+            path = getattr(self, "kml_path", None)
+            if not path:
+                path = (self.veri.get("dosyalar") or {}).get("kml_path")
+            if not path:
+                messagebox.showwarning("Topoğrafya", "Önce proje KML sınır dosyasını seçin.", parent=win)
+                return
+            try:
+                points = kml_yukseklik_noktalari_oku(path, max_points=2000)
+            except Exception as exc:
+                messagebox.showerror("Topoğrafya", f"KML yükseklikleri okunamadı:\n{exc}", parent=win)
+                return
+            elevations = [
+                abs(safe_float(item.get("elevation")))
+                for item in points
+                if isinstance(item, dict)
+            ]
+            if len(points) < 2 or not elevations or max(elevations) < 0.001:
+                topography_kml_points.clear()
+                topography_status_var.set("KML dosyasında kullanılabilir yükseklik yok")
+                messagebox.showwarning(
+                    "Topoğrafya",
+                    "KML dosyasının koordinatlarında kullanılabilir kot değeri bulunamadı.",
+                    parent=win,
+                )
+                return
+            topography_kml_points[:] = points
+            topography_source_var.set("KML yükseklikleri")
+            show_topography_var.set(True)
+            topography_status_var.set(f"KML kot noktası: {len(points)}")
+            self.set_status(f"KML dosyasından {len(points)} topoğrafya noktası okundu.", level="success")
+
+        def manuel_topografyayi_temizle():
+            topography_text.delete("1.0", tk.END)
+            topography_source_var.set("Manuel station/kot")
+            topography_status_var.set("Manuel station/kot listesi temizlendi")
+
+        topography_buttons = ttk.Frame(topography_frame)
+        topography_buttons.grid(row=5, column=0, columnspan=3, sticky="ew", padx=4, pady=(10, 0))
+        ttk.Button(
+            topography_buttons,
+            text="KML Kotlarını Oku",
+            command=kml_yuksekliklerini_yukle,
+        ).pack(side="left", padx=(0, 5))
+        ttk.Button(
+            topography_buttons,
+            text="Manuel Listeyi Temizle",
+            command=manuel_topografyayi_temizle,
+        ).pack(side="left", padx=5)
+        topography_frame.rowconfigure(3, weight=1)
+        topography_frame.columnconfigure(2, weight=1)
+
         def collect_options(selected, require_line=False):
             kunye = dict(self.veri.get("kunye") or {})
+            topography_points, invalid_topography_lines = topografya_metnini_oku(
+                topography_text.get("1.0", tk.END)
+            )
+            if invalid_topography_lines:
+                topography_status_var.set(
+                    "Okunamayan satırlar: " + ", ".join(str(value) for value in invalid_topography_lines[:8])
+                )
+            elif topography_points:
+                topography_status_var.set(f"Manuel profil noktası: {len(topography_points)}")
             selected_names = [
                 self.veri["sondaj"][i].get("no", "")
                 for i in selected
@@ -634,6 +803,13 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "project_location": project_location,
                 "project_cadastral": " | ".join(cadastral_parts),
                 "section_name": kesit_kayit_dosya_adi(selected_names),
+                "show_topography_profile": show_topography_var.get(),
+                "topography_source": topography_sources.get(
+                    topography_source_var.get(),
+                    "sondaj",
+                ),
+                "topography_points": topography_points,
+                "topography_coordinate_points": list(topography_kml_points),
             }
             if mode_var.get() == "line_projection":
                 start_idx = cmb_start.current()

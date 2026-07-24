@@ -113,6 +113,12 @@ from kesit_baski import (
     kesit_dusey_abarti,
     kesit_metre_baski_boyu,
 )
+from kesit_topografya import (
+    koordinat_noktalarini_profille,
+    topografya_metnini_oku,
+    topografya_profili_hazirla,
+    topografya_profili_ornekle,
+)
 from ui_kontrol import KontrolPaneliMixin
 from ui_cikti import (
     CiktiMerkeziMixin,
@@ -1895,6 +1901,123 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
 
 class KesitCizimTestleri(unittest.TestCase):
+    def test_topografya_metni_excel_sutunlarini_ve_ondalik_virgulu_okur(self):
+        points, invalid_lines = topografya_metnini_oku(
+            "Station\tKot\n0\t100,50\n10.0\t101.25\nbozuk"
+        )
+        self.assertEqual(invalid_lines, [4])
+        self.assertEqual(
+            points,
+            [
+                {"station": 0.0, "elevation": 100.5},
+                {"station": 10.0, "elevation": 101.25},
+            ],
+        )
+
+    def test_topografya_profili_manuel_noktalari_olceklendirip_sondajlara_baglar(self):
+        result = topografya_profili_hazirla(
+            source="manual",
+            manual_points=[
+                {"station": 0, "elevation": 99},
+                {"station": 10, "elevation": 102},
+                {"station": 40, "elevation": 97},
+            ],
+            coordinate_points=[],
+            borehole_points=[
+                {"station": 0, "elevation": 100},
+                {"station": 20, "elevation": 98},
+            ],
+            station_scale=0.5,
+        )
+        self.assertEqual(result["source"], "manual")
+        by_station = {point["station"]: point["elevation"] for point in result["points"]}
+        self.assertEqual(by_station[0.0], 100.0)
+        self.assertEqual(by_station[5.0], 102.0)
+        self.assertEqual(by_station[20.0], 98.0)
+
+    def test_topografya_profili_kml_kotu_yoksa_sondajlara_doner(self):
+        result = topografya_profili_hazirla(
+            source="kml",
+            manual_points=[],
+            coordinate_points=[
+                {"lat": 40.0, "lon": 26.0, "elevation": 0},
+                {"lat": 40.1, "lon": 26.1, "elevation": 0},
+            ],
+            borehole_points=[
+                {"station": 0, "elevation": 100},
+                {"station": 10, "elevation": 99},
+            ],
+            project_to_line=lambda lat, lon: (lon * 10, lat),
+        )
+        self.assertEqual(result["source"], "sondaj")
+        self.assertIn("KML", result["warning"])
+
+    def test_topografya_koordinatlari_kesit_hattina_izdusurulur(self):
+        points = koordinat_noktalarini_profille(
+            [
+                {"lat": 40.0, "lon": 26.0, "elevation": 100},
+                {"lat": 40.1, "lon": 26.1, "elevation": 101},
+            ],
+            lambda lat, lon: ((lon - 26.0) * 100, lat - 40.0),
+            station_scale=2.0,
+        )
+        self.assertAlmostEqual(points[1]["station"], 20.0)
+        sample_x, sample_y = topografya_profili_ornekle(points, sample_count=5)
+        self.assertEqual(len(sample_x), 5)
+        self.assertAlmostEqual(sample_y[2], 100.5)
+
+    def test_kesit_motoru_manuel_topografya_profilini_cizer(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "10",
+                "litoloji": [["0", "10", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "10",
+                "litoloji": [["0", "10", "Kil"]],
+                "spt": [],
+            },
+        ]
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "dx_default": "25",
+                "show_topography_profile": True,
+                "topography_source": "manual",
+                "topography_points": [
+                    {"station": 0, "elevation": 100},
+                    {"station": 12.5, "elevation": 103},
+                    {"station": 25, "elevation": 99},
+                ],
+                "show_legend": False,
+                "show_yass": False,
+                "show_distance_labels": False,
+                "show_layer_depth_labels": False,
+                "show_consistency_labels": False,
+            },
+        )
+        profile = fig._geo_topography_profile
+        self.assertTrue(profile["enabled"])
+        self.assertEqual(profile["source"], "manual")
+        self.assertIn(
+            {"station": 12.5, "elevation": 103.0},
+            profile["points"],
+        )
+        topography_lines = [
+            line
+            for line in fig.axes[0].lines
+            if getattr(line, "_geo_live_group", "") == "topography"
+        ]
+        self.assertEqual(len(topography_lines), 1)
+        self.assertGreater(max(topography_lines[0].get_ydata()), 102.9)
+        fig.clear()
+
     def test_kesit_v2_son_ana_birime_gore_birlestirir(self):
         sondaj = {
             "no": "SK-1",
