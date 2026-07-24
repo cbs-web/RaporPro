@@ -107,6 +107,10 @@ from kesit_korelasyon import (
     section_layer_id,
 )
 from kesit_kalite import build_section_quality_report
+from kesit_export import (
+    kesit_cok_sayfali_cikti_kaydet,
+    kesit_figuru_kaydet,
+)
 from kesit_geometri_kalite import (
     build_section_geometry_report,
     kalite_raporlarini_birlestir,
@@ -2775,6 +2779,130 @@ class KesitCizimTestleri(unittest.TestCase):
             if getattr(artist, "_geo_export_group", None) == "page_break"
         ]
         self.assertFalse(page_break_artists)
+
+    def test_topografyali_kesit_pdf_ve_svg_ciktilari_dogrulanir(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "10",
+                "litoloji": [["0", "5", "Kum"], ["5", "10", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "10",
+                "litoloji": [["0", "5", "Kum"], ["5", "10", "Kil"]],
+                "spt": [],
+            },
+        ]
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "dx_default": "25",
+                "show_topography_profile": True,
+                "conform_layers_to_topography": True,
+                "topography_source": "manual",
+                "topography_points": [
+                    {"station": 0, "elevation": 100},
+                    {"station": 12.5, "elevation": 96},
+                    {"station": 25, "elevation": 99},
+                ],
+                "show_yass": False,
+                "show_legend": True,
+                "show_consistency_labels": False,
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            svg_path = os.path.join(tmp, "topografyali_kesit.svg")
+            pdf_path = os.path.join(tmp, "topografyali_kesit.pdf")
+            svg_info = kesit_figuru_kaydet(fig, svg_path, dpi=120, bbox_inches="tight")
+            pdf_info = kesit_figuru_kaydet(fig, pdf_path, dpi=120, bbox_inches="tight")
+            self.assertEqual(svg_info["format"], "svg")
+            self.assertGreater(svg_info["size"], 1000)
+            self.assertEqual(pdf_info["page_count"], 1)
+            svg_text = Path(svg_path).read_text(encoding="utf-8")
+            self.assertIn("<svg", svg_text)
+            self.assertIn("<path", svg_text)
+        fig.clear()
+
+    def test_topografyali_uzun_kesit_cok_sayfali_pdf_olarak_kaydedilir(self):
+        import fitz
+
+        sondajlar = [
+            {
+                "no": f"SK-{index + 1}",
+                "k": str(100 - index),
+                "der": "10",
+                "litoloji": [["0", "4", "Kum"], ["4", "10", "Kil"]],
+                "spt": [],
+            }
+            for index in range(7)
+        ]
+        common_options = {
+            "mode": "schematic",
+            "dx_default": "50",
+            "print_scale_enabled": True,
+            "print_title_block": True,
+            "print_multi_page": True,
+            "print_page_size": "Otomatik (A4/A3)",
+            "horizontal_scale": "500",
+            "vertical_scale": "250",
+            "show_topography_profile": True,
+            "conform_layers_to_topography": True,
+            "topography_source": "manual",
+            "topography_points": [
+                {"station": 0, "elevation": 100},
+                {"station": 150, "elevation": 94},
+                {"station": 300, "elevation": 94},
+            ],
+            "show_legend": False,
+            "show_yass": False,
+            "show_consistency_labels": False,
+            "section_name": "Kesit SK1-7",
+        }
+        preview_fig, _ = GeoEngine.kesit_ciz_interaktif(
+            copy.deepcopy(sondajlar),
+            options=common_options,
+        )
+        page_plan = preview_fig._geo_page_plan
+        self.assertGreater(page_plan["page_count"], 1)
+
+        def render_page(page_index, x_window):
+            page_options = dict(common_options)
+            page_options.update({
+                "print_page_size": page_plan["page_name"],
+                "print_x_min": x_window[0],
+                "print_x_max": x_window[1],
+                "print_page_index": page_index,
+                "print_page_count": page_plan["page_count"],
+                "print_multi_page": False,
+            })
+            page_fig, _ = GeoEngine.kesit_ciz_interaktif(
+                copy.deepcopy(sondajlar),
+                options=page_options,
+            )
+            self.assertIsNotNone(page_fig._geo_topography_mask)
+            return page_fig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = os.path.join(tmp, "uzun_topografyali_kesit.pdf")
+            result = kesit_cok_sayfali_cikti_kaydet(
+                pdf_path,
+                "pdf",
+                page_plan,
+                render_page,
+                dpi=120,
+            )
+            self.assertEqual(result["page_count"], page_plan["page_count"])
+            self.assertEqual(len(result["paths"]), 1)
+            with fitz.open(pdf_path) as document:
+                self.assertEqual(document.page_count, page_plan["page_count"])
+                for page in document:
+                    self.assertGreater(len(page.get_drawings()), 10)
+        preview_fig.clear()
 
     def test_kesit_motoru_tekrarli_birimleri_ayri_eslestirir(self):
         sondajlar = [

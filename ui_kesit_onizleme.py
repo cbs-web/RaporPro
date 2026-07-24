@@ -1,12 +1,11 @@
 # Dosya: RaporPro/ui_kesit_onizleme.py
 import copy
-from pathlib import Path
 import tkinter as tk
 from tkinter import Frame, Listbox, Toplevel, filedialog, messagebox, ttk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.backends.backend_pdf import PdfPages
 
+from kesit_export import kesit_cok_sayfali_cikti_kaydet, kesit_figuru_kaydet
 from kesit_geometri_kalite import build_section_geometry_report, kalite_raporlarini_birlestir
 from kesit_kalite import build_section_quality_report
 from kesit_korelasyon import correlation_relation_id, section_layer_id
@@ -1335,7 +1334,6 @@ class KesitOnizlemeMixin:
             ):
                 save_section_edits(show_status=False)
                 page_count = page_plan["page_count"]
-                output_path = Path(path)
 
                 def render_export_page(page_index, x_window):
                     page_options = dict(options)
@@ -1366,31 +1364,16 @@ class KesitOnizlemeMixin:
                         page_tool.refresh_same_unit_seams()
                     return page_fig
 
+                kesit_cok_sayfali_cikti_kaydet(
+                    path,
+                    fmt,
+                    page_plan,
+                    render_export_page,
+                    dpi=export_config["dpi"],
+                )
                 if fmt == "pdf":
-                    with PdfPages(path) as pdf:
-                        for page_index, x_window in enumerate(page_plan["windows"], start=1):
-                            page_fig = render_export_page(page_index, x_window)
-                            pdf.savefig(
-                                page_fig,
-                                dpi=export_config["dpi"],
-                                bbox_inches=None,
-                                facecolor="white",
-                            )
-                            page_fig.clear()
                     saved_message = f"Kesit {page_count} sayfalı PDF olarak kaydedildi."
                 else:
-                    for page_index, x_window in enumerate(page_plan["windows"], start=1):
-                        page_fig = render_export_page(page_index, x_window)
-                        page_path = output_path.with_name(
-                            f"{output_path.stem}_Sayfa{page_index}{output_path.suffix}"
-                        )
-                        page_fig.savefig(
-                            page_path,
-                            dpi=export_config["dpi"],
-                            bbox_inches=None,
-                            facecolor="white",
-                        )
-                        page_fig.clear()
                     saved_message = f"Kesit {page_count} ayrı {fmt.upper()} sayfası olarak kaydedildi."
                 messagebox.showinfo("Başarılı", saved_message)
                 return
@@ -1434,11 +1417,11 @@ class KesitOnizlemeMixin:
                 if vertex_markers is not None:
                     vertex_markers.set_visible(False)
                 print_layout = getattr(fig, "_geo_print_layout", None)
-                fig.savefig(
+                kesit_figuru_kaydet(
+                    fig,
                     path,
                     dpi=export_config["dpi"],
                     bbox_inches=None if print_layout else "tight",
-                    facecolor="white",
                 )
                 messagebox.showinfo("Başarılı", "Kesit kaydedildi.")
             finally:
