@@ -1889,21 +1889,25 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
 
 class KesitCizimTestleri(unittest.TestCase):
-    def test_kesit_v2_ayni_pattern_farkli_detayi_birlestirmez(self):
+    def test_kesit_v2_son_ana_birime_gore_birlestirir(self):
         sondaj = {
             "no": "SK-1",
             "k": "100",
-            "der": "6",
+            "der": "10",
             "litoloji": [
                 ["0", "3", "Siltli Kum"],
                 ["3", "6", "Çakıllı Kum"],
+                ["6", "8", "Kil"],
+                ["8", "10", "Kumlu Kil"],
             ],
         }
         layers = normalize_section_layers(sondaj)
         self.assertEqual(len(layers), 2)
-        self.assertEqual([layer["code"] for layer in layers], ["k", "k"])
-        self.assertEqual([layer["detail_name"] for layer in layers], ["Siltli Kum", "Çakıllı Kum"])
-        self.assertNotEqual(layers[0]["correlation_key"], layers[1]["correlation_key"])
+        self.assertEqual([layer["code"] for layer in layers], ["k", "kl"])
+        self.assertEqual([layer["detail_name"] for layer in layers], ["Kum", "Kil"])
+        self.assertEqual([layer["correlation_key"] for layer in layers], ["k", "kl"])
+        self.assertEqual((layers[0]["top"], layers[0]["bot"]), (0.0, 6.0))
+        self.assertEqual((layers[1]["top"], layers[1]["bot"]), (6.0, 10.0))
 
     def test_kesit_v2_ayni_detayli_birimi_birlestirir(self):
         sondaj = {
@@ -1915,10 +1919,10 @@ class KesitCizimTestleri(unittest.TestCase):
         }
         layers = normalize_section_layers(sondaj)
         self.assertEqual(len(layers), 1)
-        self.assertEqual(layers[0]["detail_name"], "Siltli Kum")
+        self.assertEqual(layers[0]["detail_name"], "Kum")
         self.assertEqual((layers[0]["top"], layers[0]["bot"]), (0.0, 3.0))
 
-    def test_kesit_v2_global_korelasyon_detayli_birimleri_ayirir(self):
+    def test_kesit_v2_global_korelasyon_son_ana_birimi_eslestirir(self):
         left = {
             "no": "SK-1",
             "k": "100",
@@ -1934,7 +1938,9 @@ class KesitCizimTestleri(unittest.TestCase):
         layers1 = normalize_section_layers(left)
         layers2 = normalize_section_layers(right)
         link = build_pair_correlation(left, right, layers1, layers2, 25.0, {"corr_tolerance": 3.0})
-        self.assertEqual(link["matches_s1"], {0: 0, 1: 1})
+        self.assertEqual(len(layers1), 1)
+        self.assertEqual(len(layers2), 1)
+        self.assertEqual(link["matches_s1"], {0: 0})
         self.assertFalse(link["facies_s1"])
         self.assertTrue(all(item["source"] == "auto_v2" for item in link["relations"]))
 
@@ -1943,13 +1949,13 @@ class KesitCizimTestleri(unittest.TestCase):
             "no": "SK-1",
             "k": "100",
             "_kot": 100.0,
-            "litoloji": [["0", "2", "Siltli Kum"], ["2", "4", "Çakıllı Kum"]],
+            "litoloji": [["0", "2", "Kil"], ["2", "4", "Kum"]],
         }
         right = {
             "no": "SK-2",
             "k": "100",
             "_kot": 100.0,
-            "litoloji": [["0", "2", "Siltli Kum"], ["2", "4", "Çakıllı Kum"]],
+            "litoloji": [["0", "2", "Kil"], ["2", "4", "Kum"]],
         }
         layers1 = normalize_section_layers(left)
         layers2 = normalize_section_layers(right)
@@ -2078,7 +2084,7 @@ class KesitCizimTestleri(unittest.TestCase):
         )
         self.assertEqual(quality["stats"]["semantic_lenses"], 1)
 
-    def test_kesit_v2_detayli_adlari_kesitte_gosterir(self):
+    def test_kesit_v2_ana_birim_adini_kesitte_gosterir(self):
         sondajlar = [
             {
                 "no": "SK-1",
@@ -2108,10 +2114,11 @@ class KesitCizimTestleri(unittest.TestCase):
         fig, _ = GeoEngine.kesit_ciz_interaktif(sondajlar, options=options)
         texts = {text.get_text() for text in fig.axes[0].texts}
         self.assertEqual(fig._geo_section_engine, "v2")
-        self.assertIn("SİLTLİ KUM", texts)
-        self.assertIn("ÇAKILLI KUM", texts)
+        self.assertIn("KUM", texts)
+        self.assertNotIn("SİLTLİ KUM", texts)
+        self.assertNotIn("ÇAKILLI KUM", texts)
         report = build_section_quality_report(sondajlar, options)
-        self.assertEqual(report["stats"]["exact_matches"], 2)
+        self.assertEqual(report["stats"]["exact_matches"], 1)
 
     def test_kesit_kayit_dosya_adi_sondaj_araligini_uret(self):
         self.assertEqual(kesit_kayit_dosya_adi(["SK-1", "SK-2", "SK-3"]), "Kesit SK1-3")

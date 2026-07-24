@@ -134,13 +134,33 @@ def litoloji_detay_adi(text: Any) -> str:
     return " ".join(_DETAIL_DISPLAY.get(term, term.title()) for term in terms)
 
 
-def litoloji_korelasyon_anahtari(text: Any) -> str:
-    """Ayni pattern icindeki farkli detayli birimleri ayiran kararlı anahtar."""
+def litoloji_ana_birim_adi(text: Any) -> str:
+    """Litoloji taniminin son ana kelimesini kesit birimi olarak dondurur."""
     terms = litoloji_detay_terimleri(text)
     if terms:
-        return ":".join(terms)
-    normalized = "-".join(_text_tokens(text))
-    return f"tanimsiz:{normalized}" if normalized else "tanimsiz"
+        main_term = terms[-1]
+        if main_term == "toprak" and any(term in ("bitkisel", "nebati") for term in terms):
+            return "Bitkisel Toprak"
+        return _DETAIL_DISPLAY.get(main_term, main_term.title())
+
+    code = litoloji_cozumle(text) or "tanimsiz"
+    return {
+        "bt": "Bitkisel Toprak",
+        "kl": "Kil",
+        "s": "Silt",
+        "k": "Kum",
+        "c": "Çakıl",
+        "kit": "Kiltaşı",
+        "kt": "Kumtaşı",
+        "ct": "Çakıltaşı",
+        "dg": "Dolgu",
+        "mlz": "Moloz",
+    }.get(code, "Tanımsız Birim")
+
+
+def litoloji_korelasyon_anahtari(text: Any) -> str:
+    """Kesit korelasyonunu son ana birime/pattern koduna baglar."""
+    return litoloji_cozumle(text) or "tanimsiz"
 
 
 def _row_value(row: Any, index: int, keys: tuple[str, ...], default: Any = "") -> Any:
@@ -179,7 +199,7 @@ def normalize_section_layers(sondaj: dict[str, Any], merge_same_detail: bool = T
         bot = safe_float(_row_value(row, 1, ("bit", "bitis", "bot", "to")))
         text = str(_row_value(row, 2, ("tanim", "litoloji", "aciklama", "text"), "") or "").strip()
         code = litoloji_cozumle(text) or "tanimsiz"
-        detail_name = litoloji_detay_adi(text)
+        detail_name = litoloji_ana_birim_adi(text)
         correlation_key = litoloji_korelasyon_anahtari(text)
         layers.append({
             "top": top,
@@ -204,7 +224,6 @@ def normalize_section_layers(sondaj: dict[str, Any], merge_same_detail: bool = T
         previous = merged[-1]
         same_unit = (
             previous.get("code") == layer.get("code")
-            and previous.get("correlation_key") == layer.get("correlation_key")
             and abs(safe_float(previous.get("bot")) - safe_float(layer.get("top"))) < 0.1
         )
         if not same_unit:
@@ -252,8 +271,6 @@ def _exact_candidate(
     dx_true: float,
     options: dict[str, Any],
 ) -> tuple[float, float] | None:
-    if l1.get("correlation_key") != l2.get("correlation_key"):
-        return None
     if l1.get("code") != l2.get("code"):
         return None
 
@@ -462,10 +479,7 @@ def build_pair_correlation(
             if pair[0] != idx1 and pair[1] != idx2
         ]
         requested_kind = str(override.get("kind") or "match").strip().lower()
-        same_identity = (
-            layers1[idx1].get("code") == layers2[idx2].get("code")
-            and layers1[idx1].get("correlation_key") == layers2[idx2].get("correlation_key")
-        )
+        same_identity = layers1[idx1].get("code") == layers2[idx2].get("code")
         kind = "match" if requested_kind == "match" and same_identity else "facies"
         relation_id = relation_id_for_indices(idx1, idx2)
         relation_sources[relation_id] = "manual"
@@ -596,7 +610,7 @@ def build_semantic_lens_tracks(
             last_well_idx, last_layer_idx = node_keys[-1]
             first_layer = layers_by_well[first_well_idx][first_layer_idx]
             code = str(first_layer.get("code") or "")
-            correlation_key = str(first_layer.get("correlation_key") or code or "tanimsiz")
+            correlation_key = code or "tanimsiz"
             if code in ("", "tanimsiz", "bt"):
                 continue
 

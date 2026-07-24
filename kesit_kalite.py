@@ -431,7 +431,7 @@ def build_section_quality_report(sondajlar, options=None):
             )
             stats["semantic_lenses"] = len(semantic_lenses)
         report["info"].append(
-            f"V2 korelasyon: {stats.get('exact_matches', 0)} ayrıntılı birim eşleşmesi, "
+            f"V2 korelasyon: {stats.get('exact_matches', 0)} ana birim eşleşmesi, "
             f"{stats.get('facies_matches', 0)} kontrollü fasiyes geçişi, "
             f"{stats.get('semantic_lenses', 0)} semantik mercek."
         )

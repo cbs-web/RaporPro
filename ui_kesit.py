@@ -239,7 +239,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         ttk.Checkbutton(opt, text="İki sondajda yarım mercek", variable=two_well_lens_var).grid(row=15, column=2, sticky="w", padx=5)
         ttk.Checkbutton(
             opt,
-            text="Detaylı litoloji adları",
+            text="Birim adlarını göster",
             variable=show_detailed_lithology_var,
         ).grid(row=16, column=2, sticky="w", padx=5)
 

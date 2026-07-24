@@ -701,15 +701,12 @@ class KesitOnizlemeMixin:
                     and item.get("right_id") != right_id
                 ]
                 requested_kind = "match" if kind_var.get() == "Aynı birim" else "facies"
-                same_identity = (
-                    left_layer.get("code") == right_layer.get("code")
-                    and left_layer.get("correlation_key") == right_layer.get("correlation_key")
-                )
+                same_identity = left_layer.get("code") == right_layer.get("code")
                 if requested_kind == "match" and not same_identity:
                     requested_kind = "facies"
                     kind_var.set("Fasiyes geçişi")
                     self.set_status(
-                        "Farklı ayrıntılı birimler fasiyes geçişi olarak kaydedildi.",
+                        "Farklı ana birimler fasiyes geçişi olarak kaydedildi.",
                         level="info",
                     )
                 forced.append({
@@ -960,7 +957,7 @@ class KesitOnizlemeMixin:
                 ("YASS etiketi", yass_label_var),
                 ("Sıkılık/kıvam", consistency_var),
                 ("Aynı birim çizgisini gizle", seams_var),
-                ("Detaylı litoloji adları", detailed_lithology_var),
+                ("Birim adlarını göster", detailed_lithology_var),
             ]
             for idx, (label, var) in enumerate(live_checks):
                 ttk.Checkbutton(live_frame, text=label, variable=var).grid(row=idx // 3, column=idx % 3, sticky="w", padx=6, pady=3)
