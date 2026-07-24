@@ -1944,6 +1944,75 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertFalse(link["facies_s1"])
         self.assertTrue(all(item["source"] == "auto_v2" for item in link["relations"]))
 
+    def test_kesit_v2_farkli_ana_birimleri_mercek_yerine_fasiyes_cizer(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "5",
+                "der": "15",
+                "litoloji": [
+                    ["0", "0.5", "Bitkisel Toprak"],
+                    ["0.5", "3", "Kum"],
+                    ["3", "6", "Çakıl"],
+                    ["6", "7.5", "Kum"],
+                    ["7.5", "15", "Kil"],
+                ],
+                "spt": [],
+            },
+            {
+                "no": "SK-3",
+                "k": "5",
+                "der": "15",
+                "litoloji": [
+                    ["0", "0.5", "Bitkisel Toprak"],
+                    ["0.5", "4.5", "Kum"],
+                    ["4.5", "6", "Kil"],
+                    ["6", "7.5", "Kum"],
+                    ["7.5", "15", "Kil"],
+                ],
+                "spt": [],
+            },
+        ]
+        for sondaj in sondajlar:
+            sondaj["_kot"] = float(sondaj["k"])
+            sondaj["merged_layers_v2"] = normalize_section_layers(sondaj)
+            sondaj["merged_layers"] = sondaj["merged_layers_v2"]
+
+        left, right = sondajlar
+        link = build_pair_correlation(
+            left,
+            right,
+            left["merged_layers_v2"],
+            right["merged_layers_v2"],
+            7.4,
+            {"corr_tolerance": 3.0},
+        )
+        self.assertEqual(link["matches_s1"], {0: 0, 1: 1, 3: 3, 4: 4})
+        self.assertEqual(link["facies_s1"], {2: 2})
+
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "section_engine": "v2",
+                "auto_lens": True,
+                "two_well_lens": True,
+                "show_legend": False,
+                "show_yass": False,
+                "show_distance_labels": False,
+                "show_layer_depth_labels": False,
+                "show_consistency_labels": False,
+            },
+        )
+        edit_ids = {
+            getattr(poly, "_geo_edit_id", "")
+            for poly in fig._geo_tool.polygons
+        }
+        self.assertFalse(fig._geo_semantic_lenses)
+        self.assertIn("facies-left:SK-1:SK-3:2:2:c", edit_ids)
+        self.assertIn("facies-right:SK-1:SK-3:2:2:kl", edit_ids)
+        self.assertFalse(any(edit_id.startswith("semantic-lens:") for edit_id in edit_ids))
+
     def test_kesit_v2_manuel_korelasyon_kararlarini_uygular(self):
         left = {
             "no": "SK-1",

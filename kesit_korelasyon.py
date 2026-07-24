@@ -358,11 +358,9 @@ def _facies_compatible(code1: Any, code2: Any) -> bool:
     code2 = str(code2 or "")
     if not code1 or not code2 or "tanimsiz" in (code1, code2):
         return False
-    if code1 == code2:
-        return True
-    family1 = _FACIES_FAMILY.get(code1)
-    family2 = _FACIES_FAMILY.get(code2)
-    return bool(family1 and family1 == family2)
+    if "bt" in (code1, code2):
+        return code1 == code2
+    return True
 
 
 def _facies_matches(
@@ -396,7 +394,10 @@ def _facies_matches(
                 continue
             mid_dist = abs(info1["mid"] - info2["mid"])
             same_pattern_bonus = 2.0 if l1.get("code") == l2.get("code") else 0.0
-            score = overlap * 4.0 - mid_dist * 0.35 + same_pattern_bonus
+            family1 = _FACIES_FAMILY.get(str(l1.get("code") or ""))
+            family2 = _FACIES_FAMILY.get(str(l2.get("code") or ""))
+            same_family_bonus = 0.75 if family1 and family1 == family2 else 0.0
+            score = overlap * 4.0 - mid_dist * 0.35 + same_pattern_bonus + same_family_bonus
             confidence = min(0.90, max(0.10, overlap / max(info1["thickness"], info2["thickness"], 0.01)))
             candidates.append((score, idx1, idx2, confidence))
 
