@@ -1127,9 +1127,17 @@ class KesitOnizlemeMixin:
             auto_lens_var = tk.BooleanVar(value=option_as_bool("auto_lens", True))
             two_well_lens_var = tk.BooleanVar(value=option_as_bool("two_well_lens", True))
             avoid_label_var = tk.BooleanVar(value=option_as_bool("avoid_label_collisions", True))
+            conform_topography_var = tk.BooleanVar(
+                value=option_as_bool("conform_layers_to_topography", True)
+            )
             ttk.Checkbutton(redraw_frame, text="Mercekleri otomatik çiz", variable=auto_lens_var).grid(row=0, column=2, sticky="w", padx=12, pady=3)
             ttk.Checkbutton(redraw_frame, text="İki sondajda yarım mercek", variable=two_well_lens_var).grid(row=1, column=2, sticky="w", padx=12, pady=3)
             ttk.Checkbutton(redraw_frame, text="Yazı çakışmasını azalt", variable=avoid_label_var).grid(row=2, column=2, sticky="w", padx=12, pady=3)
+            ttk.Checkbutton(
+                redraw_frame,
+                text="Tabakaları topoğrafyaya uydur",
+                variable=conform_topography_var,
+            ).grid(row=3, column=2, sticky="w", padx=12, pady=3)
 
             def live_config():
                 return {
@@ -1157,6 +1165,7 @@ class KesitOnizlemeMixin:
                 new_options["auto_lens"] = auto_lens_var.get()
                 new_options["two_well_lens"] = two_well_lens_var.get()
                 new_options["avoid_label_collisions"] = avoid_label_var.get()
+                new_options["conform_layers_to_topography"] = conform_topography_var.get()
                 new_options["section_engine"] = "v2" if engine_var.get().startswith("V2") else "v1"
                 new_options["print_scale_enabled"] = print_scale_var.get()
                 new_options["print_title_block"] = print_title_block_var.get()

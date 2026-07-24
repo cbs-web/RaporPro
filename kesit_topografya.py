@@ -227,6 +227,100 @@ def topografya_profili_ornekle(points, sample_count=240):
     return sample_x, sample_y
 
 
+def topografya_kotu(points, station):
+    """Profil üzerindeki station için doğrusal kot enterpolasyonu yapar."""
+    normalized = topografya_noktalari_normalize(points)
+    if not normalized:
+        return None
+    station = _float_value(station)
+    if station <= normalized[0]["station"]:
+        return normalized[0]["elevation"]
+    if station >= normalized[-1]["station"]:
+        return normalized[-1]["elevation"]
+    stations = [point["station"] for point in normalized]
+    right = bisect_right(stations, station)
+    left = max(0, right - 1)
+    right = min(right, len(normalized) - 1)
+    x1, x2 = stations[left], stations[right]
+    y1 = normalized[left]["elevation"]
+    y2 = normalized[right]["elevation"]
+    ratio = 0.0 if abs(x2 - x1) < 1e-12 else (station - x1) / (x2 - x1)
+    return y1 + (y2 - y1) * ratio
+
+
+def topografya_yuzey_egrisi(
+    points,
+    x_left,
+    x_right,
+    left_elevation=None,
+    right_elevation=None,
+    sample_count=48,
+):
+    """Profil eğrisini kuyu kenar kotlarına yumuşak doğrusal düzeltmeyle bağlar."""
+    x_left = _float_value(x_left)
+    x_right = _float_value(x_right)
+    if x_right < x_left:
+        x_left, x_right = x_right, x_left
+        left_elevation, right_elevation = right_elevation, left_elevation
+    count = max(2, int(sample_count or 48))
+    raw_left = topografya_kotu(points, x_left)
+    raw_right = topografya_kotu(points, x_right)
+    if raw_left is None or raw_right is None:
+        return []
+    left_elevation = raw_left if left_elevation is None else _float_value(left_elevation)
+    right_elevation = raw_right if right_elevation is None else _float_value(right_elevation)
+    curve = []
+    edge_blend = 0.12
+    for index in range(count):
+        ratio = index / (count - 1)
+        station = x_left + (x_right - x_left) * ratio
+        raw = topografya_kotu(points, station)
+        left_weight = max(0.0, 1.0 - ratio / edge_blend)
+        right_weight = max(0.0, 1.0 - (1.0 - ratio) / edge_blend)
+        correction = (left_elevation - raw_left) * left_weight
+        correction += (right_elevation - raw_right) * right_weight
+        curve.append((station, raw + correction))
+    return curve
+
+
+def yuzeye_uyumlu_tabaka_poligonu(
+    surface_curve,
+    bottom_left,
+    bottom_right,
+    min_thickness=0.03,
+):
+    """Yüzey eğrisi ve doğrusal alt sınır arasında geçerli bir tabaka poligonu kurar."""
+    curve = [
+        (_float_value(point[0]), _float_value(point[1]))
+        for point in surface_curve or []
+        if isinstance(point, (list, tuple)) and len(point) >= 2
+    ]
+    if len(curve) < 2:
+        return {"vertices": [], "top_curve": [], "clamped_count": 0}
+    bottom_left = _float_value(bottom_left)
+    bottom_right = _float_value(bottom_right)
+    min_thickness = max(0.001, _float_value(min_thickness))
+    x_left = curve[0][0]
+    x_right = curve[-1][0]
+    span = max(1e-12, x_right - x_left)
+    adjusted = []
+    clamped_count = 0
+    for station, elevation in curve:
+        ratio = (station - x_left) / span
+        bottom = bottom_left + (bottom_right - bottom_left) * ratio
+        minimum_top = bottom + min_thickness
+        if elevation < minimum_top:
+            elevation = minimum_top
+            clamped_count += 1
+        adjusted.append((station, elevation))
+    vertices = adjusted + [(x_right, bottom_right), (x_left, bottom_left)]
+    return {
+        "vertices": vertices,
+        "top_curve": adjusted,
+        "clamped_count": clamped_count,
+    }
+
+
 class TopografyaProfilDuzenleyiciModel:
     """Önizleme editörü için kilitli sondaj ankrajlarını koruyan profil modeli."""
 

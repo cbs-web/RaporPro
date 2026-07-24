@@ -117,8 +117,10 @@ from kesit_topografya import (
     TopografyaProfilDuzenleyiciModel,
     koordinat_noktalarini_profille,
     topografya_metnini_oku,
+    topografya_yuzey_egrisi,
     topografya_profili_hazirla,
     topografya_profili_ornekle,
+    yuzeye_uyumlu_tabaka_poligonu,
 )
 from ui_kontrol import KontrolPaneliMixin
 from ui_cikti import (
@@ -2007,6 +2009,35 @@ class KesitCizimTestleri(unittest.TestCase):
         )
         self.assertTrue(model.changed)
 
+    def test_topografya_yuzey_egrisi_kuyu_kenar_kotlarina_baglanir(self):
+        curve = topografya_yuzey_egrisi(
+            [
+                {"station": 0, "elevation": 100},
+                {"station": 5, "elevation": 104},
+                {"station": 10, "elevation": 99},
+            ],
+            0,
+            10,
+            left_elevation=101,
+            right_elevation=98,
+            sample_count=5,
+        )
+        self.assertEqual(curve[0], (0.0, 101.0))
+        self.assertEqual(curve[-1], (10.0, 98.0))
+        self.assertGreater(curve[2][1], 103.0)
+
+    def test_yuzeye_uyumlu_poligon_ters_kalinligi_engeller(self):
+        result = yuzeye_uyumlu_tabaka_poligonu(
+            [(0, 100), (5, 90), (10, 99)],
+            bottom_left=95,
+            bottom_right=94,
+            min_thickness=0.05,
+        )
+        self.assertGreater(result["clamped_count"], 0)
+        for station, elevation in result["top_curve"]:
+            bottom = 95 + (94 - 95) * (station / 10)
+            self.assertGreaterEqual(elevation, bottom + 0.049)
+
     def test_kesit_motoru_manuel_topografya_profilini_cizer(self):
         sondajlar = [
             {
@@ -2059,6 +2090,52 @@ class KesitCizimTestleri(unittest.TestCase):
         ]
         self.assertEqual(len(topography_lines), 1)
         self.assertGreater(max(topography_lines[0].get_ydata()), 102.9)
+        self.assertEqual(len(fig._geo_surface_caps), 1)
+        surface_vertices = fig._geo_surface_caps[0].get_xy()
+        self.assertGreater(max(point[1] for point in surface_vertices), 102.9)
+        fig.clear()
+
+    def test_kesit_motoru_farkli_yuzey_birimlerini_ayri_kaplar(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "10",
+                "litoloji": [["0", "2", "Kum"], ["2", "10", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "10",
+                "litoloji": [["0", "3", "Çakıl"], ["3", "10", "Kil"]],
+                "spt": [],
+            },
+        ]
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "dx_default": 25,
+                "show_topography_profile": True,
+                "conform_layers_to_topography": True,
+                "topography_source": "manual",
+                "topography_points": [
+                    {"station": 0, "elevation": 100},
+                    {"station": 12.5, "elevation": 102},
+                    {"station": 25, "elevation": 99},
+                ],
+                "show_legend": False,
+                "show_yass": False,
+                "show_consistency_labels": False,
+            },
+        )
+        self.assertEqual(len(fig._geo_surface_caps), 2)
+        self.assertEqual(
+            {getattr(poly, "_geo_unit_code", "") for poly in fig._geo_surface_caps},
+            {"k", "c"},
+        )
+        self.assertTrue(all(getattr(poly, "_geo_surface_connected", False) for poly in fig._geo_surface_caps))
         fig.clear()
 
     def test_kesit_v2_son_ana_birime_gore_birlestirir(self):

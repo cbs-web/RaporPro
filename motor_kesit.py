@@ -50,7 +50,12 @@ from kesit_korelasyon import (
     normalize_section_layers,
     turkce_buyuk_harf,
 )
-from kesit_topografya import topografya_profili_hazirla, topografya_profili_ornekle
+from kesit_topografya import (
+    topografya_profili_hazirla,
+    topografya_profili_ornekle,
+    topografya_yuzey_egrisi,
+    yuzeye_uyumlu_tabaka_poligonu,
+)
 
 
 class GeoEngineKesitMixin:
@@ -97,6 +102,7 @@ class GeoEngineKesitMixin:
         show_yass = option_bool("show_yass", True)
         show_yass_labels = option_bool("show_yass_labels", True)
         show_topography_profile = option_bool("show_topography_profile", False)
+        conform_layers_to_topography = option_bool("conform_layers_to_topography", True)
         topography_source = str(options.get("topography_source", "sondaj") or "sondaj").strip().lower()
         avoid_label_collisions = option_bool("avoid_label_collisions", True)
         hide_same_unit_seams = option_bool("hide_same_unit_seams", True)
@@ -697,12 +703,14 @@ class GeoEngineKesitMixin:
             edit_id=None,
             correlation_key=None,
             detail_name=None,
+            surface_connected=False,
         ):
             poly._geo_unit_code = code or "tanimsiz"
             poly._geo_poly_kind = kind
             poly._geo_edit_id = edit_id
             poly._geo_correlation_key = correlation_key or code or "tanimsiz"
             poly._geo_detail_name = detail_name or ""
+            poly._geo_surface_connected = bool(surface_connected)
             try:
                 poly._geo_default_xy = [[float(x), float(y)] for x, y in poly.get_xy()]
             except Exception:
@@ -1634,6 +1642,150 @@ class GeoEngineKesitMixin:
                         density_scale=pattern_density_for_code(l2['code'], TARAMA_SIKLIGI_KESIT)
                     )
 
+        surface_cap_polys = []
+        surface_clamped_count = 0
+
+        def surface_layer(sondaj):
+            valid_layers = [
+                layer for layer in (sondaj.get("merged_layers") or [])
+                if safe_float(layer.get("bot")) > safe_float(layer.get("top"))
+            ]
+            if not valid_layers:
+                return None
+            layer = min(valid_layers, key=lambda item: (safe_float(item.get("top")), safe_float(item.get("bot"))))
+            return layer if safe_float(layer.get("top")) <= 0.10 else None
+
+        def add_surface_cap(vertices, layer, edit_id):
+            if len(vertices) < 3:
+                return None
+            code = layer.get("code") or "tanimsiz"
+            stil = next((item for item in LEJANTLAR if item["kod"] == code), LEJANTLAR[-1])
+            poly = mpatches.Polygon(
+                vertices,
+                closed=True,
+                facecolor=stil["zemin"],
+                edgecolor="gray",
+                linewidth=0.8,
+                alpha=1.0,
+                zorder=11.0,
+            )
+            register_geo_poly(
+                poly,
+                code,
+                edit_id=edit_id,
+                correlation_key=layer.get("correlation_key"),
+                detail_name=layer.get("detail_name"),
+                surface_connected=True,
+            )
+            ax.add_patch(poly)
+            interactive_polys.append(poly)
+            surface_cap_polys.append(poly)
+            pattern_artists = GeoEngineDraw.draw_pattern(
+                ax,
+                poly,
+                stil["desen"],
+                stil["sembol"],
+                density_scale=pattern_density_for_code(code, TARAMA_SIKLIGI_KESIT),
+            )
+            poly._geo_pattern_zorder = 11.15
+            set_artist_zorder(pattern_artists, 11.15)
+            return poly
+
+        if (
+            show_topography_profile
+            and conform_layers_to_topography
+            and len(topography_info.get("points") or []) >= 2
+        ):
+            for pair_index in range(len(sondajlar) - 1):
+                s1, s2 = sondajlar[pair_index], sondajlar[pair_index + 1]
+                layer1, layer2 = surface_layer(s1), surface_layer(s2)
+                if layer1 is None or layer2 is None:
+                    continue
+                x1 = s1["_plot_x"] + w_well / 2
+                x2 = s2["_plot_x"] - w_well / 2
+                if x2 <= x1 + 0.05:
+                    continue
+                sample_count = max(16, min(120, int(abs(x2 - x1) * 2.5)))
+                surface_curve = topografya_yuzey_egrisi(
+                    topography_info["points"],
+                    x1,
+                    x2,
+                    left_elevation=s1["_kot"],
+                    right_elevation=s2["_kot"],
+                    sample_count=sample_count,
+                )
+                if len(surface_curve) < 2:
+                    continue
+                bottom1 = s1["_kot"] - safe_float(layer1.get("bot"))
+                bottom2 = s2["_kot"] - safe_float(layer2.get("bot"))
+
+                if layer1.get("code") == layer2.get("code"):
+                    cap = yuzeye_uyumlu_tabaka_poligonu(
+                        surface_curve,
+                        bottom1,
+                        bottom2,
+                    )
+                    surface_clamped_count += cap["clamped_count"]
+                    add_surface_cap(
+                        cap["vertices"],
+                        layer1,
+                        (
+                            f"surface:{s1.get('no','SK')}:{s2.get('no','SK')}:"
+                            f"{layer1.get('code')}"
+                        ),
+                    )
+                    continue
+
+                mid_x = (x1 + x2) / 2.0
+                split_index = min(
+                    range(len(surface_curve)),
+                    key=lambda idx: abs(surface_curve[idx][0] - mid_x),
+                )
+                mid_surface = surface_curve[split_index][1]
+                left_curve = list(surface_curve[:split_index + 1])
+                right_curve = list(surface_curve[split_index:])
+                if not left_curve or left_curve[-1][0] < mid_x - 1e-6:
+                    left_curve.append((mid_x, mid_surface))
+                else:
+                    left_curve[-1] = (mid_x, mid_surface)
+                if not right_curve or right_curve[0][0] > mid_x + 1e-6:
+                    right_curve.insert(0, (mid_x, mid_surface))
+                else:
+                    right_curve[0] = (mid_x, mid_surface)
+                bottom_mid = (bottom1 + bottom2) / 2.0
+                left_cap = yuzeye_uyumlu_tabaka_poligonu(left_curve, bottom1, bottom_mid)
+                right_cap = yuzeye_uyumlu_tabaka_poligonu(right_curve, bottom_mid, bottom2)
+                surface_clamped_count += left_cap["clamped_count"] + right_cap["clamped_count"]
+                zigzag_width = max(0.25, abs(x2 - x1) * zigzag_width_ratio)
+                interface_top = min(
+                    left_cap["top_curve"][-1][1],
+                    right_cap["top_curve"][0][1],
+                )
+                interface = get_zigzag_verts(
+                    mid_x,
+                    interface_top,
+                    bottom_mid,
+                    zigzag_width,
+                )
+                left_vertices = left_cap["top_curve"] + interface[1:] + [(x1, bottom1)]
+                right_vertices = right_cap["top_curve"] + [(x2, bottom2)] + list(reversed(interface[:-1]))
+                add_surface_cap(
+                    left_vertices,
+                    layer1,
+                    (
+                        f"surface-left:{s1.get('no','SK')}:{s2.get('no','SK')}:"
+                        f"{layer1.get('code')}"
+                    ),
+                )
+                add_surface_cap(
+                    right_vertices,
+                    layer2,
+                    (
+                        f"surface-right:{s1.get('no','SK')}:{s2.get('no','SK')}:"
+                        f"{layer2.get('code')}"
+                    ),
+                )
+
         for poly in interactive_polys:
             sync_poly_visibility(poly)
 
@@ -2253,6 +2405,8 @@ class GeoEngineKesitMixin:
             "station_scale": station_scale,
             "warning": topography_info.get("warning", ""),
         }
+        fig._geo_surface_caps = surface_cap_polys
+        fig._geo_topography_clamped_count = surface_clamped_count
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

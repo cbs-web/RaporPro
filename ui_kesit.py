@@ -13,6 +13,7 @@ from yardimcilar import safe_float
 class KesitCizimMixin(KesitOnizlemeMixin):
     _KESIT_TOPOGRAPHY_KEYS = (
         "show_topography_profile",
+        "conform_layers_to_topography",
         "topography_source",
         "topography_points",
         "topography_coordinate_points",
@@ -117,6 +118,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             norm_float(options.get("lens_max_thickness", 2.0)),
             norm_float(options.get("lens_closure_ratio", 0.58)),
             norm(options.get("show_topography_profile", False)),
+            norm(options.get("conform_layers_to_topography", True)),
             norm(options.get("topography_source", "sondaj")),
             topography_key,
             topography_coordinate_key,
@@ -684,6 +686,10 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             value=str(saved_kesit.get("show_topography_profile", False)).strip().lower()
             not in ("", "0", "false", "no", "off", "hayir", "hayır")
         )
+        conform_topography_var = tk.BooleanVar(
+            value=str(saved_kesit.get("conform_layers_to_topography", True)).strip().lower()
+            not in ("", "0", "false", "no", "off", "hayir", "hayır")
+        )
         topography_source_var = tk.StringVar(value=topography_source_label)
         topography_kml_points = [
             dict(item)
@@ -698,7 +704,12 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             text="Topoğrafik profili kullan",
             variable=show_topography_var,
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 8))
-        ttk.Label(topography_frame, text="Kaynak").grid(row=1, column=0, sticky="e", padx=4, pady=4)
+        ttk.Checkbutton(
+            topography_frame,
+            text="Üst tabakaları topoğrafik yüzeye uydur",
+            variable=conform_topography_var,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 8))
+        ttk.Label(topography_frame, text="Kaynak").grid(row=2, column=0, sticky="e", padx=4, pady=4)
         cmb_topography_source = ttk.Combobox(
             topography_frame,
             textvariable=topography_source_var,
@@ -706,13 +717,13 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             state="readonly",
             width=24,
         )
-        cmb_topography_source.grid(row=1, column=1, sticky="w", padx=4, pady=4)
+        cmb_topography_source.grid(row=2, column=1, sticky="w", padx=4, pady=4)
 
         ttk.Label(topography_frame, text="Station (m) / Kot (m)").grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=4, pady=(10, 4)
+            row=3, column=0, columnspan=2, sticky="w", padx=4, pady=(10, 4)
         )
         topography_text_frame = ttk.Frame(topography_frame)
-        topography_text_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=4, pady=4)
+        topography_text_frame.grid(row=4, column=0, columnspan=3, sticky="nsew", padx=4, pady=4)
         topography_text = tk.Text(
             topography_text_frame,
             height=13,
@@ -753,7 +764,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             )
         )
         ttk.Label(topography_frame, textvariable=topography_status_var).grid(
-            row=4, column=0, columnspan=3, sticky="w", padx=4, pady=(4, 0)
+            row=5, column=0, columnspan=3, sticky="w", padx=4, pady=(4, 0)
         )
 
         def kml_yuksekliklerini_yukle():
@@ -794,7 +805,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             topography_status_var.set("Manuel station/kot listesi temizlendi")
 
         topography_buttons = ttk.Frame(topography_frame)
-        topography_buttons.grid(row=5, column=0, columnspan=3, sticky="ew", padx=4, pady=(10, 0))
+        topography_buttons.grid(row=6, column=0, columnspan=3, sticky="ew", padx=4, pady=(10, 0))
         ttk.Button(
             topography_buttons,
             text="KML Kotlarını Oku",
@@ -805,7 +816,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             text="Manuel Listeyi Temizle",
             command=manuel_topografyayi_temizle,
         ).pack(side="left", padx=5)
-        topography_frame.rowconfigure(3, weight=1)
+        topography_frame.rowconfigure(4, weight=1)
         topography_frame.columnconfigure(2, weight=1)
 
         def collect_options(selected, require_line=False):
@@ -881,6 +892,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "project_cadastral": " | ".join(cadastral_parts),
                 "section_name": kesit_kayit_dosya_adi(selected_names),
                 "show_topography_profile": show_topography_var.get(),
+                "conform_layers_to_topography": conform_topography_var.get(),
                 "topography_source": topography_sources.get(
                     topography_source_var.get(),
                     "sondaj",
