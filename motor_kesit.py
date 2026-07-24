@@ -33,6 +33,7 @@ except ImportError:
 
 from motor_interaktif import GeoInteractiveTool
 from kesit_korelasyon import (
+    build_semantic_lens_tracks,
     build_section_correlations,
     normalize_section_layers,
     turkce_buyuk_harf,
@@ -974,6 +975,21 @@ class GeoEngineKesitMixin:
                     "facies_s2": facies_s2,
                 })
 
+        semantic_lens_tracks = []
+        semantic_lens_layer_keys = set()
+        if use_correlation_v2 and auto_lens:
+            semantic_lens_tracks = build_semantic_lens_tracks(
+                sondajlar,
+                pair_links,
+                max_thickness=lens_max_thickness,
+                include_edge_lenses=two_well_lens,
+            )
+            semantic_lens_layer_keys = {
+                tuple(node_key)
+                for track in semantic_lens_tracks
+                for node_key in track.get("node_keys", [])
+            }
+
         def is_lens_candidate(layer):
             code = str(layer.get("code") or "")
             thickness = abs(safe_float(layer.get("bot")) - safe_float(layer.get("top")))
@@ -1022,7 +1038,7 @@ class GeoEngineKesitMixin:
             return False
 
         lens_layer_keys = set()
-        if auto_lens and len(sondajlar) >= 3:
+        if auto_lens and not use_correlation_v2 and len(sondajlar) >= 3:
             for well_idx in range(1, len(sondajlar) - 1):
                 center_s = sondajlar[well_idx]
                 left_s = sondajlar[well_idx - 1]
@@ -1086,8 +1102,90 @@ class GeoEngineKesitMixin:
             poly._geo_pattern_zorder = 10.35
             set_artist_zorder(pattern_artists, 10.35)
 
+        def draw_semantic_lens_track(track):
+            nodes = list(track.get("nodes") or [])
+            if not nodes:
+                return
+            code = track.get("code")
+            stil = next((item for item in LEJANTLAR if item["kod"] == code), LEJANTLAR[-1])
+            verts = []
+            tip_indices = []
+
+            first_node = nodes[0]
+            first_s = sondajlar[first_node["well_index"]]
+            first_layer = first_node["layer"]
+            first_x_left = first_s["_plot_x"] - w_well / 2
+            first_y_top = first_s["_kot"] - safe_float(first_layer.get("top"))
+            first_y_bot = first_s["_kot"] - safe_float(first_layer.get("bot"))
+            if track.get("left_closed"):
+                left_neighbor = sondajlar[first_node["well_index"] - 1]
+                left_limit = left_neighbor["_plot_x"] + w_well / 2
+                left_tip = first_x_left - max(0.05, first_x_left - left_limit) * lens_closure_ratio
+                tip_indices.append(len(verts))
+                verts.append((left_tip, (first_y_top + first_y_bot) / 2))
+
+            for node in nodes:
+                s = sondajlar[node["well_index"]]
+                layer = node["layer"]
+                x_left = s["_plot_x"] - w_well / 2
+                x_right = s["_plot_x"] + w_well / 2
+                y_top = s["_kot"] - safe_float(layer.get("top"))
+                verts.extend([(x_left, y_top), (x_right, y_top)])
+
+            last_node = nodes[-1]
+            last_s = sondajlar[last_node["well_index"]]
+            last_layer = last_node["layer"]
+            last_x_right = last_s["_plot_x"] + w_well / 2
+            last_y_top = last_s["_kot"] - safe_float(last_layer.get("top"))
+            last_y_bot = last_s["_kot"] - safe_float(last_layer.get("bot"))
+            if track.get("right_closed"):
+                right_neighbor = sondajlar[last_node["well_index"] + 1]
+                right_limit = right_neighbor["_plot_x"] - w_well / 2
+                right_tip = last_x_right + max(0.05, right_limit - last_x_right) * lens_closure_ratio
+                tip_indices.append(len(verts))
+                verts.append((right_tip, (last_y_top + last_y_bot) / 2))
+
+            for node in reversed(nodes):
+                s = sondajlar[node["well_index"]]
+                layer = node["layer"]
+                x_left = s["_plot_x"] - w_well / 2
+                x_right = s["_plot_x"] + w_well / 2
+                y_bot = s["_kot"] - safe_float(layer.get("bot"))
+                verts.extend([(x_right, y_bot), (x_left, y_bot)])
+
+            if len(verts) < 3:
+                return
+            poly = mpatches.Polygon(
+                verts,
+                closed=True,
+                facecolor=stil["zemin"],
+                edgecolor="gray",
+                alpha=1.0,
+                zorder=10.20,
+            )
+            register_geo_poly(
+                poly,
+                code,
+                edit_id=track.get("track_id"),
+                correlation_key=track.get("correlation_key"),
+                detail_name=track.get("detail_name"),
+            )
+            poly._geo_lens_tip_indices = tip_indices
+            poly._geo_lens_node_keys = list(track.get("node_keys") or [])
+            ax.add_patch(poly)
+            interactive_polys.append(poly)
+            pattern_artists = GeoEngineDraw.draw_pattern(
+                ax,
+                poly,
+                stil["desen"],
+                stil["sembol"],
+                density_scale=pattern_density_for_code(code, TARAMA_SIKLIGI_KESIT),
+            )
+            poly._geo_pattern_zorder = 10.35
+            set_artist_zorder(pattern_artists, 10.35)
+
         half_lens_layer_keys = {}
-        if auto_lens and two_well_lens and len(sondajlar) >= 2:
+        if auto_lens and not use_correlation_v2 and two_well_lens and len(sondajlar) >= 2:
             edge_specs = [
                 (0, "right", 1),
                 (len(sondajlar) - 1, "left", len(sondajlar) - 2),
@@ -1226,6 +1324,24 @@ class GeoEngineKesitMixin:
             add_lens_host_segment(well_idx, layer_idx, "right")
         for (well_idx, layer_idx), direction in sorted(half_lens_layer_keys.items()):
             add_lens_host_segment(well_idx, layer_idx, direction)
+        for track in semantic_lens_tracks:
+            nodes = list(track.get("nodes") or [])
+            if not nodes:
+                continue
+            if track.get("left_closed"):
+                first_node = nodes[0]
+                add_lens_host_segment(
+                    first_node["well_index"],
+                    first_node["layer_index"],
+                    "left",
+                )
+            if track.get("right_closed"):
+                last_node = nodes[-1]
+                add_lens_host_segment(
+                    last_node["well_index"],
+                    last_node["layer_index"],
+                    "right",
+                )
 
         def draw_lens_host_segment(center_idx, neighbor_idx, layer_idx, direction, span, neighbor_layer):
             center_s = sondajlar[center_idx]
@@ -1274,6 +1390,8 @@ class GeoEngineKesitMixin:
 
         for segment in lens_host_segments:
             draw_lens_host_segment(*segment)
+        for track in semantic_lens_tracks:
+            draw_semantic_lens_track(track)
         for well_idx, layer_idx in sorted(lens_layer_keys):
             draw_lens_layer(well_idx, layer_idx)
         for (well_idx, layer_idx), direction in sorted(half_lens_layer_keys.items()):
@@ -1293,6 +1411,11 @@ class GeoEngineKesitMixin:
             facies_s1, facies_s2 = link["facies_s1"], link["facies_s2"]
 
             for idx1, idx2 in matches_s1.items():
+                if (
+                    (i, idx1) in semantic_lens_layer_keys
+                    or (i + 1, idx2) in semantic_lens_layer_keys
+                ):
+                    continue
                 if (i, idx1) in lens_host_skip_keys or (i + 1, idx2) in lens_host_skip_keys:
                     continue
                 l1, l2 = layers1[idx1], layers2[idx2]
@@ -1317,6 +1440,11 @@ class GeoEngineKesitMixin:
 
             zzw = max(0.5, dx_plot * zigzag_width_ratio) 
             for idx1, idx2 in facies_s1.items():
+                if (
+                    (i, idx1) in semantic_lens_layer_keys
+                    or (i + 1, idx2) in semantic_lens_layer_keys
+                ):
+                    continue
                 if (i, idx1) in lens_layer_keys or (i + 1, idx2) in lens_layer_keys:
                     continue
                 if (i, idx1) in lens_host_skip_keys or (i + 1, idx2) in lens_host_skip_keys:
@@ -1362,6 +1490,8 @@ class GeoEngineKesitMixin:
                 )
 
             for idx1, l1 in enumerate(layers1):
+                if (i, idx1) in semantic_lens_layer_keys:
+                    continue
                 if (i, idx1) in lens_layer_keys or (i, idx1) in half_lens_layer_keys or (i, idx1) in lens_host_skip_keys:
                     continue
                 if idx1 not in matches_s1 and idx1 not in facies_s1:
@@ -1383,6 +1513,8 @@ class GeoEngineKesitMixin:
                     )
                     
             for idx2, l2 in enumerate(layers2):
+                if (i + 1, idx2) in semantic_lens_layer_keys:
+                    continue
                 if (i + 1, idx2) in lens_layer_keys or (i + 1, idx2) in half_lens_layer_keys or (i + 1, idx2) in lens_host_skip_keys:
                     continue
                 if idx2 not in matches_s2 and idx2 not in facies_s2:
@@ -1694,6 +1826,7 @@ class GeoEngineKesitMixin:
         fig._geo_hide_same_unit_seams = hide_same_unit_seams
         fig._geo_section_engine = "v2" if use_correlation_v2 else "v1"
         fig._geo_correlation_links = pair_links if use_correlation_v2 else []
+        fig._geo_semantic_lenses = semantic_lens_tracks if use_correlation_v2 else []
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

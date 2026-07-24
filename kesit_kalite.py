@@ -5,7 +5,11 @@ import statistics
 
 from sabitler import LEJANTLAR
 from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
-from kesit_korelasyon import build_pair_correlation, normalize_section_layers
+from kesit_korelasyon import (
+    build_pair_correlation,
+    build_semantic_lens_tracks,
+    normalize_section_layers,
+)
 
 
 UNIT_NAMES = {item["kod"]: item["ad"] for item in LEJANTLAR}
@@ -223,6 +227,7 @@ def _check_layer_matching(sondajlar, merged_by_no, report, stats, options):
 
 
 def _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options):
+    pair_links = []
     for left, right in zip(sondajlar, sondajlar[1:]):
         left_no = left.get("no", "SK")
         right_no = right.get("no", "SK")
@@ -241,6 +246,7 @@ def _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options):
             dx_true = safe_float(options.get("dx_default", 25.0)) or 25.0
 
         link = build_pair_correlation(left, right, layers1, layers2, dx_true, options)
+        pair_links.append(link)
         matched_1 = set(link.get("matches_s1", {})) | set(link.get("facies_s1", {}))
         matched_2 = set(link.get("matches_s2", {})) | set(link.get("facies_s2", {}))
         stats["exact_matches"] += len(link.get("matches_s1", {}))
@@ -281,6 +287,7 @@ def _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options):
                 f"{layer.get('detail_name') or _unit_name(layer.get('code'))} eşleşmedi; "
                 "V2 kesitte pinch-out olarak çizilebilir."
             )
+    return pair_links
 
 
 def build_section_quality_report(sondajlar, options=None):
@@ -405,10 +412,28 @@ def build_section_quality_report(sondajlar, options=None):
                 report["warnings"].append(f"{no}: litoloji {previous['bot']:.2f} m'ye iniyor, sondaj derinliği {depth:.2f} m.")
 
     if use_correlation_v2:
-        _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options)
+        pair_links = _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options)
+        auto_lens = str(options.get("auto_lens", True)).lower() not in ("0", "false", "no", "off")
+        two_well_lens = str(options.get("two_well_lens", True)).lower() not in ("0", "false", "no", "off")
+        if auto_lens:
+            normalized_wells = []
+            for idx, sondaj in enumerate(sondajlar):
+                no = sondaj.get("no") or f"SK-{idx + 1}"
+                normalized = dict(sondaj)
+                normalized["merged_layers_v2"] = merged_by_no.get(no, [])
+                normalized["merged_layers"] = merged_by_no.get(no, [])
+                normalized_wells.append(normalized)
+            semantic_lenses = build_semantic_lens_tracks(
+                normalized_wells,
+                pair_links,
+                max_thickness=safe_float(options.get("lens_max_thickness", 2.0)) or 2.0,
+                include_edge_lenses=two_well_lens,
+            )
+            stats["semantic_lenses"] = len(semantic_lenses)
         report["info"].append(
             f"V2 korelasyon: {stats.get('exact_matches', 0)} ayrıntılı birim eşleşmesi, "
-            f"{stats.get('facies_matches', 0)} kontrollü fasiyes geçişi."
+            f"{stats.get('facies_matches', 0)} kontrollü fasiyes geçişi, "
+            f"{stats.get('semantic_lenses', 0)} semantik mercek."
         )
     else:
         _check_layer_matching(sondajlar, merged_by_no, report, stats, options)
@@ -443,6 +468,7 @@ def format_section_quality_report(report):
             f"eşleşmeyen={stats.get('unmatched_layers', 0)}",
             f"v2_tam={stats.get('exact_matches', 0)}",
             f"v2_fasiyes={stats.get('facies_matches', 0)}",
+            f"v2_mercek={stats.get('semantic_lenses', 0)}",
             f"kıvam_boş={stats.get('consistency_missing', 0)}",
             f"refu={stats.get('refusal_inferred', 0)}",
         ]

@@ -100,6 +100,7 @@ from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from kesit_korelasyon import (
     build_pair_correlation,
+    build_semantic_lens_tracks,
     correlation_pair_key,
     correlation_relation_id,
     normalize_section_layers,
@@ -1976,6 +1977,106 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertEqual(link["facies_s1"], {1: 0})
         manual = next(item for item in link["relations"] if item["source"] == "manual")
         self.assertEqual(manual["kind"], "facies")
+
+    def test_kesit_v2_coklu_sondaj_mercegini_tek_iz_olarak_cizer(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "6",
+                "litoloji": [["0", "6", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "100",
+                "der": "6",
+                "litoloji": [["0", "2", "Kil"], ["2", "3", "Siltli Kum"], ["3", "6", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-3",
+                "k": "99.8",
+                "der": "6",
+                "litoloji": [["0", "2.2", "Kil"], ["2.2", "3.4", "Siltli Kum"], ["3.4", "6", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-4",
+                "k": "99.6",
+                "der": "6",
+                "litoloji": [["0", "2.1", "Kil"], ["2.1", "3", "Siltli Kum"], ["3", "6", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-5",
+                "k": "99.5",
+                "der": "6",
+                "litoloji": [["0", "6", "Kil"]],
+                "spt": [],
+            },
+        ]
+        for sondaj in sondajlar:
+            sondaj["_kot"] = float(sondaj["k"])
+            sondaj["merged_layers_v2"] = normalize_section_layers(sondaj)
+            sondaj["merged_layers"] = sondaj["merged_layers_v2"]
+        links = []
+        for idx in range(len(sondajlar) - 1):
+            links.append(
+                build_pair_correlation(
+                    sondajlar[idx],
+                    sondajlar[idx + 1],
+                    sondajlar[idx]["merged_layers_v2"],
+                    sondajlar[idx + 1]["merged_layers_v2"],
+                    25.0,
+                    {"corr_tolerance": 3.0},
+                )
+            )
+        tracks = build_semantic_lens_tracks(sondajlar, links, max_thickness=2.0)
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]["node_keys"], [(1, 1), (2, 1), (3, 1)])
+        self.assertTrue(tracks[0]["left_closed"])
+        self.assertTrue(tracks[0]["right_closed"])
+
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "section_engine": "v2",
+                "auto_lens": True,
+                "show_legend": False,
+                "show_yass": False,
+                "show_distance_labels": False,
+                "show_layer_depth_labels": False,
+                "show_consistency_labels": False,
+            },
+        )
+        edit_ids = {
+            getattr(poly, "_geo_edit_id", "")
+            for poly in fig._geo_tool.polygons
+        }
+        semantic_ids = {
+            edit_id
+            for edit_id in edit_ids
+            if edit_id.startswith("semantic-lens:")
+        }
+        self.assertEqual(len(fig._geo_semantic_lenses), 1)
+        self.assertEqual(len(semantic_ids), 1)
+        self.assertFalse(
+            any(
+                edit_id.startswith("match:") and edit_id.endswith(":k")
+                for edit_id in edit_ids
+            )
+        )
+        quality = build_section_quality_report(
+            sondajlar,
+            {
+                "section_engine": "v2",
+                "auto_lens": True,
+                "lens_max_thickness": "2.0",
+            },
+        )
+        self.assertEqual(quality["stats"]["semantic_lenses"], 1)
 
     def test_kesit_v2_detayli_adlari_kesitte_gosterir(self):
         sondajlar = [

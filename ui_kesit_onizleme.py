@@ -393,7 +393,11 @@ class KesitOnizlemeMixin:
 
         def is_lens_poly(poly):
             edit_id = str(getattr(poly, "_geo_edit_id", "") or "")
-            return edit_id.startswith("lens:") or edit_id.startswith("half-lens:")
+            return (
+                edit_id.startswith("lens:")
+                or edit_id.startswith("half-lens:")
+                or edit_id.startswith("semantic-lens:")
+            )
 
         def lens_polygons():
             return [poly for poly in section_polygons() if is_lens_poly(poly)]
@@ -432,6 +436,8 @@ class KesitOnizlemeMixin:
                 parts = edit_id.split(":")
                 direction = parts[3] if len(parts) > 3 else ""
                 tip_indices = [2] if direction == "right" and len(pts) > 2 else [0]
+            elif edit_id.startswith("semantic-lens:"):
+                tip_indices = list(getattr(poly, "_geo_lens_tip_indices", []) or [])
 
             if closure_delta:
                 factor = max(0.35, 1.0 + closure_delta)

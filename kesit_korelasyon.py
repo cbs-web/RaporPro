@@ -543,6 +543,139 @@ def build_section_correlations(
     return links
 
 
+def build_semantic_lens_tracks(
+    sondajlar: list[dict[str, Any]],
+    pair_links: list[dict[str, Any]],
+    max_thickness: float = 2.0,
+    include_edge_lenses: bool = True,
+) -> list[dict[str, Any]]:
+    """V2 korelasyonlarindan coklu sondaj mercek izlerini olusturur."""
+    if len(sondajlar) < 2:
+        return []
+
+    layers_by_well = [
+        sondaj.get("merged_layers_v2") or sondaj.get("merged_layers") or []
+        for sondaj in sondajlar
+    ]
+    predecessor: dict[tuple[int, int], tuple[int, int]] = {}
+    successor: dict[tuple[int, int], tuple[int, int]] = {}
+
+    for pair_idx, link in enumerate(pair_links[:len(sondajlar) - 1]):
+        for left_idx, right_idx in (link.get("matches_s1") or {}).items():
+            left_node = (pair_idx, int(left_idx))
+            right_node = (pair_idx + 1, int(right_idx))
+            successor[left_node] = right_node
+            predecessor[right_node] = left_node
+
+    tracks = []
+    visited = set()
+    for well_idx, layers in enumerate(layers_by_well):
+        for layer_idx, layer in enumerate(layers):
+            start_node = (well_idx, layer_idx)
+            if start_node in visited or start_node in predecessor:
+                continue
+
+            node_keys = []
+            current = start_node
+            while current not in visited:
+                current_well, current_layer = current
+                current_layers = layers_by_well[current_well]
+                if current_layer < 0 or current_layer >= len(current_layers):
+                    break
+                visited.add(current)
+                node_keys.append(current)
+                next_node = successor.get(current)
+                if next_node is None:
+                    break
+                current = next_node
+
+            if not node_keys:
+                continue
+
+            first_well_idx, first_layer_idx = node_keys[0]
+            last_well_idx, last_layer_idx = node_keys[-1]
+            first_layer = layers_by_well[first_well_idx][first_layer_idx]
+            code = str(first_layer.get("code") or "")
+            correlation_key = str(first_layer.get("correlation_key") or code or "tanimsiz")
+            if code in ("", "tanimsiz", "bt"):
+                continue
+
+            thicknesses = [
+                abs(
+                    safe_float(layers_by_well[item_well][item_layer].get("bot"))
+                    - safe_float(layers_by_well[item_well][item_layer].get("top"))
+                )
+                for item_well, item_layer in node_keys
+            ]
+            if any(thickness <= 0.05 for thickness in thicknesses):
+                continue
+            if max_thickness > 0 and any(thickness > max_thickness for thickness in thicknesses):
+                continue
+
+            left_edge = first_well_idx == 0
+            right_edge = last_well_idx == len(sondajlar) - 1
+            left_transition = (
+                not left_edge
+                and first_layer_idx
+                in (pair_links[first_well_idx - 1].get("facies_s2") or {})
+            )
+            right_transition = (
+                not right_edge
+                and last_layer_idx
+                in (pair_links[last_well_idx].get("facies_s1") or {})
+            )
+            if left_transition or right_transition:
+                continue
+
+            left_closed = not left_edge
+            right_closed = not right_edge
+            if not left_closed and not right_closed:
+                continue
+            edge_lens = left_edge or right_edge
+            if edge_lens and not include_edge_lenses:
+                continue
+
+            nodes = []
+            for item_well, item_layer in node_keys:
+                item = layers_by_well[item_well][item_layer]
+                nodes.append({
+                    "well_index": item_well,
+                    "layer_index": item_layer,
+                    "well_no": sondajlar[item_well].get("no", f"SK-{item_well + 1}"),
+                    "layer": item,
+                })
+
+            first_no = str(nodes[0]["well_no"])
+            last_no = str(nodes[-1]["well_no"])
+            track_id = (
+                f"semantic-lens:{first_no}:{last_no}:"
+                f"{first_layer_idx}:{last_layer_idx}:{code}:{correlation_key}"
+            )
+            tracks.append({
+                "track_id": track_id,
+                "code": code,
+                "correlation_key": correlation_key,
+                "detail_name": first_layer.get("detail_name", ""),
+                "nodes": nodes,
+                "node_keys": list(node_keys),
+                "start_well_index": first_well_idx,
+                "end_well_index": last_well_idx,
+                "left_closed": left_closed,
+                "right_closed": right_closed,
+                "edge_lens": edge_lens,
+                "max_thickness": max(thicknesses),
+            })
+
+    tracks.sort(
+        key=lambda item: (
+            item["start_well_index"],
+            item["end_well_index"],
+            item["nodes"][0]["layer_index"],
+        )
+    )
+    return tracks
+
+
 def finite_layer_geometry(layer: dict[str, Any]) -> bool:
     values = [safe_float(layer.get("top")), safe_float(layer.get("bot"))]
     return all(math.isfinite(value) for value in values) and values[1] > values[0]
