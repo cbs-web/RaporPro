@@ -1,5 +1,6 @@
 ﻿# Dosya: RaporPro/motor_kesit.py
 import math
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -74,6 +75,7 @@ class GeoEngineKesitMixin:
         horizontal_scale = safe_float(options.get("horizontal_scale", 500.0)) or 500.0
         vertical_scale = safe_float(options.get("vertical_scale", 100.0)) or 100.0
         print_auto_fit = option_bool("print_auto_fit", True)
+        print_title_block = option_bool("print_title_block", True)
         vertical_exaggeration = safe_float(options.get("vertical_exaggeration", 1.0)) or 1.0
         if print_scale_enabled:
             vertical_exaggeration = kesit_dusey_abarti(horizontal_scale, vertical_scale)
@@ -1924,6 +1926,7 @@ class GeoEngineKesitMixin:
             ax.set_ylim(box_bottom - 1.0, plot_top + 1.0)
 
         print_layout = None
+        title_block_ax = None
         if print_scale_enabled:
             x_limits = ax.get_xlim()
             y_limits = ax.get_ylim()
@@ -1934,6 +1937,7 @@ class GeoEngineKesitMixin:
                 horizontal_scale=horizontal_scale,
                 vertical_scale=vertical_scale,
                 legend_rows=legend_rows,
+                show_title_block=print_title_block,
                 auto_fit=print_auto_fit,
             )
             ax.set_position(print_layout["axes_rect"])
@@ -1964,11 +1968,97 @@ class GeoEngineKesitMixin:
                     "warning",
                 )
 
+            title_block_rect = print_layout.get("title_block_rect")
+            if title_block_rect:
+                title_block_ax = fig.add_axes(title_block_rect)
+                title_block_ax.set_xlim(0, 1)
+                title_block_ax.set_ylim(0, 1)
+                title_block_ax.axis("off")
+                border = mpatches.Rectangle(
+                    (0.005, 0.02),
+                    0.99,
+                    0.96,
+                    fill=False,
+                    edgecolor="#202020",
+                    linewidth=0.9,
+                )
+                border._geo_export_group = "print_title_block"
+                title_block_ax.add_patch(border)
+                for y in (0.72, 0.49, 0.26):
+                    line, = title_block_ax.plot(
+                        [0.005, 0.995],
+                        [y, y],
+                        color="#202020",
+                        linewidth=0.55,
+                    )
+                    line._geo_export_group = "print_title_block"
+                divider, = title_block_ax.plot(
+                    [0.58, 0.58],
+                    [0.02, 0.72],
+                    color="#202020",
+                    linewidth=0.55,
+                )
+                divider._geo_export_group = "print_title_block"
+
+                project_name = str(options.get("project_name") or "Adsız proje").strip()
+                project_location = str(options.get("project_location") or "Konum belirtilmedi").strip()
+                project_cadastral = str(options.get("project_cadastral") or "Pafta / Ada / Parsel belirtilmedi").strip()
+                selected_names = options.get("selected_sondajlar") or []
+                if isinstance(selected_names, str):
+                    selected_names = [selected_names]
+                section_name = str(options.get("section_name") or "").strip()
+                if not section_name:
+                    section_name = " - ".join(str(item) for item in selected_names if str(item).strip())
+                section_name = section_name or "Kesit"
+                print_date = str(options.get("print_date") or datetime.now().strftime("%d.%m.%Y"))
+
+                def block_text(x, y, label, value, width, fontsize=6.4):
+                    value_text = textwrap.shorten(
+                        " ".join(str(value or "-").split()),
+                        width=width,
+                        placeholder="...",
+                    )
+                    artist = title_block_ax.text(
+                        x,
+                        y,
+                        f"{label}: {value_text}",
+                        ha="left",
+                        va="center",
+                        fontsize=fontsize,
+                        color="#202020",
+                    )
+                    artist._geo_export_group = "print_title_block"
+
+                title_artist = title_block_ax.text(
+                    0.5,
+                    0.85,
+                    "JEOLOJİK KESİT PAFTASI",
+                    ha="center",
+                    va="center",
+                    fontsize=8.3,
+                    fontweight="bold",
+                    color="#202020",
+                )
+                title_artist._geo_export_group = "print_title_block"
+                block_text(0.025, 0.605, "Proje", project_name, 38)
+                block_text(0.025, 0.375, "Konum", project_location, 38)
+                block_text(0.025, 0.145, "Pafta/Ada/Parsel", project_cadastral, 34, fontsize=6.0)
+                block_text(0.605, 0.605, "Kesit", section_name, 24)
+                block_text(
+                    0.605,
+                    0.375,
+                    "Ölçek",
+                    f"Y 1/{effective_horizontal:g} | D 1/{effective_vertical:g}",
+                    30,
+                )
+                block_text(0.605, 0.145, "Tarih", print_date, 20)
+
         fig._geo_hide_same_unit_seams = hide_same_unit_seams
         fig._geo_section_engine = "v2" if use_correlation_v2 else "v1"
         fig._geo_correlation_links = pair_links if use_correlation_v2 else []
         fig._geo_semantic_lenses = semantic_lens_tracks if use_correlation_v2 else []
         fig._geo_print_layout = print_layout
+        fig._geo_print_title_block_axes = title_block_ax
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

@@ -46,6 +46,7 @@ def kesit_baski_yerlesimi(
     horizontal_scale=500,
     vertical_scale=100,
     legend_rows=0,
+    show_title_block=False,
     auto_fit=True,
 ):
     """Kesit veri alanını gerçek baskı ölçeğinde sayfaya yerleştir.
@@ -66,12 +67,14 @@ def kesit_baski_yerlesimi(
     top_margin = 0.72
     bottom_margin = 0.30
     legend_height = 0.0 if rows == 0 else min(2.10, 0.34 + rows * 0.42)
-    legend_gap = 0.0 if rows == 0 else 0.24
+    title_block_height = 1.18 if show_title_block else 0.0
+    info_height = max(legend_height, title_block_height)
+    info_gap = 0.0 if info_height == 0 else 0.24
 
     available_width = max(0.25, page_width - left_margin - right_margin)
     available_height = max(
         0.25,
-        page_height - top_margin - bottom_margin - legend_height - legend_gap,
+        page_height - top_margin - bottom_margin - info_height - info_gap,
     )
     required_horizontal = x_span * INCHES_PER_METER / available_width
     required_vertical = y_span * INCHES_PER_METER / available_height
@@ -96,7 +99,7 @@ def kesit_baski_yerlesimi(
     )
 
     left = left_margin + max(0.0, (available_width - axes_width) / 2.0)
-    bottom_available = bottom_margin + legend_height + legend_gap
+    bottom_available = bottom_margin + info_height + info_gap
     bottom = bottom_available + max(0.0, (available_height - axes_height) / 2.0)
     axes_rect = [
         left / page_width,
@@ -107,11 +110,27 @@ def kesit_baski_yerlesimi(
 
     legend_rect = None
     if rows:
+        legend_width = available_width
+        if show_title_block:
+            legend_width = max(0.25, available_width * 0.62)
         legend_rect = [
             left_margin / page_width,
             bottom_margin / page_height,
-            available_width / page_width,
-            legend_height / page_height,
+            legend_width / page_width,
+            info_height / page_height,
+        ]
+    title_block_rect = None
+    if show_title_block:
+        title_left = left_margin
+        title_width = available_width
+        if rows:
+            title_left += available_width * 0.64
+            title_width = available_width * 0.36
+        title_block_rect = [
+            title_left / page_width,
+            bottom_margin / page_height,
+            title_width / page_width,
+            info_height / page_height,
         ]
 
     return {
@@ -137,7 +156,9 @@ def kesit_baski_yerlesimi(
         "axes_size_inches": (axes_width, axes_height),
         "axes_rect": axes_rect,
         "legend_rect": legend_rect,
+        "title_block_rect": title_block_rect,
         "legend_rows": rows,
+        "show_title_block": bool(show_title_block),
         "x_span_m": x_span,
         "y_span_m": y_span,
     }

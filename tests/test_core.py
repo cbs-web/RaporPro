@@ -2297,6 +2297,53 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertIn("Y 1/500", fig.axes[0]._geo_title_full)
         self.assertIn("D 1/250", fig.axes[0]._geo_title_full)
 
+    def test_kesit_baski_anteti_proje_ve_olcek_bilgilerini_gosterir(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "8",
+                "litoloji": [["0", "8", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "8",
+                "litoloji": [["0", "8", "Kil"]],
+                "spt": [],
+            },
+        ]
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "print_scale_enabled": True,
+                "print_title_block": True,
+                "print_page_size": "A4 Yatay",
+                "horizontal_scale": "500",
+                "vertical_scale": "250",
+                "show_legend": False,
+                "show_yass": False,
+                "show_consistency_labels": False,
+                "project_name": "Örnek Proje",
+                "project_location": "Merkez / Çanakkale",
+                "project_cadastral": "Pafta: H16 | Ada: 10 | Parsel: 2",
+                "section_name": "Kesit SK1-2",
+                "print_date": "24.07.2026",
+            },
+        )
+        title_block_ax = fig._geo_print_title_block_axes
+        self.assertIsNotNone(title_block_ax)
+        self.assertIsNotNone(fig._geo_print_layout["title_block_rect"])
+        texts = "\n".join(text.get_text() for text in title_block_ax.texts)
+        self.assertIn("JEOLOJİK KESİT PAFTASI", texts)
+        self.assertIn("Örnek Proje", texts)
+        self.assertIn("Merkez / Çanakkale", texts)
+        self.assertIn("Kesit SK1-2", texts)
+        self.assertIn("Y 1/500 | D 1/250", texts)
+        self.assertIn("24.07.2026", texts)
+
     def test_kesit_motoru_tekrarli_birimleri_ayri_eslestirir(self):
         sondajlar = [
             {

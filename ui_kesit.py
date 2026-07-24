@@ -28,6 +28,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             selected_key,
             norm_float(options.get("vertical_exaggeration", 1.0)),
             norm(options.get("print_scale_enabled", False)),
+            norm(options.get("print_title_block", True)),
             norm(options.get("print_page_size", "A4 Yatay")),
             norm_float(options.get("horizontal_scale", 500.0)),
             norm_float(options.get("vertical_scale", 100.0)),
@@ -175,6 +176,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         ttk.Label(opt, text="Düşey abartı").grid(row=3, column=0, sticky="e", padx=5, pady=4)
         e_ve = ttk.Entry(opt, width=12); e_ve.insert(0, saved_kesit.get("vertical_exaggeration", "1.0")); e_ve.grid(row=3, column=1, sticky="w", padx=5, pady=4)
         print_scale_var = tk.BooleanVar(value=saved_kesit.get("print_scale_enabled", False))
+        print_title_block_var = tk.BooleanVar(value=saved_kesit.get("print_title_block", True))
         print_page_var = tk.StringVar(value=saved_kesit.get("print_page_size", "A4 Yatay"))
         horizontal_scale_var = tk.StringVar(value=str(saved_kesit.get("horizontal_scale", "500")))
         vertical_scale_var = tk.StringVar(value=str(saved_kesit.get("vertical_scale", "100")))
@@ -211,6 +213,11 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         vertical_scale_combo.grid(row=3, column=1, sticky="w", pady=3)
         print_ratio_label = ttk.Label(print_frame, text="")
         print_ratio_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Checkbutton(
+            print_frame,
+            text="Pafta antetini göster",
+            variable=print_title_block_var,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
 
         def sync_print_scale(event=None):
             horizontal = safe_float(horizontal_scale_var.get()) or 500.0
@@ -550,12 +557,28 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         ttk.Button(line_opt, text="Haritadan Hat Çiz", command=open_map_line_selector).grid(row=5, column=0, columnspan=2, sticky="ew", padx=5, pady=(6, 0))
 
         def collect_options(selected, require_line=False):
+            kunye = dict(self.veri.get("kunye") or {})
+            selected_names = [
+                self.veri["sondaj"][i].get("no", "")
+                for i in selected
+            ]
+            project_location = " / ".join(
+                str(kunye.get(key) or "").strip()
+                for key in ("mah", "ilce", "il")
+                if str(kunye.get(key) or "").strip()
+            )
+            cadastral_parts = []
+            for label, key in (("Pafta", "paf"), ("Ada", "ada"), ("Parsel", "par")):
+                value = str(kunye.get(key) or "").strip()
+                if value:
+                    cadastral_parts.append(f"{label}: {value}")
             options = {
                 "mode": mode_var.get(),
                 "section_engine": "v2" if section_engine_var.get().startswith("V2") else "v1",
                 "preset": preset_var.get(),
                 "vertical_exaggeration": e_ve.get(),
                 "print_scale_enabled": print_scale_var.get(),
+                "print_title_block": print_title_block_var.get(),
                 "print_page_size": print_page_var.get(),
                 "horizontal_scale": horizontal_scale_var.get(),
                 "vertical_scale": vertical_scale_var.get(),
@@ -589,7 +612,11 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "show_detailed_lithology_labels": show_detailed_lithology_var.get(),
                 "avoid_label_collisions": avoid_label_var.get(),
                 "hide_same_unit_seams": hide_seams_var.get(),
-                "selected_sondajlar": [self.veri["sondaj"][i].get("no", "") for i in selected],
+                "selected_sondajlar": selected_names,
+                "project_name": str(kunye.get("sahibi") or "").strip(),
+                "project_location": project_location,
+                "project_cadastral": " | ".join(cadastral_parts),
+                "section_name": kesit_kayit_dosya_adi(selected_names),
             }
             if mode_var.get() == "line_projection":
                 start_idx = cmb_start.current()

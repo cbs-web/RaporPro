@@ -977,6 +977,7 @@ class KesitOnizlemeMixin:
                 lambda event=None: detailed_lithology_var.set(engine_var.get().startswith("V2")),
             )
             print_scale_var = tk.BooleanVar(value=option_as_bool("print_scale_enabled", False))
+            print_title_block_var = tk.BooleanVar(value=option_as_bool("print_title_block", True))
             print_page_var = tk.StringVar(value=str(options.get("print_page_size", "A4 Yatay")))
             horizontal_scale_var = tk.StringVar(value=str(options.get("horizontal_scale", "500")))
             vertical_scale_var = tk.StringVar(value=str(options.get("vertical_scale", "100")))
@@ -1007,6 +1008,11 @@ class KesitOnizlemeMixin:
                 values=("50", "100", "200", "250", "500"),
                 width=14,
             ).grid(row=5, column=4, sticky="w", padx=5, pady=3)
+            ttk.Checkbutton(
+                redraw_frame,
+                text="Pafta antetini göster",
+                variable=print_title_block_var,
+            ).grid(row=6, column=3, columnspan=2, sticky="w", padx=5, pady=3)
 
             entries = {}
             redraw_fields = [
@@ -1065,6 +1071,7 @@ class KesitOnizlemeMixin:
                 new_options["avoid_label_collisions"] = avoid_label_var.get()
                 new_options["section_engine"] = "v2" if engine_var.get().startswith("V2") else "v1"
                 new_options["print_scale_enabled"] = print_scale_var.get()
+                new_options["print_title_block"] = print_title_block_var.get()
                 new_options["print_page_size"] = print_page_var.get()
                 new_options["horizontal_scale"] = horizontal_scale_var.get()
                 new_options["vertical_scale"] = vertical_scale_var.get()
