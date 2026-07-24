@@ -114,6 +114,7 @@ from kesit_baski import (
     kesit_metre_baski_boyu,
 )
 from kesit_topografya import (
+    TopografyaProfilDuzenleyiciModel,
     koordinat_noktalarini_profille,
     topografya_metnini_oku,
     topografya_profili_hazirla,
@@ -1966,6 +1967,46 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertEqual(len(sample_x), 5)
         self.assertAlmostEqual(sample_y[2], 100.5)
 
+    def test_topografya_duzenleyici_sondaj_noktalarini_kilitler(self):
+        model = TopografyaProfilDuzenleyiciModel(
+            [{"station": 0, "elevation": 100}, {"station": 10, "elevation": 99}],
+            borehole_points=[
+                {"station": 0, "elevation": 100},
+                {"station": 10, "elevation": 99},
+            ],
+            station_scale=0.5,
+        )
+        self.assertTrue(model.is_locked_index(0))
+        self.assertFalse(model.delete_point(0))
+        self.assertTrue(model.add_point(5, 102))
+        self.assertTrue(model.move_point(1, 6, 103))
+        self.assertEqual(model.points[1], {"station": 6.0, "elevation": 103.0})
+        self.assertEqual(model.manual_points()[1]["station"], 12.0)
+        self.assertTrue(model.delete_point(1))
+        self.assertEqual(len(model.points), 2)
+
+    def test_topografya_duzenleyici_sifirlama_sadece_sondaj_kotlarini_birakir(self):
+        model = TopografyaProfilDuzenleyiciModel(
+            [
+                {"station": 0, "elevation": 100},
+                {"station": 5, "elevation": 102},
+                {"station": 10, "elevation": 99},
+            ],
+            borehole_points=[
+                {"station": 0, "elevation": 100},
+                {"station": 10, "elevation": 99},
+            ],
+        )
+        model.reset_to_boreholes()
+        self.assertEqual(
+            model.points,
+            [
+                {"station": 0.0, "elevation": 100.0},
+                {"station": 10.0, "elevation": 99.0},
+            ],
+        )
+        self.assertTrue(model.changed)
+
     def test_kesit_motoru_manuel_topografya_profilini_cizer(self):
         sondajlar = [
             {
@@ -2005,6 +2046,8 @@ class KesitCizimTestleri(unittest.TestCase):
         profile = fig._geo_topography_profile
         self.assertTrue(profile["enabled"])
         self.assertEqual(profile["source"], "manual")
+        self.assertEqual(len(profile["borehole_points"]), 2)
+        self.assertEqual(profile["station_scale"], 1.0)
         self.assertIn(
             {"station": 12.5, "elevation": 103.0},
             profile["points"],

@@ -9,6 +9,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from kesit_kalite import build_section_quality_report
 from kesit_korelasyon import correlation_relation_id, section_layer_id
+from kesit_topografya_editor import TopografyaProfilEditor
 from motor import GeoEngine
 from performans import perf_tracked
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
@@ -121,6 +122,7 @@ class KesitOnizlemeMixin:
             quality_report = build_section_quality_report(sondajlar, options)
         chart = FigureCanvasTkAgg(fig, master=f)
         chart.get_tk_widget().pack(fill="both", expand=True)
+        topography_editor = None
         if quality_report.get("errors"):
             self.set_status(f"Kesit kalite kontrol: {len(quality_report.get('errors', []))} hata var.", level="error")
         elif quality_report.get("warnings"):
@@ -837,6 +839,74 @@ class KesitOnizlemeMixin:
         def current_ax():
             return fig.axes[0] if fig.axes else None
 
+        def ensure_topography_editor():
+            nonlocal topography_editor
+            if topography_editor is None:
+                ax = current_ax()
+                if ax is None:
+                    return None
+
+                def topography_changed(_points):
+                    self.set_status(
+                        "Topoğrafya değişti; tabakaları uyarlamak için 'Uygula ve Yeniden Çiz' kullanın.",
+                        level="warning",
+                    )
+
+                topography_editor = TopografyaProfilEditor(
+                    fig,
+                    ax,
+                    getattr(fig, "_geo_topography_profile", {}),
+                    on_change=topography_changed,
+                    on_status=lambda message: self.set_status(message, level="info"),
+                )
+            return topography_editor
+
+        def toggle_topography_editor():
+            editor = ensure_topography_editor()
+            if editor is not None:
+                editor.toggle()
+
+        def apply_topography_and_redraw():
+            editor = ensure_topography_editor()
+            if editor is None:
+                return
+            if not editor.dirty:
+                self.set_status("Uygulanacak topoğrafya değişikliği yok.", level="info")
+                return
+            new_options = dict(options)
+            new_options.update({
+                "show_topography_profile": True,
+                "topography_source": "manual",
+                "topography_points": editor.manual_points(),
+                "topography_coordinate_points": [],
+            })
+            new_options["section_identity"] = self._kesit_section_identity(new_options)
+            new_options["section_signature"] = self._kesit_section_signature(new_options)
+            save_section_edits(show_status=False)
+            self._kesit_ayarlari_kaydet(new_options.copy())
+            if self.aktif_dosya_yolu:
+                self.veri_kaydet()
+            editor.disconnect()
+            win.destroy()
+            self.kesit_onizle_async(sondajlar, new_options)
+
+        def reset_topography_to_boreholes():
+            editor = ensure_topography_editor()
+            if editor is None:
+                return
+            if not messagebox.askyesno(
+                "Topoğrafya",
+                "Bu kesitin topoğrafya profili yalnızca sondaj ağız kotlarına sıfırlansın mı?",
+                parent=win,
+            ):
+                return
+            editor.reset_to_boreholes()
+            editor.set_active(True)
+            self.set_status(
+                "Topoğrafya sondaj kotlarına sıfırlandı; uygulamak için yeniden çizin.",
+                level="warning",
+            )
+
         def set_live_group_visible(group, visible):
             ax = current_ax()
             if ax is None:
@@ -1217,6 +1287,15 @@ class KesitOnizlemeMixin:
             return result["config"]
 
         def save_kesit():
+            if topography_editor is not None and topography_editor.dirty:
+                messagebox.showwarning(
+                    "Topoğrafya",
+                    "Topoğrafya değişikliklerini önce 'Uygula ve Yeniden Çiz' ile kesite uygulayın.",
+                    parent=win,
+                )
+                return
+            if topography_editor is not None and topography_editor.active:
+                topography_editor.set_active(False)
             export_config = export_settings_dialog()
             if not export_config:
                 return
@@ -1376,7 +1455,30 @@ class KesitOnizlemeMixin:
         tk.Button(tool_bar, text="Ayarlar", bg="#AED6F1", fg="#111", font=FONT_BOLD, command=open_preview_settings).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Korelasyon", bg="#C7E9F1", fg="#111", font=FONT_BOLD, command=open_correlation_editor).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Mercek", bg="#D7BDE2", fg="#111", font=FONT_BOLD, command=open_lens_controls).pack(side="left", padx=3, pady=4)
+        topography_button = tk.Menubutton(
+            tool_bar,
+            text="Topoğrafya",
+            bg="#D5F5E3",
+            fg="#111",
+            font=FONT_BOLD,
+            relief="raised",
+        )
+        topography_menu = tk.Menu(topography_button, tearoff=False)
+        topography_menu.add_command(label="Nokta Düzenlemeyi Aç / Kapat", command=toggle_topography_editor)
+        topography_menu.add_command(label="Uygula ve Yeniden Çiz", command=apply_topography_and_redraw)
+        topography_menu.add_separator()
+        topography_menu.add_command(label="Sondaj Kotlarına Sıfırla", command=reset_topography_to_boreholes)
+        topography_button.configure(menu=topography_menu)
+        topography_button.pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Liste", bg="#FAD7A0", fg="#111", font=FONT_BOLD, command=open_edit_list).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Kalite", bg="#F9E79F", fg="#111", font=FONT_BOLD, command=lambda: self.kesit_kalite_penceresi(win, sondajlar, options)).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Sıfırla", bg=COLOR_DANGER, fg="white", font=FONT_BOLD, command=reset_section_edits).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Kayıtlı Hale Dön", bg="#E8DAEF", fg="#111", font=FONT_BOLD, command=restore_saved_section_edits).pack(side="left", padx=3, pady=4)
+
+        def disconnect_topography_editor(event=None):
+            if event is not None and event.widget is not win:
+                return
+            if topography_editor is not None:
+                topography_editor.disconnect()
+
+        win.bind("<Destroy>", disconnect_topography_editor, add="+")

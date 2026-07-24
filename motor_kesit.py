@@ -556,12 +556,12 @@ class GeoEngineKesitMixin:
             "source": "sondaj",
             "warning": "",
         }
+        station_scale = (
+            1.0
+            if print_scale_enabled or not use_distance_axis
+            else 1.0 / vertical_exaggeration
+        )
         if show_topography_profile:
-            station_scale = (
-                1.0
-                if print_scale_enabled or not use_distance_axis
-                else 1.0 / vertical_exaggeration
-            )
             topography_info = topografya_profili_hazirla(
                 source=topography_source,
                 manual_points=options.get("topography_points") or [],
@@ -609,8 +609,8 @@ class GeoEngineKesitMixin:
                 alpha=0.95,
                 zorder=30,
             )
-            surface_line._geo_live_group = "topography"
         else:
+            surface_line = None
             try:
                 from scipy.interpolate import make_interp_spline
                 if len(xs) >= 3:
@@ -619,14 +619,16 @@ class GeoEngineKesitMixin:
                     if len(ux) >= 3:
                         spline_degree = min(3, len(ux) - 1)
                         X_ = np.linspace(ux.min(), ux.max(), 100); Y_ = make_interp_spline(ux, uy, k=spline_degree)(X_)
-                        ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                        surface_line, = ax.plot(X_, Y_, 'k--', lw=1.5, alpha=0.8, zorder=30)
                     else:
-                        ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                        surface_line, = ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
                 else:
-                    ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                    surface_line, = ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
             except Exception as exc:
                 log_exception("motor.section_surface_spline", exc_value=exc)
-                ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
+                surface_line, = ax.plot(xs, ys, 'k--', lw=1.5, alpha=0.8, zorder=30)
+        if surface_line is not None:
+            surface_line._geo_live_group = "topography"
         
         yass_points = []
         if show_yass:
@@ -2244,6 +2246,11 @@ class GeoEngineKesitMixin:
             "enabled": show_topography_profile,
             "source": topography_info.get("source", "sondaj"),
             "points": list(topography_info.get("points") or []),
+            "borehole_points": [
+                {"station": x, "elevation": y}
+                for x, y in zip(xs, ys)
+            ],
+            "station_scale": station_scale,
             "warning": topography_info.get("warning", ""),
         }
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)

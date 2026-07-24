@@ -225,3 +225,74 @@ def topografya_profili_ornekle(points, sample_count=240):
         ratio = 0.0 if abs(x2 - x1) < 1e-12 else (station - x1) / (x2 - x1)
         sample_y.append(y1 + (y2 - y1) * ratio)
     return sample_x, sample_y
+
+
+class TopografyaProfilDuzenleyiciModel:
+    """Önizleme editörü için kilitli sondaj ankrajlarını koruyan profil modeli."""
+
+    def __init__(self, points, borehole_points=None, station_scale=1.0):
+        self.station_scale = float(station_scale or 1.0)
+        if abs(self.station_scale) < 1e-12:
+            self.station_scale = 1.0
+        self.borehole_points = topografya_noktalari_normalize(borehole_points or [])
+        self.locked_stations = [point["station"] for point in self.borehole_points]
+        self.points = sondaj_noktalarini_profile_ekle(points, self.borehole_points)
+        self.changed = False
+
+    def _locked(self, station, tolerance=0.05):
+        return any(abs(float(station) - locked) <= tolerance for locked in self.locked_stations)
+
+    def is_locked_index(self, index):
+        return (
+            0 <= int(index) < len(self.points)
+            and self._locked(self.points[int(index)]["station"])
+        )
+
+    def add_point(self, station, elevation):
+        station = _float_value(station)
+        elevation = _float_value(elevation)
+        if self.points:
+            low = self.points[0]["station"]
+            high = self.points[-1]["station"]
+            if station <= low + 0.01 or station >= high - 0.01:
+                return False
+        if any(abs(point["station"] - station) <= 0.02 for point in self.points):
+            return False
+        self.points.append({"station": station, "elevation": elevation})
+        self.points = topografya_noktalari_normalize(self.points)
+        self.changed = True
+        return True
+
+    def move_point(self, index, station, elevation):
+        index = int(index)
+        if not 0 <= index < len(self.points) or self.is_locked_index(index):
+            return False
+        station = _float_value(station)
+        elevation = _float_value(elevation)
+        left = self.points[index - 1]["station"] + 0.02 if index > 0 else station
+        right = self.points[index + 1]["station"] - 0.02 if index < len(self.points) - 1 else station
+        station = max(left, min(right, station))
+        self.points[index] = {"station": station, "elevation": elevation}
+        self.changed = True
+        return True
+
+    def delete_point(self, index):
+        index = int(index)
+        if not 0 <= index < len(self.points) or self.is_locked_index(index):
+            return False
+        self.points.pop(index)
+        self.changed = True
+        return True
+
+    def reset_to_boreholes(self):
+        self.points = [dict(point) for point in self.borehole_points]
+        self.changed = True
+
+    def manual_points(self):
+        return [
+            {
+                "station": point["station"] / self.station_scale,
+                "elevation": point["elevation"],
+            }
+            for point in self.points
+        ]
