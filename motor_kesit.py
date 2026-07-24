@@ -15,6 +15,11 @@ try:
     )
     from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
     from cizim import GeoEngineDraw
+    from kesit_baski import (
+        kesit_baski_yerlesimi,
+        kesit_dusey_abarti,
+        kesit_sayfa_boyutu,
+    )
     from performans import log_exception
 except ImportError:
     LEJANTLAR = []
@@ -30,6 +35,10 @@ except ImportError:
     A4_LANDSCAPE_SIZE = (11.69, 8.27)
     SECTION_FIGURE_DPI = 100
     SECTION_AXES_RECT = [0.08, 0.05, 0.84, 0.90]
+    def kesit_sayfa_boyutu(page_name): return "A4 Yatay", A4_LANDSCAPE_SIZE
+    def kesit_dusey_abarti(horizontal_scale, vertical_scale):
+        return float(horizontal_scale or 1) / max(1.0, float(vertical_scale or 1))
+    def kesit_baski_yerlesimi(*args, **kwargs): return {}
 
 from motor_interaktif import GeoInteractiveTool
 from kesit_korelasyon import (
@@ -60,7 +69,14 @@ class GeoEngineKesitMixin:
         use_line_projection = mode == "line_projection"
         use_true_distance = mode == "true_distance"
         use_distance_axis = use_true_distance or use_line_projection
+        print_scale_enabled = option_bool("print_scale_enabled", False)
+        print_page_size = str(options.get("print_page_size", "A4 Yatay") or "A4 Yatay")
+        horizontal_scale = safe_float(options.get("horizontal_scale", 500.0)) or 500.0
+        vertical_scale = safe_float(options.get("vertical_scale", 100.0)) or 100.0
+        print_auto_fit = option_bool("print_auto_fit", True)
         vertical_exaggeration = safe_float(options.get("vertical_exaggeration", 1.0)) or 1.0
+        if print_scale_enabled:
+            vertical_exaggeration = kesit_dusey_abarti(horizontal_scale, vertical_scale)
         if vertical_exaggeration <= 0:
             vertical_exaggeration = 1.0
         corr_tolerance = safe_float(options.get("corr_tolerance", 0.0))
@@ -442,7 +458,7 @@ class GeoEngineKesitMixin:
                             log_callback(f"{s.get('no','SK')} koordinati eksik; kesit hattinda varsayilan station kullanildi.", "warning")
                     s["_station"] = station
                     s["_offset"] = offset
-                    s["_plot_x"] = station / vertical_exaggeration
+                    s["_plot_x"] = station if print_scale_enabled else station / vertical_exaggeration
                     projected.append(s)
 
                 sondajlar = sorted(projected, key=lambda item: (item.get("_station", 0.0), item.get("no", "")))
@@ -458,7 +474,10 @@ class GeoEngineKesitMixin:
                     if i == 0:
                         s["_plot_x"] = 0.0
                     else:
-                        s["_plot_x"] = cumulative_dist / vertical_exaggeration if use_true_distance else i * dx_default
+                        if use_true_distance:
+                            s["_plot_x"] = cumulative_dist if print_scale_enabled else cumulative_dist / vertical_exaggeration
+                        else:
+                            s["_plot_x"] = i * dx_default
 
                     if i < len(sondajlar) - 1:
                         s_next = sondajlar[i+1]
@@ -480,7 +499,11 @@ class GeoEngineKesitMixin:
                 s["_plot_x"] = i * dx_default
                 s["_true_dist"] = dx_default
         
-        fig = Figure(figsize=A4_LANDSCAPE_SIZE, dpi=SECTION_FIGURE_DPI) 
+        _, print_figure_size = kesit_sayfa_boyutu(print_page_size)
+        fig = Figure(
+            figsize=print_figure_size if print_scale_enabled else A4_LANDSCAPE_SIZE,
+            dpi=SECTION_FIGURE_DPI,
+        )
         ax = fig.add_axes(SECTION_AXES_RECT) 
         if use_line_projection:
             start_no = options.get("line_start_no", "Baslangic")
@@ -501,7 +524,8 @@ class GeoEngineKesitMixin:
         
         if use_distance_axis:
             ax.tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=True)
-            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x * vertical_exaggeration:g}"))
+            distance_label_factor = 1.0 if print_scale_enabled else vertical_exaggeration
+            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f"{x * distance_label_factor:g}"))
             axis_label = "Kesit hatti station (m)" if use_line_projection else "Kesit boyunca gercek mesafe (m)"
             ax.set_xlabel(axis_label, fontsize=9)
         else:
@@ -1766,7 +1790,83 @@ class GeoEngineKesitMixin:
                     items.append(detailed_item)
             else:
                 items.append(legend_item)
-        if items and show_legend:
+        legend_rows = 0
+        legend_ax = None
+        if items and show_legend and print_scale_enabled:
+            n_items = len(items)
+            requested_cols = int(safe_float(options.get("legend_columns", 0)) or 0)
+            default_cols = 8 if str(print_page_size).upper().startswith("A3") else 6
+            n_cols = max(1, min(n_items, requested_cols or default_cols))
+            legend_rows = math.ceil(n_items / n_cols)
+            legend_ax = fig.add_axes([0.08, 0.02, 0.84, 0.10])
+            legend_ax.set_xlim(0, n_cols)
+            legend_ax.set_ylim(0, legend_rows + 0.52)
+            legend_ax.axis("off")
+
+            legend_title = legend_ax.text(
+                n_cols / 2,
+                legend_rows + 0.30,
+                "LEJANT",
+                ha="center",
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                zorder=41,
+            )
+            legend_title._geo_export_group = "legend"
+
+            for i, legend_item in enumerate(items):
+                row = i // n_cols
+                col = i % n_cols
+                y_top = legend_rows - row - 0.12
+                y_bottom = y_top - 0.48
+                x_left = col + 0.04
+                x_right = col + 0.32
+                polygon = mpatches.Polygon(
+                    [
+                        (x_left, y_top),
+                        (x_right, y_top),
+                        (x_right, y_bottom),
+                        (x_left, y_bottom),
+                    ],
+                    closed=True,
+                    facecolor=legend_item["zemin"],
+                    edgecolor="black",
+                    linewidth=0.8,
+                    zorder=21,
+                )
+                polygon._geo_export_group = "legend"
+                legend_ax.add_patch(polygon)
+                for artist in GeoEngineDraw.draw_pattern(
+                    legend_ax,
+                    polygon,
+                    legend_item["desen"],
+                    legend_item["sembol"],
+                    density_scale=max(
+                        0.45,
+                        pattern_density_for_code(
+                            legend_item.get("kod"),
+                            TARAMA_SIKLIGI_LEJANT,
+                            legend=True,
+                        ) / 4.0,
+                    ),
+                ):
+                    artist._geo_export_group = "legend"
+                legend_text = legend_ax.text(
+                    x_right + 0.04,
+                    (y_top + y_bottom) / 2,
+                    legend_text_for_label(legend_item["ad"]),
+                    va="center",
+                    ha="left",
+                    fontsize=7.2,
+                    linespacing=0.92,
+                    zorder=46,
+                )
+                legend_text._geo_export_group = "legend"
+
+            ax.set_xlim(min_x_plot, max_x_plot)
+            ax.set_ylim(box_bottom - 1.0, plot_top + 1.0)
+        elif items and show_legend:
             n_items = len(items)
             plot_span = max_x_plot - min_x_plot
             requested_cols = int(safe_float(options.get("legend_columns", 0)) or 0)
@@ -1823,10 +1923,52 @@ class GeoEngineKesitMixin:
             ax.set_xlim(min_x_plot, max_x_plot)
             ax.set_ylim(box_bottom - 1.0, plot_top + 1.0)
 
+        print_layout = None
+        if print_scale_enabled:
+            x_limits = ax.get_xlim()
+            y_limits = ax.get_ylim()
+            print_layout = kesit_baski_yerlesimi(
+                abs(x_limits[1] - x_limits[0]),
+                abs(y_limits[1] - y_limits[0]),
+                page_name=print_page_size,
+                horizontal_scale=horizontal_scale,
+                vertical_scale=vertical_scale,
+                legend_rows=legend_rows,
+                auto_fit=print_auto_fit,
+            )
+            ax.set_position(print_layout["axes_rect"])
+            if legend_ax is not None and print_layout.get("legend_rect"):
+                legend_ax.set_position(print_layout["legend_rect"])
+
+            effective_horizontal = print_layout["horizontal_scale"]
+            effective_vertical = print_layout["vertical_scale"]
+            vertical_exaggeration = print_layout["vertical_exaggeration"]
+            ax._geo_title_full = (
+                f"Jeolojik Kesit ({mode_label}, "
+                f"Y 1/{effective_horizontal:g}, D 1/{effective_vertical:g}, "
+                f"D.A. x{vertical_exaggeration:g})"
+            )
+            if title_mode == "none":
+                ax.set_title("")
+            elif title_mode == "simple":
+                ax.set_title(ax._geo_title_simple, fontsize=12, fontweight="bold")
+            else:
+                ax.set_title(ax._geo_title_full, fontsize=12, fontweight="bold")
+
+            if print_layout["adjusted"] and log_callback:
+                log_callback(
+                    (
+                        f"{print_layout['page_name']} sayfasına sığması için baskı ölçeği "
+                        f"Y 1/{effective_horizontal:g}, D 1/{effective_vertical:g} olarak ayarlandı."
+                    ),
+                    "warning",
+                )
+
         fig._geo_hide_same_unit_seams = hide_same_unit_seams
         fig._geo_section_engine = "v2" if use_correlation_v2 else "v1"
         fig._geo_correlation_links = pair_links if use_correlation_v2 else []
         fig._geo_semantic_lenses = semantic_lens_tracks if use_correlation_v2 else []
+        fig._geo_print_layout = print_layout
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

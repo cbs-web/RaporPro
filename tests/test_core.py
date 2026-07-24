@@ -107,6 +107,11 @@ from kesit_korelasyon import (
     section_layer_id,
 )
 from kesit_kalite import build_section_quality_report
+from kesit_baski import (
+    kesit_baski_yerlesimi,
+    kesit_dusey_abarti,
+    kesit_metre_baski_boyu,
+)
 from ui_kontrol import KontrolPaneliMixin
 from ui_cikti import (
     CiktiMerkeziMixin,
@@ -2211,6 +2216,86 @@ class KesitCizimTestleri(unittest.TestCase):
         other_options = dict(options)
         other_options["selected_sondajlar"] = ["SK-2", "SK-3"]
         self.assertEqual(mixin._kesit_manual_edits_for_options(saved, other_options), {})
+
+    def test_kesit_baski_olcegi_fiziksel_boyu_hesaplar(self):
+        self.assertEqual(kesit_dusey_abarti(500, 100), 5.0)
+        self.assertAlmostEqual(kesit_metre_baski_boyu(100, 500), 7.8740157, places=5)
+        layout = kesit_baski_yerlesimi(
+            50,
+            10,
+            page_name="A4 Yatay",
+            horizontal_scale=500,
+            vertical_scale=100,
+            legend_rows=0,
+        )
+        self.assertFalse(layout["adjusted"])
+        self.assertTrue(layout["fits"])
+        self.assertEqual(layout["figure_size"], (11.69, 8.27))
+        self.assertAlmostEqual(layout["vertical_exaggeration"], 5.0)
+
+    def test_kesit_baski_olcegi_sigmayan_ekseni_standart_olcege_alir(self):
+        layout = kesit_baski_yerlesimi(
+            300,
+            40,
+            page_name="A4 Yatay",
+            horizontal_scale=100,
+            vertical_scale=50,
+            legend_rows=2,
+        )
+        self.assertTrue(layout["adjusted"])
+        self.assertTrue(layout["fits"])
+        self.assertGreater(layout["horizontal_scale"], 100)
+        self.assertGreater(layout["vertical_scale"], 50)
+
+    def test_kesit_motoru_gercek_baski_sayfasini_ve_ekseni_korur(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "10",
+                "litoloji": [["0", "10", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "10",
+                "litoloji": [["0", "10", "Kil"]],
+                "spt": [],
+            },
+        ]
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "dx_default": "25",
+                "print_scale_enabled": True,
+                "print_page_size": "A3 Yatay",
+                "horizontal_scale": "500",
+                "vertical_scale": "250",
+                "show_legend": False,
+                "show_yass": False,
+                "show_distance_labels": False,
+                "show_layer_depth_labels": False,
+                "show_consistency_labels": False,
+            },
+        )
+        layout = fig._geo_print_layout
+        axes_box = fig.axes[0].get_position()
+        self.assertEqual(tuple(round(value, 2) for value in fig.get_size_inches()), (16.54, 11.69))
+        self.assertEqual(sondajlar[1]["_plot_x"], 25.0)
+        self.assertAlmostEqual(
+            axes_box.width * fig.get_figwidth(),
+            layout["axes_size_inches"][0],
+            places=5,
+        )
+        self.assertAlmostEqual(
+            axes_box.height * fig.get_figheight(),
+            layout["axes_size_inches"][1],
+            places=5,
+        )
+        self.assertIn("Y 1/500", fig.axes[0]._geo_title_full)
+        self.assertIn("D 1/250", fig.axes[0]._geo_title_full)
 
     def test_kesit_motoru_tekrarli_birimleri_ayri_eslestirir(self):
         sondajlar = [

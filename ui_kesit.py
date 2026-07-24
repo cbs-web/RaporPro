@@ -27,6 +27,10 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             norm(options.get("section_engine", "v1")),
             selected_key,
             norm_float(options.get("vertical_exaggeration", 1.0)),
+            norm(options.get("print_scale_enabled", False)),
+            norm(options.get("print_page_size", "A4 Yatay")),
+            norm_float(options.get("horizontal_scale", 500.0)),
+            norm_float(options.get("vertical_scale", 100.0)),
             norm_float(options.get("corr_tolerance", 0.0)),
             norm_float(options.get("dx_default", 25.0)),
             norm_float(options.get("well_width", 2.0)),
@@ -170,6 +174,59 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         cmb_section_engine.grid(row=1, column=2, sticky="w", padx=5, pady=(0, 2))
         ttk.Label(opt, text="Düşey abartı").grid(row=3, column=0, sticky="e", padx=5, pady=4)
         e_ve = ttk.Entry(opt, width=12); e_ve.insert(0, saved_kesit.get("vertical_exaggeration", "1.0")); e_ve.grid(row=3, column=1, sticky="w", padx=5, pady=4)
+        print_scale_var = tk.BooleanVar(value=saved_kesit.get("print_scale_enabled", False))
+        print_page_var = tk.StringVar(value=saved_kesit.get("print_page_size", "A4 Yatay"))
+        horizontal_scale_var = tk.StringVar(value=str(saved_kesit.get("horizontal_scale", "500")))
+        vertical_scale_var = tk.StringVar(value=str(saved_kesit.get("vertical_scale", "100")))
+        print_frame = ttk.LabelFrame(opt, text="Gerçek Baskı Ölçeği", padding=7)
+        print_frame.grid(row=0, column=3, rowspan=6, sticky="nw", padx=(14, 5), pady=2)
+        ttk.Checkbutton(
+            print_frame,
+            text="Baskı ölçeğini kullan",
+            variable=print_scale_var,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        ttk.Label(print_frame, text="Sayfa").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=3)
+        ttk.Combobox(
+            print_frame,
+            textvariable=print_page_var,
+            values=("A4 Yatay", "A3 Yatay"),
+            width=12,
+            state="readonly",
+        ).grid(row=1, column=1, sticky="w", pady=3)
+        ttk.Label(print_frame, text="Yatay 1/").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=3)
+        horizontal_scale_combo = ttk.Combobox(
+            print_frame,
+            textvariable=horizontal_scale_var,
+            values=("100", "200", "250", "500", "1000", "2000"),
+            width=10,
+        )
+        horizontal_scale_combo.grid(row=2, column=1, sticky="w", pady=3)
+        ttk.Label(print_frame, text="Düşey 1/").grid(row=3, column=0, sticky="e", padx=(0, 5), pady=3)
+        vertical_scale_combo = ttk.Combobox(
+            print_frame,
+            textvariable=vertical_scale_var,
+            values=("50", "100", "200", "250", "500"),
+            width=10,
+        )
+        vertical_scale_combo.grid(row=3, column=1, sticky="w", pady=3)
+        print_ratio_label = ttk.Label(print_frame, text="")
+        print_ratio_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(5, 0))
+
+        def sync_print_scale(event=None):
+            horizontal = safe_float(horizontal_scale_var.get()) or 500.0
+            vertical = safe_float(vertical_scale_var.get()) or 100.0
+            ratio = horizontal / max(vertical, 1.0)
+            print_ratio_label.configure(text=f"Düşey abartı: x{ratio:g}")
+            if print_scale_var.get():
+                e_ve.delete(0, tk.END)
+                e_ve.insert(0, f"{ratio:g}")
+
+        horizontal_scale_combo.bind("<<ComboboxSelected>>", sync_print_scale)
+        horizontal_scale_combo.bind("<FocusOut>", sync_print_scale)
+        vertical_scale_combo.bind("<<ComboboxSelected>>", sync_print_scale)
+        vertical_scale_combo.bind("<FocusOut>", sync_print_scale)
+        print_scale_var.trace_add("write", lambda *_: sync_print_scale())
+        sync_print_scale()
         ttk.Label(opt, text="Eşleşme toleransı (m)").grid(row=4, column=0, sticky="e", padx=5, pady=4)
         e_tol = ttk.Entry(opt, width=12); e_tol.insert(0, saved_kesit.get("corr_tolerance", "3.0")); e_tol.grid(row=4, column=1, sticky="w", padx=5, pady=4)
         ttk.Label(opt, text="Şematik aralık (m)").grid(row=5, column=0, sticky="e", padx=5, pady=4)
@@ -498,6 +555,11 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "section_engine": "v2" if section_engine_var.get().startswith("V2") else "v1",
                 "preset": preset_var.get(),
                 "vertical_exaggeration": e_ve.get(),
+                "print_scale_enabled": print_scale_var.get(),
+                "print_page_size": print_page_var.get(),
+                "horizontal_scale": horizontal_scale_var.get(),
+                "vertical_scale": vertical_scale_var.get(),
+                "print_auto_fit": True,
                 "corr_tolerance": e_tol.get(),
                 "dx_default": e_dx.get(),
                 "consistency_label_min_height": e_label_min.get(),

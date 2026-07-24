@@ -976,6 +976,37 @@ class KesitOnizlemeMixin:
                 "<<ComboboxSelected>>",
                 lambda event=None: detailed_lithology_var.set(engine_var.get().startswith("V2")),
             )
+            print_scale_var = tk.BooleanVar(value=option_as_bool("print_scale_enabled", False))
+            print_page_var = tk.StringVar(value=str(options.get("print_page_size", "A4 Yatay")))
+            horizontal_scale_var = tk.StringVar(value=str(options.get("horizontal_scale", "500")))
+            vertical_scale_var = tk.StringVar(value=str(options.get("vertical_scale", "100")))
+            ttk.Checkbutton(
+                redraw_frame,
+                text="Gerçek baskı ölçeği",
+                variable=print_scale_var,
+            ).grid(row=2, column=3, columnspan=2, sticky="w", padx=5, pady=(8, 3))
+            ttk.Label(redraw_frame, text="Sayfa").grid(row=3, column=3, sticky="e", padx=5, pady=3)
+            ttk.Combobox(
+                redraw_frame,
+                textvariable=print_page_var,
+                values=("A4 Yatay", "A3 Yatay"),
+                width=14,
+                state="readonly",
+            ).grid(row=3, column=4, sticky="w", padx=5, pady=3)
+            ttk.Label(redraw_frame, text="Yatay ölçek 1/").grid(row=4, column=3, sticky="e", padx=5, pady=3)
+            ttk.Combobox(
+                redraw_frame,
+                textvariable=horizontal_scale_var,
+                values=("100", "200", "250", "500", "1000", "2000"),
+                width=14,
+            ).grid(row=4, column=4, sticky="w", padx=5, pady=3)
+            ttk.Label(redraw_frame, text="Düşey ölçek 1/").grid(row=5, column=3, sticky="e", padx=5, pady=3)
+            ttk.Combobox(
+                redraw_frame,
+                textvariable=vertical_scale_var,
+                values=("50", "100", "200", "250", "500"),
+                width=14,
+            ).grid(row=5, column=4, sticky="w", padx=5, pady=3)
 
             entries = {}
             redraw_fields = [
@@ -1033,6 +1064,11 @@ class KesitOnizlemeMixin:
                 new_options["two_well_lens"] = two_well_lens_var.get()
                 new_options["avoid_label_collisions"] = avoid_label_var.get()
                 new_options["section_engine"] = "v2" if engine_var.get().startswith("V2") else "v1"
+                new_options["print_scale_enabled"] = print_scale_var.get()
+                new_options["print_page_size"] = print_page_var.get()
+                new_options["horizontal_scale"] = horizontal_scale_var.get()
+                new_options["vertical_scale"] = vertical_scale_var.get()
+                new_options["print_auto_fit"] = True
                 new_options["section_signature"] = self._kesit_section_signature(new_options)
                 save_section_edits(show_status=False)
                 self._kesit_ayarlari_kaydet(new_options.copy())
@@ -1063,6 +1099,7 @@ class KesitOnizlemeMixin:
                 title_var.set("simple")
             legend_var = tk.BooleanVar(value=option_as_bool("export_show_legend", True))
             result = {"config": None}
+            print_layout = getattr(fig, "_geo_print_layout", None)
 
             ttk.Label(body, text="Format").grid(row=0, column=0, sticky="w", pady=4)
             ttk.Combobox(body, textvariable=fmt_var, values=("JPG", "PNG", "PDF", "SVG"), width=12, state="readonly").grid(row=0, column=1, sticky="ew", pady=4)
@@ -1070,8 +1107,39 @@ class KesitOnizlemeMixin:
             ttk.Entry(body, textvariable=dpi_var, width=14).grid(row=1, column=1, sticky="ew", pady=4)
             ttk.Label(body, text="Başlık").grid(row=2, column=0, sticky="w", pady=4)
             ttk.Combobox(body, textvariable=title_var, values=("simple", "full", "none"), width=12, state="readonly").grid(row=2, column=1, sticky="ew", pady=4)
-            ttk.Label(body, text="Sta/Off kayitta gizlenir.").grid(row=3, column=0, columnspan=2, sticky="w", pady=4)
-            ttk.Checkbutton(body, text="Lejantı göster", variable=legend_var).grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
+            status_row = 3
+            if print_layout:
+                scale_text = (
+                    f"{print_layout['page_name']} | "
+                    f"Y 1/{print_layout['horizontal_scale']:g} | "
+                    f"D 1/{print_layout['vertical_scale']:g} | "
+                    f"D.A. x{print_layout['vertical_exaggeration']:g}"
+                )
+                ttk.Label(body, text="Baskı").grid(row=status_row, column=0, sticky="nw", pady=4)
+                ttk.Label(
+                    body,
+                    text=scale_text,
+                    foreground="#C0392B" if print_layout.get("adjusted") else "#247A45",
+                    wraplength=330,
+                ).grid(row=status_row, column=1, sticky="w", pady=4)
+                status_row += 1
+                if print_layout.get("adjusted"):
+                    ttk.Label(
+                        body,
+                        text="Seçilen ölçek sayfaya sığmadığı için bir üst standart ölçek kullanıldı.",
+                        foreground="#C0392B",
+                        wraplength=430,
+                    ).grid(row=status_row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+                    status_row += 1
+            else:
+                ttk.Label(
+                    body,
+                    text="Gerçek baskı ölçeği kapalı; çıktı sayfaya görsel olarak sığdırılır.",
+                    foreground="#666666",
+                ).grid(row=status_row, column=0, columnspan=2, sticky="w", pady=4)
+                status_row += 1
+            ttk.Label(body, text="Sta/Off kayitta gizlenir.").grid(row=status_row, column=0, columnspan=2, sticky="w", pady=4)
+            ttk.Checkbutton(body, text="Lejantı göster", variable=legend_var).grid(row=status_row + 1, column=0, columnspan=2, sticky="w", pady=4)
             body.columnconfigure(1, weight=1)
 
             def accept():
@@ -1095,7 +1163,7 @@ class KesitOnizlemeMixin:
                 dialog.destroy()
 
             btns = ttk.Frame(body)
-            btns.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+            btns.grid(row=status_row + 2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
             ttk.Button(btns, text="Kaydet", command=accept).pack(side="left")
             ttk.Button(btns, text="Vazgeç", command=dialog.destroy).pack(side="right")
             dialog.wait_window()
@@ -1125,9 +1193,12 @@ class KesitOnizlemeMixin:
             well_labels = [text for text in ax.texts if hasattr(text, "_geo_save_text")] if ax else []
             old_well_label_states = [(text, text.get_text(), text.get_fontsize()) for text in well_labels]
             legend_artists = [
-                artist for artist in ax.get_children()
-                if hasattr(artist, "get_visible") and getattr(artist, "_geo_export_group", None) == "legend"
-            ] if ax else []
+                artist
+                for figure_ax in fig.axes
+                for artist in figure_ax.get_children()
+                if hasattr(artist, "get_visible")
+                and getattr(artist, "_geo_export_group", None) == "legend"
+            ]
             old_legend_states = [(artist, artist.get_visible()) for artist in legend_artists]
             try:
                 save_section_edits(show_status=False)
@@ -1151,7 +1222,13 @@ class KesitOnizlemeMixin:
                     info_text.set_visible(False)
                 if vertex_markers is not None:
                     vertex_markers.set_visible(False)
-                fig.savefig(path, dpi=export_config["dpi"], bbox_inches='tight')
+                print_layout = getattr(fig, "_geo_print_layout", None)
+                fig.savefig(
+                    path,
+                    dpi=export_config["dpi"],
+                    bbox_inches=None if print_layout else "tight",
+                    facecolor="white",
+                )
                 messagebox.showinfo("Başarılı", "Kesit kaydedildi.")
             finally:
                 if ax:
