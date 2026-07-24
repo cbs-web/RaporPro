@@ -11,6 +11,65 @@ from yardimcilar import safe_float
 
 
 class KesitCizimMixin(KesitOnizlemeMixin):
+    _KESIT_TOPOGRAPHY_KEYS = (
+        "show_topography_profile",
+        "topography_source",
+        "topography_points",
+        "topography_coordinate_points",
+    )
+
+    def _kesit_section_identity(self, options):
+        """Görsel ayarlardan bağımsız, kalıcı kesit kimliğini üret."""
+        def norm(value):
+            text = str(value or "").strip()
+            return text if text else "-"
+
+        def norm_float(value):
+            parsed = safe_float(value)
+            return f"{parsed:.7f}" if parsed else "0"
+
+        selected = options.get("selected_sondajlar") or []
+        parts = [
+            norm(options.get("mode", "schematic")),
+            "|".join(norm(item) for item in selected),
+        ]
+        if str(options.get("mode", "schematic")) == "line_projection":
+            parts.extend([
+                norm_float(options.get("line_start_y")),
+                norm_float(options.get("line_start_x")),
+                norm_float(options.get("line_end_y")),
+                norm_float(options.get("line_end_x")),
+            ])
+        return "::".join(parts)
+
+    def _kesit_topography_for_options(self, saved_kesit, options):
+        """Kesite özel topoğrafya kaydını, eski proje uyumluluğuyla döndür."""
+        identity = options.get("section_identity") or self._kesit_section_identity(options)
+        by_section = saved_kesit.get("topography_by_section")
+        if isinstance(by_section, dict):
+            record = by_section.get(identity)
+            if isinstance(record, dict):
+                return {
+                    key: record.get(key)
+                    for key in self._KESIT_TOPOGRAPHY_KEYS
+                    if key in record
+                }
+
+        legacy_identity = saved_kesit.get("topography_section_identity")
+        saved_selected = saved_kesit.get("selected_sondajlar") or []
+        current_selected = options.get("selected_sondajlar") or []
+        legacy_matches = (
+            not legacy_identity
+            and (not saved_selected or list(saved_selected) == list(current_selected))
+        ) or legacy_identity == identity
+        if legacy_matches:
+            return {
+                key: saved_kesit.get(key)
+                for key in self._KESIT_TOPOGRAPHY_KEYS
+                if key in saved_kesit
+            }
+        return {}
+
     def _kesit_section_signature(self, options):
         def norm(value):
             text = str(value or "").strip()
@@ -88,7 +147,25 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             by_section = dict(by_section)
         else:
             by_section = {}
+        topography_by_section = saved.get("topography_by_section")
+        topography_by_section = (
+            dict(topography_by_section)
+            if isinstance(topography_by_section, dict)
+            else {}
+        )
+        section_identity = options.get("section_identity") or self._kesit_section_identity(options)
+        topography_record = {
+            key: options.get(key)
+            for key in self._KESIT_TOPOGRAPHY_KEYS
+            if key in options
+        }
+        if topography_record and section_identity:
+            topography_by_section[section_identity] = topography_record
         saved.update(options)
+        saved["section_identity"] = section_identity
+        if topography_by_section:
+            saved["topography_by_section"] = topography_by_section
+            saved["topography_section_identity"] = section_identity
         if by_section:
             saved["manual_edits_by_section"] = by_section
         else:
@@ -857,6 +934,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                         "line_end_x": f"{end_x:.8f}",
                         "max_offset": e_offset.get(),
                     })
+            options["section_identity"] = self._kesit_section_identity(options)
             options["section_signature"] = self._kesit_section_signature(options)
             current_saved = self.veri.get("kesit_ayarlari", saved_kesit) or {}
             manual_edits = self._kesit_manual_edits_for_options(current_saved, options)

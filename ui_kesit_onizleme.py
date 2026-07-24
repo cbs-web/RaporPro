@@ -21,8 +21,11 @@ class KesitOnizlemeMixin:
         options = dict(options or {})
         if not options.get("selected_sondajlar"):
             options["selected_sondajlar"] = [s.get("no", "") for s in sondajlar or []]
-        options["section_signature"] = options.get("section_signature") or self._kesit_section_signature(options)
         saved_kesit = self.veri.get("kesit_ayarlari", {}) or {}
+        options["section_identity"] = options.get("section_identity") or self._kesit_section_identity(options)
+        if not any(key in options for key in self._KESIT_TOPOGRAPHY_KEYS):
+            options.update(self._kesit_topography_for_options(saved_kesit, options))
+        options["section_signature"] = options.get("section_signature") or self._kesit_section_signature(options)
         active_manual_edits = self._kesit_manual_edits_for_options(saved_kesit, options)
         if active_manual_edits:
             options["manual_edits"] = active_manual_edits

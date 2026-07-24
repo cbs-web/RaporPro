@@ -2341,6 +2341,56 @@ class KesitCizimTestleri(unittest.TestCase):
         other_options["selected_sondajlar"] = ["SK-2", "SK-3"]
         self.assertEqual(mixin._kesit_manual_edits_for_options(saved, other_options), {})
 
+    def test_topografya_profilleri_kesit_kimligine_gore_ayri_saklanir(self):
+        mixin = KesitCizimMixin()
+        mixin.veri = {"kesit_ayarlari": {}}
+        first = {
+            "mode": "schematic",
+            "selected_sondajlar": ["SK-1", "SK-2"],
+            "show_topography_profile": True,
+            "topography_source": "manual",
+            "topography_points": [{"station": 5, "elevation": 101}],
+            "topography_coordinate_points": [],
+        }
+        second = {
+            "mode": "schematic",
+            "selected_sondajlar": ["SK-2", "SK-3"],
+            "show_topography_profile": True,
+            "topography_source": "manual",
+            "topography_points": [{"station": 8, "elevation": 98}],
+            "topography_coordinate_points": [],
+        }
+        mixin._kesit_ayarlari_kaydet(first)
+        mixin._kesit_ayarlari_kaydet(second)
+
+        saved = mixin.veri["kesit_ayarlari"]
+        self.assertEqual(len(saved["topography_by_section"]), 2)
+        self.assertEqual(
+            mixin._kesit_topography_for_options(saved, first)["topography_points"],
+            first["topography_points"],
+        )
+        self.assertEqual(
+            mixin._kesit_topography_for_options(saved, second)["topography_points"],
+            second["topography_points"],
+        )
+
+    def test_eski_topografya_kaydi_ayni_kesitte_korunur(self):
+        mixin = KesitCizimMixin()
+        options = {
+            "mode": "schematic",
+            "selected_sondajlar": ["SK-1", "SK-2"],
+        }
+        saved = {
+            "mode": "schematic",
+            "selected_sondajlar": ["SK-1", "SK-2"],
+            "show_topography_profile": True,
+            "topography_source": "manual",
+            "topography_points": [{"station": 10, "elevation": 100}],
+        }
+        profile = mixin._kesit_topography_for_options(saved, options)
+        self.assertTrue(profile["show_topography_profile"])
+        self.assertEqual(profile["topography_points"][0]["station"], 10)
+
     def test_kesit_baski_olcegi_fiziksel_boyu_hesaplar(self):
         self.assertEqual(kesit_dusey_abarti(500, 100), 5.0)
         self.assertAlmostEqual(kesit_metre_baski_boyu(100, 500), 7.8740157, places=5)
