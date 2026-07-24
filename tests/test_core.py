@@ -111,6 +111,14 @@ from kesit_export import (
     kesit_cok_sayfali_cikti_kaydet,
     kesit_figuru_kaydet,
 )
+from kesit_motor_ayarlari import (
+    KESIT_ENGINE_DEFAULT,
+    KESIT_ENGINE_V1_LABEL,
+    KESIT_ENGINE_V2_LABEL,
+    kesit_motoru_etiketi,
+    kesit_motoru_etiketinden,
+    kesit_motoru_normalize,
+)
 from kesit_geometri_kalite import (
     build_section_geometry_report,
     kalite_raporlarini_birlestir,
@@ -1914,6 +1922,112 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
 
 class KesitCizimTestleri(unittest.TestCase):
+    def test_yeni_projelerde_v2_kesit_motoru_varsayilandir(self):
+        default = ArayuzProjeMixin.varsayilan_veri_olustur(SimpleNamespace())
+        self.assertEqual(KESIT_ENGINE_DEFAULT, "v2")
+        self.assertEqual(default["kesit_ayarlari"]["section_engine"], "v2")
+        self.assertFalse(default["kesit_ayarlari"]["show_detailed_lithology_labels"])
+        self.assertEqual(kesit_motoru_normalize(None), "v2")
+        self.assertEqual(kesit_motoru_normalize("v1"), "v1")
+        self.assertEqual(kesit_motoru_etiketi("v2"), KESIT_ENGINE_V2_LABEL)
+        self.assertEqual(kesit_motoru_etiketi("v1"), KESIT_ENGINE_V1_LABEL)
+        self.assertEqual(kesit_motoru_etiketinden(KESIT_ENGINE_V2_LABEL), "v2")
+        self.assertEqual(kesit_motoru_etiketinden(KESIT_ENGINE_V1_LABEL), "v1")
+
+    def test_v1_ve_v2_son_kelime_ana_birimlerini_korur(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "10",
+                "litoloji": [["0", "4", "Siltli Kum"], ["4", "10", "Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "10",
+                "litoloji": [["0", "5", "Çakıllı Kum"], ["5", "10", "Kumlu Kil"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-3",
+                "k": "98",
+                "der": "10",
+                "litoloji": [["0", "4.5", "Kum"], ["4.5", "10", "Kil"]],
+                "spt": [],
+            },
+        ]
+        engine_results = {}
+        for engine in ("v1", "v2"):
+            fig, _ = GeoEngine.kesit_ciz_interaktif(
+                copy.deepcopy(sondajlar),
+                options={
+                    "mode": "schematic",
+                    "dx_default": "25",
+                    "section_engine": engine,
+                    "show_detailed_lithology_labels": False,
+                    "show_legend": False,
+                    "show_yass": False,
+                    "show_consistency_labels": False,
+                },
+            )
+            polygons = [
+                polygon
+                for polygon in fig._geo_tool.polygons
+                if getattr(polygon, "_geo_poly_kind", "") != "well"
+                and not getattr(polygon, "_geo_hidden", False)
+            ]
+            engine_results[engine] = {
+                "codes": sorted({
+                    getattr(polygon, "_geo_unit_code", "")
+                    for polygon in polygons
+                }),
+                "geometry": build_section_geometry_report(fig),
+            }
+            self.assertFalse(any(
+                hasattr(text_artist, "_geo_correlation_key")
+                for text_artist in fig.axes[0].texts
+            ))
+            fig.clear()
+
+        self.assertEqual(engine_results["v1"]["codes"], engine_results["v2"]["codes"])
+        self.assertEqual(engine_results["v1"]["geometry"]["errors"], [])
+        self.assertEqual(engine_results["v2"]["geometry"]["errors"], [])
+
+    def test_kesit_motoru_secim_yokken_v2_ve_ana_birim_etiketiyle_cizer(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "8",
+                "litoloji": [["0", "8", "Siltli Kum"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99",
+                "der": "8",
+                "litoloji": [["0", "8", "Çakıllı Kum"]],
+                "spt": [],
+            },
+        ]
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "show_legend": False,
+                "show_yass": False,
+                "show_consistency_labels": False,
+            },
+        )
+        self.assertEqual(fig._geo_section_engine, "v2")
+        self.assertFalse(any(
+            hasattr(text_artist, "_geo_correlation_key")
+            for text_artist in fig.axes[0].texts
+        ))
+        fig.clear()
+
     def test_topografya_metni_excel_sutunlarini_ve_ondalik_virgulu_okur(self):
         points, invalid_lines = topografya_metnini_oku(
             "Station\tKot\n0\t100,50\n10.0\t101.25\nbozuk"
@@ -3026,6 +3140,7 @@ class KesitCizimTestleri(unittest.TestCase):
         ]
         common_options = {
             "mode": "schematic",
+            "section_engine": "v1",
             "show_legend": False,
             "show_yass": False,
             "show_distance_labels": False,
@@ -3070,6 +3185,7 @@ class KesitCizimTestleri(unittest.TestCase):
         ]
         common_options = {
             "mode": "schematic",
+            "section_engine": "v1",
             "show_legend": False,
             "show_yass": False,
             "show_distance_labels": False,
@@ -3140,6 +3256,7 @@ class KesitCizimTestleri(unittest.TestCase):
             sondajlar,
             options={
                 "mode": "line_projection",
+                "section_engine": "v1",
                 "line_start": (41.0000, 29.0000),
                 "line_end": (41.0002, 29.0004),
                 "max_offset": "10",
@@ -3224,6 +3341,7 @@ class KesitCizimTestleri(unittest.TestCase):
             sondajlar,
             options={
                 "mode": "schematic",
+                "section_engine": "v1",
                 "show_legend": False,
                 "show_yass": False,
                 "show_distance_labels": False,

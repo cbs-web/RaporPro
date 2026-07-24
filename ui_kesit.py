@@ -4,6 +4,13 @@ from tkinter import Listbox, Toplevel, messagebox, ttk
 from harita_referans import kml_koordinatlari_oku
 from kesit_geometri_kalite import build_section_geometry_report, kalite_raporlarini_birlestir
 from kesit_kalite import build_section_quality_report, format_section_quality_report
+from kesit_motor_ayarlari import (
+    KESIT_ENGINE_DEFAULT,
+    KESIT_ENGINE_LABELS,
+    kesit_motoru_etiketi,
+    kesit_motoru_etiketinden,
+    kesit_motoru_normalize,
+)
 from kesit_topografya import kml_yukseklik_noktalari_oku, topografya_metnini_oku
 from ui_kesit_yardimci import kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from ui_kesit_onizleme import KesitOnizlemeMixin
@@ -101,7 +108,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         mode = norm(options.get("mode", "schematic"))
         geometry_parts = [
             mode,
-            norm(options.get("section_engine", "v1")),
+            norm(kesit_motoru_normalize(options.get("section_engine", KESIT_ENGINE_DEFAULT))),
             selected_key,
             norm_float(options.get("vertical_exaggeration", 1.0)),
             norm(options.get("print_scale_enabled", False)),
@@ -266,9 +273,11 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         opt = ttk.LabelFrame(tab_ayarlar, text="Kesit Ayarları", padding=10)
         opt.pack(fill="both", expand=True)
         mode_var = tk.StringVar(value=saved_kesit.get("mode", "line_projection"))
-        section_engine_value = str(saved_kesit.get("section_engine", "v1") or "v1").lower()
+        section_engine_value = kesit_motoru_normalize(
+            saved_kesit.get("section_engine", KESIT_ENGINE_DEFAULT)
+        )
         section_engine_var = tk.StringVar(
-            value="V2 (Deneysel)" if section_engine_value == "v2" else "V1 (Stabil)"
+            value=kesit_motoru_etiketi(section_engine_value)
         )
         ttk.Radiobutton(opt, text="Kesit hattı (Strater tarzı station/offset)", variable=mode_var, value="line_projection").grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
         ttk.Radiobutton(opt, text="Gerçek mesafe (seçilen sıraya göre)", variable=mode_var, value="true_distance").grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
@@ -277,7 +286,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         cmb_section_engine = ttk.Combobox(
             opt,
             textvariable=section_engine_var,
-            values=("V1 (Stabil)", "V2 (Deneysel)"),
+            values=KESIT_ENGINE_LABELS,
             width=16,
             state="readonly",
         )
@@ -402,11 +411,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         show_yass_var = tk.BooleanVar(value=saved_kesit.get("show_yass", True))
         show_yass_labels_var = tk.BooleanVar(value=saved_kesit.get("show_yass_labels", True))
         show_detailed_lithology_var = tk.BooleanVar(
-            value=saved_kesit.get("show_detailed_lithology_labels", section_engine_value == "v2")
-        )
-        cmb_section_engine.bind(
-            "<<ComboboxSelected>>",
-            lambda event=None: show_detailed_lithology_var.set(section_engine_var.get().startswith("V2")),
+            value=saved_kesit.get("show_detailed_lithology_labels", False)
         )
         avoid_label_var = tk.BooleanVar(value=saved_kesit.get("avoid_label_collisions", True))
         hide_seams_var = tk.BooleanVar(value=saved_kesit.get("hide_same_unit_seams", True))
@@ -852,7 +857,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                     cadastral_parts.append(f"{label}: {value}")
             options = {
                 "mode": mode_var.get(),
-                "section_engine": "v2" if section_engine_var.get().startswith("V2") else "v1",
+                "section_engine": kesit_motoru_etiketinden(section_engine_var.get()),
                 "preset": preset_var.get(),
                 "vertical_exaggeration": e_ve.get(),
                 "print_scale_enabled": print_scale_var.get(),

@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, Listbox, Toplevel
 
 from harita_cikti import eski_paylasimli_temp_harita_yolu_mu
+from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT
 from sabitler import *
 from yardimcilar import *
 from performans import ERROR_LOG_PATH, PERF_LOG_PATH, log_exception, perf_timer, perf_tracked
@@ -365,7 +366,10 @@ class ArayuzProjeMixin:
             "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
             "lab_sheet": {"rows": []},
             "jeofizik_sheet": {"rows": []},
-            "kesit_ayarlari": {},
+            "kesit_ayarlari": {
+                "section_engine": KESIT_ENGINE_DEFAULT,
+                "show_detailed_lithology_labels": False,
+            },
             "ek_icerikleri": {"normal": {}, "arazi_deneyli": {}},
             "proje_durumu": {"tamamlandi": False, "kilitli": False, "tamamlanma_tarihi": "", "arsiv_notu": ""},
             "ayarlar": {

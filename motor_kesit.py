@@ -7,6 +7,8 @@ from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
 import textwrap
 
+from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT, kesit_motoru_normalize
+
 try:
     from sabitler import (
         A4_LANDSCAPE_SIZE,
@@ -108,11 +110,13 @@ class GeoEngineKesitMixin:
         hide_same_unit_seams = option_bool("hide_same_unit_seams", True)
         auto_lens = option_bool("auto_lens", True)
         two_well_lens = option_bool("two_well_lens", True)
-        section_engine = str(options.get("section_engine", "v1") or "v1").strip().lower()
-        use_correlation_v2 = section_engine in ("v2", "2", "yeni", "new")
+        section_engine = kesit_motoru_normalize(
+            options.get("section_engine", KESIT_ENGINE_DEFAULT)
+        )
+        use_correlation_v2 = section_engine == "v2"
         show_detailed_lithology_labels = option_bool(
             "show_detailed_lithology_labels",
-            use_correlation_v2,
+            False,
         )
         title_mode = str(options.get("title_mode", "full")).lower()
         well_width = safe_float(options.get("well_width", 2.0)) or 2.0

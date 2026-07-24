@@ -9,6 +9,13 @@ from kesit_export import kesit_cok_sayfali_cikti_kaydet, kesit_figuru_kaydet
 from kesit_geometri_kalite import build_section_geometry_report, kalite_raporlarini_birlestir
 from kesit_kalite import build_section_quality_report
 from kesit_korelasyon import correlation_relation_id, section_layer_id
+from kesit_motor_ayarlari import (
+    KESIT_ENGINE_DEFAULT,
+    KESIT_ENGINE_LABELS,
+    kesit_motoru_etiketi,
+    kesit_motoru_etiketinden,
+    kesit_motoru_normalize,
+)
 from kesit_topografya_editor import TopografyaProfilEditor
 from motor import GeoEngine
 from performans import perf_tracked
@@ -533,7 +540,9 @@ class KesitOnizlemeMixin:
             reload_rows()
 
         def open_correlation_editor():
-            if str(getattr(fig, "_geo_section_engine", "v1")).lower() != "v2":
+            if kesit_motoru_normalize(
+                getattr(fig, "_geo_section_engine", KESIT_ENGINE_DEFAULT)
+            ) != "v2":
                 messagebox.showinfo(
                     "Korelasyon",
                     "Korelasyon düzenleyicisi V2 motorunda kullanılabilir.\n"
@@ -1017,15 +1026,15 @@ class KesitOnizlemeMixin:
             detailed_lithology_var = tk.BooleanVar(
                 value=option_as_bool(
                     "show_detailed_lithology_labels",
-                    str(options.get("section_engine", "v1")).lower() == "v2",
+                    False,
                 )
             )
             seams_var = tk.BooleanVar(value=option_as_bool("hide_same_unit_seams", True))
             title_var = tk.StringVar(value=str(options.get("title_mode", "full")))
             engine_var = tk.StringVar(
-                value="V2 (Deneysel)"
-                if str(options.get("section_engine", "v1")).lower() == "v2"
-                else "V1 (Stabil)"
+                value=kesit_motoru_etiketi(
+                    options.get("section_engine", KESIT_ENGINE_DEFAULT)
+                )
             )
 
             live_checks = [
@@ -1048,15 +1057,11 @@ class KesitOnizlemeMixin:
             engine_combo = ttk.Combobox(
                 redraw_frame,
                 textvariable=engine_var,
-                values=("V1 (Stabil)", "V2 (Deneysel)"),
+                values=KESIT_ENGINE_LABELS,
                 width=16,
                 state="readonly",
             )
             engine_combo.grid(row=0, column=4, sticky="w", padx=5, pady=3)
-            engine_combo.bind(
-                "<<ComboboxSelected>>",
-                lambda event=None: detailed_lithology_var.set(engine_var.get().startswith("V2")),
-            )
             print_scale_var = tk.BooleanVar(value=option_as_bool("print_scale_enabled", False))
             print_title_block_var = tk.BooleanVar(value=option_as_bool("print_title_block", True))
             print_multi_page_var = tk.BooleanVar(value=option_as_bool("print_multi_page", True))
@@ -1172,7 +1177,7 @@ class KesitOnizlemeMixin:
                 new_options["two_well_lens"] = two_well_lens_var.get()
                 new_options["avoid_label_collisions"] = avoid_label_var.get()
                 new_options["conform_layers_to_topography"] = conform_topography_var.get()
-                new_options["section_engine"] = "v2" if engine_var.get().startswith("V2") else "v1"
+                new_options["section_engine"] = kesit_motoru_etiketinden(engine_var.get())
                 new_options["print_scale_enabled"] = print_scale_var.get()
                 new_options["print_title_block"] = print_title_block_var.get()
                 new_options["print_multi_page"] = print_multi_page_var.get()

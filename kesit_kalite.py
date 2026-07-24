@@ -5,6 +5,7 @@ import statistics
 
 from sabitler import LEJANTLAR
 from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
+from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT, kesit_motoru_normalize
 from kesit_korelasyon import (
     build_pair_correlation,
     build_semantic_lens_tracks,
@@ -304,8 +305,10 @@ def build_section_quality_report(sondajlar, options=None):
     thin_limit = safe_float(options.get("section_qc_thin_layer", 0.30)) or 0.30
     spt_search_margin = safe_float(options.get("spt_label_search_margin", 1.5)) or 1.5
     mode = options.get("mode", "schematic")
-    section_engine = str(options.get("section_engine", "v1") or "v1").strip().lower()
-    use_correlation_v2 = section_engine in ("v2", "2", "yeni", "new")
+    section_engine = kesit_motoru_normalize(
+        options.get("section_engine", KESIT_ENGINE_DEFAULT)
+    )
+    use_correlation_v2 = section_engine == "v2"
     merged_by_no = {}
 
     if mode in ("true_distance", "line_projection"):
