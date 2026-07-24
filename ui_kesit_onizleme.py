@@ -7,6 +7,7 @@ from tkinter import Frame, Listbox, Toplevel, filedialog, messagebox, ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_pdf import PdfPages
 
+from kesit_geometri_kalite import build_section_geometry_report, kalite_raporlarini_birlestir
 from kesit_kalite import build_section_quality_report
 from kesit_korelasyon import correlation_relation_id, section_layer_id
 from kesit_topografya_editor import TopografyaProfilEditor
@@ -43,7 +44,10 @@ class KesitOnizlemeMixin:
 
         GeoEngine.reset_warnings()
         fig, result = GeoEngine.kesit_ciz_interaktif(sondajlar, log_callback=collect_warning, options=options)
-        quality_report = build_section_quality_report(sondajlar, options)
+        quality_report = kalite_raporlarini_birlestir(
+            build_section_quality_report(sondajlar, options),
+            build_section_geometry_report(fig),
+        )
         return {
             "sondajlar": sondajlar,
             "options": options,
@@ -119,7 +123,10 @@ class KesitOnizlemeMixin:
             quality_report = prebuilt[2] if len(prebuilt) > 2 and prebuilt[2] else build_section_quality_report(sondajlar, options)
         else:
             fig, _ = GeoEngine.kesit_ciz_interaktif(sondajlar, log_callback=on_draw_warning, options=options)
-            quality_report = build_section_quality_report(sondajlar, options)
+            quality_report = kalite_raporlarini_birlestir(
+                build_section_quality_report(sondajlar, options),
+                build_section_geometry_report(fig),
+            )
         chart = FigureCanvasTkAgg(fig, master=f)
         chart.get_tk_widget().pack(fill="both", expand=True)
         topography_editor = None
@@ -1480,7 +1487,19 @@ class KesitOnizlemeMixin:
         topography_button.configure(menu=topography_menu)
         topography_button.pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Liste", bg="#FAD7A0", fg="#111", font=FONT_BOLD, command=open_edit_list).pack(side="left", padx=3, pady=4)
-        tk.Button(tool_bar, text="Kalite", bg="#F9E79F", fg="#111", font=FONT_BOLD, command=lambda: self.kesit_kalite_penceresi(win, sondajlar, options)).pack(side="left", padx=3, pady=4)
+        tk.Button(
+            tool_bar,
+            text="Kalite",
+            bg="#F9E79F",
+            fg="#111",
+            font=FONT_BOLD,
+            command=lambda: self.kesit_kalite_penceresi(
+                win,
+                sondajlar,
+                options,
+                figure=fig,
+            ),
+        ).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Sıfırla", bg=COLOR_DANGER, fg="white", font=FONT_BOLD, command=reset_section_edits).pack(side="left", padx=3, pady=4)
         tk.Button(tool_bar, text="Kayıtlı Hale Dön", bg="#E8DAEF", fg="#111", font=FONT_BOLD, command=restore_saved_section_edits).pack(side="left", padx=3, pady=4)
 

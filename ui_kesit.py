@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import Listbox, Toplevel, messagebox, ttk
 
 from harita_referans import kml_koordinatlari_oku
+from kesit_geometri_kalite import build_section_geometry_report, kalite_raporlarini_birlestir
 from kesit_kalite import build_section_quality_report, format_section_quality_report
 from kesit_topografya import kml_yukseklik_noktalari_oku, topografya_metnini_oku
 from ui_kesit_yardimci import kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
@@ -177,8 +178,13 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         self.veri["kesit_ayarlari"] = saved
         return saved
 
-    def kesit_kalite_penceresi(self, parent, sondajlar, options=None):
+    def kesit_kalite_penceresi(self, parent, sondajlar, options=None, figure=None):
         report = build_section_quality_report(sondajlar, options or {})
+        if figure is not None:
+            report = kalite_raporlarini_birlestir(
+                report,
+                build_section_geometry_report(figure),
+            )
         win = Toplevel(parent or self.root)
         self.pencere_hazirla(win, "Kesit Kalite Kontrol", "820x560", (720, 460), modal=True)
         frame = ttk.Frame(win, padding=10)

@@ -471,6 +471,10 @@ def format_section_quality_report(report):
             f"v2_mercek={stats.get('semantic_lenses', 0)}",
             f"kıvam_boş={stats.get('consistency_missing', 0)}",
             f"refu={stats.get('refusal_inferred', 0)}",
+            f"geometri={stats.get('geometry_polygons', 0)}",
+            f"kesişim={stats.get('self_intersections', 0)}",
+            f"yüzey_boşluğu={stats.get('surface_gaps', 0)}",
+            f"yüzey_sıkışması={stats.get('surface_clamped_points', 0)}",
         ]
         lines.append("Sayaçlar: " + ", ".join(stat_parts))
     lines.append("")

@@ -1655,7 +1655,7 @@ class GeoEngineKesitMixin:
             layer = min(valid_layers, key=lambda item: (safe_float(item.get("top")), safe_float(item.get("bot"))))
             return layer if safe_float(layer.get("top")) <= 0.10 else None
 
-        def add_surface_cap(vertices, layer, edit_id):
+        def add_surface_cap(vertices, layer, edit_id, surface_curve, pair_index):
             if len(vertices) < 3:
                 return None
             code = layer.get("code") or "tanimsiz"
@@ -1677,6 +1677,11 @@ class GeoEngineKesitMixin:
                 detail_name=layer.get("detail_name"),
                 surface_connected=True,
             )
+            poly._geo_surface_curve = [
+                (float(x), float(y))
+                for x, y in (surface_curve or [])
+            ]
+            poly._geo_surface_pair_index = int(pair_index)
             ax.add_patch(poly)
             interactive_polys.append(poly)
             surface_cap_polys.append(poly)
@@ -1733,6 +1738,8 @@ class GeoEngineKesitMixin:
                             f"surface:{s1.get('no','SK')}:{s2.get('no','SK')}:"
                             f"{layer1.get('code')}"
                         ),
+                        cap["top_curve"],
+                        pair_index,
                     )
                     continue
 
@@ -1776,6 +1783,8 @@ class GeoEngineKesitMixin:
                         f"surface-left:{s1.get('no','SK')}:{s2.get('no','SK')}:"
                         f"{layer1.get('code')}"
                     ),
+                    left_cap["top_curve"],
+                    pair_index,
                 )
                 add_surface_cap(
                     right_vertices,
@@ -1784,7 +1793,45 @@ class GeoEngineKesitMixin:
                         f"surface-right:{s1.get('no','SK')}:{s2.get('no','SK')}:"
                         f"{layer2.get('code')}"
                     ),
+                    right_cap["top_curve"],
+                    pair_index,
                 )
+
+        for polygon in interactive_polys:
+            if getattr(polygon, "_geo_poly_kind", "section") == "well":
+                continue
+            try:
+                pattern_zorder = min(18.0, float(polygon.get_zorder()) + 0.15)
+            except Exception:
+                pattern_zorder = 18.0
+            polygon._geo_pattern_zorder = pattern_zorder
+            set_artist_zorder(
+                getattr(polygon, "_geo_pattern_artists", []) or [],
+                pattern_zorder,
+            )
+
+        topography_mask = None
+        if (
+            show_topography_profile
+            and conform_layers_to_topography
+            and len(topography_x) >= 2
+        ):
+            mask_top = max(topography_y) + 100.0
+            mask_vertices = list(zip(topography_x, topography_y))
+            mask_vertices.extend([
+                (topography_x[-1], mask_top),
+                (topography_x[0], mask_top),
+            ])
+            topography_mask = mpatches.Polygon(
+                mask_vertices,
+                closed=True,
+                facecolor="white",
+                edgecolor="none",
+                linewidth=0,
+                zorder=19.5,
+            )
+            topography_mask._geo_export_group = "topography_mask"
+            ax.add_patch(topography_mask)
 
         for poly in interactive_polys:
             sync_poly_visibility(poly)
@@ -2386,6 +2433,15 @@ class GeoEngineKesitMixin:
                     except Exception:
                         pass
 
+        if topography_mask is not None:
+            annotation_zorder = float(topography_mask.get_zorder()) + 1.0
+            for text_artist in ax.texts:
+                try:
+                    if float(text_artist.get_zorder()) <= float(topography_mask.get_zorder()):
+                        text_artist.set_zorder(annotation_zorder)
+                except Exception:
+                    pass
+
         fig._geo_hide_same_unit_seams = hide_same_unit_seams
         fig._geo_section_engine = "v2" if use_correlation_v2 else "v1"
         fig._geo_correlation_links = pair_links if use_correlation_v2 else []
@@ -2407,6 +2463,12 @@ class GeoEngineKesitMixin:
         }
         fig._geo_surface_caps = surface_cap_polys
         fig._geo_topography_clamped_count = surface_clamped_count
+        fig._geo_topography_mask = topography_mask
+        fig._geo_surface_expected_pair_count = max(0, len(sondajlar) - 1)
+        fig._geo_surface_covered_pair_count = len({
+            getattr(poly, "_geo_surface_pair_index", None)
+            for poly in surface_cap_polys
+        } - {None})
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

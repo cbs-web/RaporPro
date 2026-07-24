@@ -107,6 +107,12 @@ from kesit_korelasyon import (
     section_layer_id,
 )
 from kesit_kalite import build_section_quality_report
+from kesit_geometri_kalite import (
+    build_section_geometry_report,
+    kalite_raporlarini_birlestir,
+    poligon_alani,
+    poligon_kendiyle_kesisiyor,
+)
 from kesit_baski import (
     kesit_baski_yerlesimi,
     kesit_cok_sayfa_plani,
@@ -2038,6 +2044,21 @@ class KesitCizimTestleri(unittest.TestCase):
             bottom = 95 + (94 - 95) * (station / 10)
             self.assertGreaterEqual(elevation, bottom + 0.049)
 
+    def test_kesit_geometri_kontrolu_kendiyle_kesisen_poligonu_bulur(self):
+        self.assertTrue(poligon_kendiyle_kesisiyor([(0, 0), (2, 2), (0, 2), (2, 0)]))
+        self.assertFalse(poligon_kendiyle_kesisiyor([(0, 0), (2, 0), (2, 2), (0, 2)]))
+        self.assertAlmostEqual(poligon_alani([(0, 0), (2, 0), (2, 2), (0, 2)]), 4.0)
+
+    def test_kalite_raporlari_sayaclari_birlestirir(self):
+        report = kalite_raporlarini_birlestir(
+            {"errors": ["a"], "warnings": [], "info": [], "stats": {"x": 2}},
+            {"errors": [], "warnings": ["b"], "info": ["c"], "stats": {"x": 3, "y": 1}},
+        )
+        self.assertEqual(report["errors"], ["a"])
+        self.assertEqual(report["warnings"], ["b"])
+        self.assertEqual(report["stats"]["x"], 5)
+        self.assertEqual(report["stats"]["y"], 1)
+
     def test_kesit_motoru_manuel_topografya_profilini_cizer(self):
         sondajlar = [
             {
@@ -2093,6 +2114,24 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertEqual(len(fig._geo_surface_caps), 1)
         surface_vertices = fig._geo_surface_caps[0].get_xy()
         self.assertGreater(max(point[1] for point in surface_vertices), 102.9)
+        geometry_report = build_section_geometry_report(fig)
+        self.assertEqual(geometry_report["errors"], [])
+        self.assertEqual(geometry_report["stats"]["surface_gaps"], 0)
+        self.assertIsNotNone(fig._geo_topography_mask)
+        mask_zorder = fig._geo_topography_mask.get_zorder()
+        for polygon in fig.axes[0].patches:
+            pattern_artists = getattr(polygon, "_geo_pattern_artists", []) or []
+            if getattr(polygon, "_geo_poly_kind", "section") == "well":
+                self.assertTrue(
+                    all(artist.get_zorder() > mask_zorder for artist in pattern_artists)
+                )
+            else:
+                self.assertTrue(
+                    all(artist.get_zorder() < mask_zorder for artist in pattern_artists)
+                )
+        self.assertTrue(
+            all(text_artist.get_zorder() > mask_zorder for text_artist in fig.axes[0].texts)
+        )
         fig.clear()
 
     def test_kesit_motoru_farkli_yuzey_birimlerini_ayri_kaplar(self):
