@@ -32,6 +32,11 @@ except ImportError:
     SECTION_AXES_RECT = [0.08, 0.05, 0.84, 0.90]
 
 from motor_interaktif import GeoInteractiveTool
+from kesit_korelasyon import (
+    build_section_correlations,
+    normalize_section_layers,
+    turkce_buyuk_harf,
+)
 
 
 class GeoEngineKesitMixin:
@@ -71,6 +76,12 @@ class GeoEngineKesitMixin:
         hide_same_unit_seams = option_bool("hide_same_unit_seams", True)
         auto_lens = option_bool("auto_lens", True)
         two_well_lens = option_bool("two_well_lens", True)
+        section_engine = str(options.get("section_engine", "v1") or "v1").strip().lower()
+        use_correlation_v2 = section_engine in ("v2", "2", "yeni", "new")
+        show_detailed_lithology_labels = option_bool(
+            "show_detailed_lithology_labels",
+            use_correlation_v2,
+        )
         title_mode = str(options.get("title_mode", "full")).lower()
         well_width = safe_float(options.get("well_width", 2.0)) or 2.0
         legend_scale = safe_float(options.get("legend_scale", 1.0)) or 1.0
@@ -545,6 +556,7 @@ class GeoEngineKesitMixin:
         
         min_y_visual = min(all_y) - 1.5 
         used_codes = set()
+        detail_names_by_code = {}
         
         interactive_polys = []
         snap_lines = []
@@ -578,10 +590,19 @@ class GeoEngineKesitMixin:
                     return candidate
             return preferred_y + offsets[-1]
 
-        def register_geo_poly(poly, code, kind="section", edit_id=None):
+        def register_geo_poly(
+            poly,
+            code,
+            kind="section",
+            edit_id=None,
+            correlation_key=None,
+            detail_name=None,
+        ):
             poly._geo_unit_code = code or "tanimsiz"
             poly._geo_poly_kind = kind
             poly._geo_edit_id = edit_id
+            poly._geo_correlation_key = correlation_key or code or "tanimsiz"
+            poly._geo_detail_name = detail_name or ""
             try:
                 poly._geo_default_xy = [[float(x), float(y)] for x, y in poly.get_xy()]
             except Exception:
@@ -774,7 +795,16 @@ class GeoEngineKesitMixin:
                     depth_label_anchors.append({"x": dist_x, "y": dist_y, "kind": "distance"})
 
             raw_lit, merged = s.get("litoloji", []), []
-            if raw_lit:
+            if use_correlation_v2:
+                merged = normalize_section_layers(s)
+                s["merged_layers_v2"] = merged
+                used_codes.update(layer.get("code") for layer in merged if layer.get("code"))
+                for layer in merged:
+                    code = layer.get("code")
+                    detail_name = str(layer.get("detail_name") or "").strip()
+                    if code and detail_name:
+                        detail_names_by_code.setdefault(code, set()).add(detail_name)
+            elif raw_lit:
                 cur_t, cur_b, cur_r = safe_float(raw_lit[0][0]), safe_float(raw_lit[0][1]), raw_lit[0][2]
                 cur_c = litoloji_cozumle(cur_r)
                 if cur_c: used_codes.add(cur_c)
@@ -785,14 +815,21 @@ class GeoEngineKesitMixin:
                     if nc == cur_c and abs(cur_b - nt) < 0.1: cur_b = nb
                     else: merged.append({'top': cur_t, 'bot': cur_b, 'code': cur_c}); cur_t, cur_b, cur_c = nt, nb, nc
                 merged.append({'top': cur_t, 'bot': cur_b, 'code': cur_c})
-            s['merged_layers'] = merged 
+            s['merged_layers'] = merged
 
             for layer_idx, layer in enumerate(merged):
                 kod = layer['code']; stil = next((item for item in LEJANTLAR if item["kod"] == kod), LEJANTLAR[-1])
                 y_t, y_b, xl, xr = top - layer['top'], top - layer['bot'], x_cen - w_well/2, x_cen + w_well/2
                 verts = [(xl, y_t), (xr, y_t), (xr, y_b), (xl, y_b)]
                 poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='black', zorder=21)
-                register_geo_poly(poly, kod, kind="well", edit_id=f"well:{plain_label}:{layer_idx}:{kod}")
+                register_geo_poly(
+                    poly,
+                    kod,
+                    kind="well",
+                    edit_id=f"well:{plain_label}:{layer_idx}:{kod}",
+                    correlation_key=layer.get("correlation_key"),
+                    detail_name=layer.get("detail_name"),
+                )
                 ax.add_patch(poly)
                 interactive_polys.append(poly) 
                 if stil:
@@ -921,18 +958,21 @@ class GeoEngineKesitMixin:
             return facies_s1, facies_s2
 
         pair_links = []
-        for i in range(len(sondajlar) - 1):
-            s1, s2 = sondajlar[i], sondajlar[i+1]
-            layers1, layers2 = s1.get('merged_layers', []), s2.get('merged_layers', [])
-            dx_true = s1.get("_true_dist", dx_default)
-            matches_s1, matches_s2 = match_layers_between_wells(s1, s2, layers1, layers2, dx_true)
-            facies_s1, facies_s2 = facies_links_between_wells(s1, s2, layers1, layers2, matches_s1, matches_s2)
-            pair_links.append({
-                "matches_s1": matches_s1,
-                "matches_s2": matches_s2,
-                "facies_s1": facies_s1,
-                "facies_s2": facies_s2,
-            })
+        if use_correlation_v2:
+            pair_links = build_section_correlations(sondajlar, options)
+        else:
+            for i in range(len(sondajlar) - 1):
+                s1, s2 = sondajlar[i], sondajlar[i+1]
+                layers1, layers2 = s1.get('merged_layers', []), s2.get('merged_layers', [])
+                dx_true = s1.get("_true_dist", dx_default)
+                matches_s1, matches_s2 = match_layers_between_wells(s1, s2, layers1, layers2, dx_true)
+                facies_s1, facies_s2 = facies_links_between_wells(s1, s2, layers1, layers2, matches_s1, matches_s2)
+                pair_links.append({
+                    "matches_s1": matches_s1,
+                    "matches_s2": matches_s2,
+                    "facies_s1": facies_s1,
+                    "facies_s2": facies_s2,
+                })
 
         def is_lens_candidate(layer):
             code = str(layer.get("code") or "")
@@ -962,10 +1002,16 @@ class GeoEngineKesitMixin:
 
         def neighbor_has_same_code_overlap(center_s, neighbor_s, layer):
             code = layer.get("code")
+            correlation_key = layer.get("correlation_key")
             center_info = layer_elevation_info(center_s, layer)
             min_overlap = max(0.12, center_info["thickness"] * 0.18)
             for neighbor_layer in neighbor_s.get('merged_layers', []):
                 if neighbor_layer.get("code") != code:
+                    continue
+                if (
+                    use_correlation_v2
+                    and neighbor_layer.get("correlation_key") != correlation_key
+                ):
                     continue
                 overlap = layer_overlap(center_info, layer_elevation_info(neighbor_s, neighbor_layer))
                 if overlap >= min_overlap:
@@ -1024,7 +1070,13 @@ class GeoEngineKesitMixin:
                 f"lens:{left_s.get('no','SK')}:{s.get('no','SK')}:"
                 f"{right_s.get('no','SK')}:{layer_idx}:{code}"
             )
-            register_geo_poly(poly, code, edit_id=edit_id)
+            register_geo_poly(
+                poly,
+                code,
+                edit_id=edit_id,
+                correlation_key=layer.get("correlation_key"),
+                detail_name=layer.get("detail_name"),
+            )
             ax.add_patch(poly)
             interactive_polys.append(poly)
             pattern_artists = GeoEngineDraw.draw_pattern(
@@ -1077,7 +1129,13 @@ class GeoEngineKesitMixin:
                 verts = [(tip, y_mid), (x_left, y_top), (x_right, y_top), (x_right, y_bot), (x_left, y_bot)]
             poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=1.0, zorder=10.20)
             edit_id = f"half-lens:{s.get('no','SK')}:{neighbor.get('no','SK')}:{direction}:{layer_idx}:{code}"
-            register_geo_poly(poly, code, edit_id=edit_id)
+            register_geo_poly(
+                poly,
+                code,
+                edit_id=edit_id,
+                correlation_key=layer.get("correlation_key"),
+                detail_name=layer.get("detail_name"),
+            )
             ax.add_patch(poly)
             interactive_polys.append(poly)
             pattern_artists = GeoEngineDraw.draw_pattern(
@@ -1102,8 +1160,15 @@ class GeoEngineKesitMixin:
                 return None
             if lower.get("code") != host_code or lens.get("code") == host_code:
                 return None
+            if (
+                use_correlation_v2
+                and lower.get("correlation_key") != upper.get("correlation_key")
+            ):
+                return None
             return {
                 "code": host_code,
+                "correlation_key": upper.get("correlation_key"),
+                "detail_name": upper.get("detail_name"),
                 "upper_idx": layer_idx - 1,
                 "lower_idx": layer_idx + 1,
                 "top_depth": safe_float(upper.get("top")),
@@ -1123,6 +1188,11 @@ class GeoEngineKesitMixin:
             best_score = None
             for layer in neighbor_s.get('merged_layers', []):
                 if layer.get("code") != span["code"]:
+                    continue
+                if (
+                    use_correlation_v2
+                    and layer.get("correlation_key") != span.get("correlation_key")
+                ):
                     continue
                 info = layer_elevation_info(neighbor_s, layer)
                 overlap = layer_overlap(target_info, info)
@@ -1186,7 +1256,13 @@ class GeoEngineKesitMixin:
                 ]
             poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.50, zorder=8.55)
             edit_id = f"lens-host:{center_s.get('no','SK')}:{neighbor_s.get('no','SK')}:{direction}:{layer_idx}:{code}"
-            register_geo_poly(poly, code, edit_id=edit_id)
+            register_geo_poly(
+                poly,
+                code,
+                edit_id=edit_id,
+                correlation_key=span.get("correlation_key"),
+                detail_name=span.get("detail_name"),
+            )
             ax.add_patch(poly)
             interactive_polys.append(poly)
             pattern_artists = GeoEngineDraw.draw_pattern(
@@ -1224,7 +1300,13 @@ class GeoEngineKesitMixin:
                 verts = [(x1, s1["_kot"] - l1['top']), (x2, s2["_kot"] - l2['top']), (x2, s2["_kot"] - l2['bot']), (x1, s1["_kot"] - l1['bot'])]
                 poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.6, zorder=10)
                 edit_id = f"match:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l1['code']}"
-                register_geo_poly(poly, l1['code'], edit_id=edit_id)
+                register_geo_poly(
+                    poly,
+                    l1['code'],
+                    edit_id=edit_id,
+                    correlation_key=l1.get("correlation_key"),
+                    detail_name=l1.get("detail_name"),
+                )
                 ax.add_patch(poly)
                 interactive_polys.append(poly)
                 if stil:
@@ -1252,7 +1334,13 @@ class GeoEngineKesitMixin:
                 verts1 = [(x1, y1t)] + zz_pts + [(x1, y1b)]
                 poly1 = mpatches.Polygon(verts1, closed=True, facecolor=stil1["zemin"], edgecolor='gray', alpha=0.45, zorder=9)
                 edit_id1 = f"facies-left:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l1['code']}"
-                register_geo_poly(poly1, l1['code'], edit_id=edit_id1)
+                register_geo_poly(
+                    poly1,
+                    l1['code'],
+                    edit_id=edit_id1,
+                    correlation_key=l1.get("correlation_key"),
+                    detail_name=l1.get("detail_name"),
+                )
                 ax.add_patch(poly1); interactive_polys.append(poly1); GeoEngineDraw.draw_pattern(
                     ax, poly1, stil1["desen"], stil1["sembol"],
                     density_scale=pattern_density_for_code(l1['code'], TARAMA_SIKLIGI_KESIT)
@@ -1261,7 +1349,13 @@ class GeoEngineKesitMixin:
                 verts2 = [(x2, y2t)] + zz_pts + [(x2, y2b)]
                 poly2 = mpatches.Polygon(verts2, closed=True, facecolor=stil2["zemin"], edgecolor='gray', alpha=0.45, zorder=9)
                 edit_id2 = f"facies-right:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l2['code']}"
-                register_geo_poly(poly2, l2['code'], edit_id=edit_id2)
+                register_geo_poly(
+                    poly2,
+                    l2['code'],
+                    edit_id=edit_id2,
+                    correlation_key=l2.get("correlation_key"),
+                    detail_name=l2.get("detail_name"),
+                )
                 ax.add_patch(poly2); interactive_polys.append(poly2); GeoEngineDraw.draw_pattern(
                     ax, poly2, stil2["desen"], stil2["sembol"],
                     density_scale=pattern_density_for_code(l2['code'], TARAMA_SIKLIGI_KESIT)
@@ -1276,7 +1370,13 @@ class GeoEngineKesitMixin:
                     verts = [(x1, y1t), (x2, (y1t+y1b)/2), (x1, y1b)]
                     poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.45, zorder=8)
                     edit_id = f"pinch-left:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{l1['code']}"
-                    register_geo_poly(poly, l1['code'], edit_id=edit_id)
+                    register_geo_poly(
+                        poly,
+                        l1['code'],
+                        edit_id=edit_id,
+                        correlation_key=l1.get("correlation_key"),
+                        detail_name=l1.get("detail_name"),
+                    )
                     ax.add_patch(poly); interactive_polys.append(poly); GeoEngineDraw.draw_pattern(
                         ax, poly, stil["desen"], stil["sembol"],
                         density_scale=pattern_density_for_code(l1['code'], TARAMA_SIKLIGI_KESIT)
@@ -1291,7 +1391,13 @@ class GeoEngineKesitMixin:
                     verts = [(x2, y2t), (x1, (y2t+y2b)/2), (x2, y2b)]
                     poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.45, zorder=8)
                     edit_id = f"pinch-right:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx2}:{l2['code']}"
-                    register_geo_poly(poly, l2['code'], edit_id=edit_id)
+                    register_geo_poly(
+                        poly,
+                        l2['code'],
+                        edit_id=edit_id,
+                        correlation_key=l2.get("correlation_key"),
+                        detail_name=l2.get("detail_name"),
+                    )
                     ax.add_patch(poly); interactive_polys.append(poly); GeoEngineDraw.draw_pattern(
                         ax, poly, stil["desen"], stil["sembol"],
                         density_scale=pattern_density_for_code(l2['code'], TARAMA_SIKLIGI_KESIT)
@@ -1302,6 +1408,108 @@ class GeoEngineKesitMixin:
 
         if hide_same_unit_seams:
             GeoEngineDraw.hide_same_unit_seams(ax, interactive_polys)
+
+        if use_correlation_v2 and show_detailed_lithology_labels:
+            detail_candidates = []
+            for poly in interactive_polys:
+                if getattr(poly, "_geo_poly_kind", "section") == "well":
+                    continue
+                if getattr(poly, "_geo_hidden", False):
+                    continue
+                if hasattr(poly, "get_visible") and not poly.get_visible():
+                    continue
+                detail_name = str(getattr(poly, "_geo_detail_name", "") or "").strip()
+                correlation_key = str(getattr(poly, "_geo_correlation_key", "") or "").strip()
+                if not detail_name or not correlation_key or correlation_key == "tanimsiz":
+                    continue
+                try:
+                    xy = np.asarray(poly.get_xy(), dtype=float)
+                    x_min, x_max = float(np.min(xy[:, 0])), float(np.max(xy[:, 0]))
+                    y_min, y_max = float(np.min(xy[:, 1])), float(np.max(xy[:, 1]))
+                except Exception:
+                    continue
+                width = abs(x_max - x_min)
+                height = abs(y_max - y_min)
+                if width < max(2.6, w_well * 1.35) or height < 0.45:
+                    continue
+                detail_candidates.append({
+                    "poly": poly,
+                    "key": correlation_key,
+                    "name": detail_name,
+                    "x": (x_min + x_max) / 2,
+                    "y": (y_min + y_max) / 2,
+                    "x_min": x_min,
+                    "x_max": x_max,
+                    "y_min": y_min,
+                    "y_max": y_max,
+                    "width": width,
+                    "height": height,
+                    "area": width * height,
+                })
+
+            def detail_regions_connected(first, second):
+                if first["key"] != second["key"]:
+                    return False
+                x_gap = max(first["x_min"], second["x_min"]) - min(first["x_max"], second["x_max"])
+                y_overlap = min(first["y_max"], second["y_max"]) - max(first["y_min"], second["y_min"])
+                return x_gap <= max(0.20, w_well * 1.25) and y_overlap > 0.05
+
+            detail_clusters = []
+            unseen = set(range(len(detail_candidates)))
+            while unseen:
+                seed = unseen.pop()
+                cluster_indices = {seed}
+                stack = [seed]
+                while stack:
+                    current = stack.pop()
+                    connected = [
+                        other for other in list(unseen)
+                        if detail_regions_connected(
+                            detail_candidates[current],
+                            detail_candidates[other],
+                        )
+                    ]
+                    for other in connected:
+                        unseen.remove(other)
+                        cluster_indices.add(other)
+                        stack.append(other)
+                detail_clusters.append([detail_candidates[index] for index in cluster_indices])
+
+            selected_detail_labels = []
+            for cluster in detail_clusters:
+                cluster_x_min = min(item["x_min"] for item in cluster)
+                cluster_x_max = max(item["x_max"] for item in cluster)
+                cluster_center_x = (cluster_x_min + cluster_x_max) / 2
+                selected_detail_labels.append(min(
+                    cluster,
+                    key=lambda item: (abs(item["x"] - cluster_center_x), -item["area"]),
+                ))
+
+            selected_detail_labels.sort(key=lambda item: (item["key"], -item["y"], item["x"]))
+            for item in selected_detail_labels:
+                label_y = place_label_avoiding_anchors(
+                    item["x"],
+                    item["y"],
+                    x_tol=max(4.0, item["width"] * 0.28),
+                    y_tol=0.55,
+                    offsets=[0, 0.45, -0.45, 0.90, -0.90],
+                )
+                font_size = max(5.8, min(8.2, 5.9 + min(item["width"], 12.0) * 0.11))
+                detail_text = ax.text(
+                    item["x"],
+                    label_y,
+                    turkce_buyuk_harf(item["name"]),
+                    ha="center",
+                    va="center",
+                    fontsize=font_size,
+                    fontweight="bold",
+                    color="#202020",
+                    zorder=27,
+                    bbox=dict(facecolor="white", edgecolor="#888888", alpha=0.80, pad=0.45, linewidth=0.35),
+                )
+                tag_live_artist(detail_text, "detailed_lithology")
+                detail_text._geo_correlation_key = item["key"]
+                depth_label_anchors.append({"x": item["x"], "y": label_y, "kind": "detailed_lithology"})
 
         if show_yass and yass_points:
             yass_sorted = sorted(yass_points, key=lambda item: item["x"])
@@ -1413,7 +1621,19 @@ class GeoEngineKesitMixin:
             _, _, _, cols, scale = min(candidates, key=lambda item: item[0])
             return cols, scale, base_item_width
 
-        items = [l for l in LEJANTLAR if l["kod"] in used_codes]
+        items = []
+        for legend_item in LEJANTLAR:
+            code = legend_item.get("kod")
+            if code not in used_codes:
+                continue
+            detail_names = sorted(detail_names_by_code.get(code, []))
+            if use_correlation_v2 and detail_names:
+                for detail_name in detail_names:
+                    detailed_item = dict(legend_item)
+                    detailed_item["ad"] = detail_name
+                    items.append(detailed_item)
+            else:
+                items.append(legend_item)
         if items and show_legend:
             n_items = len(items)
             plot_span = max_x_plot - min_x_plot
@@ -1472,6 +1692,8 @@ class GeoEngineKesitMixin:
             ax.set_ylim(box_bottom - 1.0, plot_top + 1.0)
 
         fig._geo_hide_same_unit_seams = hide_same_unit_seams
+        fig._geo_section_engine = "v2" if use_correlation_v2 else "v1"
+        fig._geo_correlation_links = pair_links if use_correlation_v2 else []
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 
         return fig, (ax, interactive_polys, None)

@@ -24,6 +24,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         mode = norm(options.get("mode", "schematic"))
         geometry_parts = [
             mode,
+            norm(options.get("section_engine", "v1")),
             selected_key,
             norm_float(options.get("vertical_exaggeration", 1.0)),
             norm_float(options.get("corr_tolerance", 0.0)),
@@ -151,9 +152,22 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         opt = ttk.LabelFrame(tab_ayarlar, text="Kesit Ayarları", padding=10)
         opt.pack(fill="both", expand=True)
         mode_var = tk.StringVar(value=saved_kesit.get("mode", "line_projection"))
+        section_engine_value = str(saved_kesit.get("section_engine", "v1") or "v1").lower()
+        section_engine_var = tk.StringVar(
+            value="V2 (Deneysel)" if section_engine_value == "v2" else "V1 (Stabil)"
+        )
         ttk.Radiobutton(opt, text="Kesit hattı (Strater tarzı station/offset)", variable=mode_var, value="line_projection").grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
         ttk.Radiobutton(opt, text="Gerçek mesafe (seçilen sıraya göre)", variable=mode_var, value="true_distance").grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
         ttk.Radiobutton(opt, text="Şematik (eşit aralık)", variable=mode_var, value="schematic").grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(opt, text="Kesit motoru").grid(row=0, column=2, sticky="w", padx=5, pady=(2, 0))
+        cmb_section_engine = ttk.Combobox(
+            opt,
+            textvariable=section_engine_var,
+            values=("V1 (Stabil)", "V2 (Deneysel)"),
+            width=16,
+            state="readonly",
+        )
+        cmb_section_engine.grid(row=1, column=2, sticky="w", padx=5, pady=(0, 2))
         ttk.Label(opt, text="Düşey abartı").grid(row=3, column=0, sticky="e", padx=5, pady=4)
         e_ve = ttk.Entry(opt, width=12); e_ve.insert(0, saved_kesit.get("vertical_exaggeration", "1.0")); e_ve.grid(row=3, column=1, sticky="w", padx=5, pady=4)
         ttk.Label(opt, text="Eşleşme toleransı (m)").grid(row=4, column=0, sticky="e", padx=5, pady=4)
@@ -201,6 +215,13 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         show_legend_var = tk.BooleanVar(value=saved_kesit.get("show_legend", True))
         show_yass_var = tk.BooleanVar(value=saved_kesit.get("show_yass", True))
         show_yass_labels_var = tk.BooleanVar(value=saved_kesit.get("show_yass_labels", True))
+        show_detailed_lithology_var = tk.BooleanVar(
+            value=saved_kesit.get("show_detailed_lithology_labels", section_engine_value == "v2")
+        )
+        cmb_section_engine.bind(
+            "<<ComboboxSelected>>",
+            lambda event=None: show_detailed_lithology_var.set(section_engine_var.get().startswith("V2")),
+        )
         avoid_label_var = tk.BooleanVar(value=saved_kesit.get("avoid_label_collisions", True))
         hide_seams_var = tk.BooleanVar(value=saved_kesit.get("hide_same_unit_seams", True))
         auto_lens_var = tk.BooleanVar(value=saved_kesit.get("auto_lens", True))
@@ -216,6 +237,11 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         ttk.Checkbutton(opt, text="YASS etiketi", variable=show_yass_labels_var).grid(row=13, column=2, sticky="w", padx=5)
         ttk.Checkbutton(opt, text="Mercekleri otomatik çiz", variable=auto_lens_var).grid(row=14, column=2, sticky="w", padx=5)
         ttk.Checkbutton(opt, text="İki sondajda yarım mercek", variable=two_well_lens_var).grid(row=15, column=2, sticky="w", padx=5)
+        ttk.Checkbutton(
+            opt,
+            text="Detaylı litoloji adları",
+            variable=show_detailed_lithology_var,
+        ).grid(row=16, column=2, sticky="w", padx=5)
 
         kesit_presets = {
             "Strater": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58"},
@@ -469,6 +495,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         def collect_options(selected, require_line=False):
             options = {
                 "mode": mode_var.get(),
+                "section_engine": "v2" if section_engine_var.get().startswith("V2") else "v1",
                 "preset": preset_var.get(),
                 "vertical_exaggeration": e_ve.get(),
                 "corr_tolerance": e_tol.get(),
@@ -497,6 +524,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "show_legend": show_legend_var.get(),
                 "show_yass": show_yass_var.get(),
                 "show_yass_labels": show_yass_labels_var.get(),
+                "show_detailed_lithology_labels": show_detailed_lithology_var.get(),
                 "avoid_label_collisions": avoid_label_var.get(),
                 "hide_same_unit_seams": hide_seams_var.get(),
                 "selected_sondajlar": [self.veri["sondaj"][i].get("no", "") for i in selected],

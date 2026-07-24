@@ -93,6 +93,7 @@ class GeoEngineDraw:
             code = getattr(poly, "_geo_unit_code", None)
             if not code:
                 continue
+            correlation_key = getattr(poly, "_geo_correlation_key", None) or code
             kind = getattr(poly, "_geo_poly_kind", "section")
             if kind == "well":
                 continue
@@ -105,12 +106,12 @@ class GeoEngineDraw:
             if np.allclose(xy[0], xy[-1]):
                 xy = xy[:-1]
             if len(xy) >= 3:
-                poly_data.append((poly, code, kind, xy))
+                poly_data.append((poly, code, correlation_key, kind, xy))
 
         drawn = set()
-        for i, (poly_a, code_a, kind_a, xy_a) in enumerate(poly_data):
-            for poly_b, code_b, kind_b, xy_b in poly_data[i + 1:]:
-                if code_a != code_b:
+        for i, (poly_a, code_a, correlation_a, kind_a, xy_a) in enumerate(poly_data):
+            for poly_b, code_b, correlation_b, kind_b, xy_b in poly_data[i + 1:]:
+                if code_a != code_b or correlation_a != correlation_b:
                     continue
                 color = poly_a.get_facecolor()
                 if len(color) == 4:
@@ -126,7 +127,7 @@ class GeoEngineDraw:
                             continue
                         p1, p2 = segment
                         key_pts = sorted(((round(float(p1[0]), 2), round(float(p1[1]), 2)), (round(float(p2[0]), 2), round(float(p2[1]), 2))))
-                        key = (code_a, key_pts[0], key_pts[1])
+                        key = (code_a, correlation_a, key_pts[0], key_pts[1])
                         if key in drawn:
                             continue
                         drawn.add(key)

@@ -98,6 +98,14 @@ from harita_motoru import pencereyi_tam_ekran_yap
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, ss_harita_etiketi
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
+from kesit_korelasyon import (
+    build_pair_correlation,
+    correlation_pair_key,
+    correlation_relation_id,
+    normalize_section_layers,
+    section_layer_id,
+)
+from kesit_kalite import build_section_quality_report
 from ui_kontrol import KontrolPaneliMixin
 from ui_cikti import (
     CiktiMerkeziMixin,
@@ -1880,6 +1888,130 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
 
 class KesitCizimTestleri(unittest.TestCase):
+    def test_kesit_v2_ayni_pattern_farkli_detayi_birlestirmez(self):
+        sondaj = {
+            "no": "SK-1",
+            "k": "100",
+            "der": "6",
+            "litoloji": [
+                ["0", "3", "Siltli Kum"],
+                ["3", "6", "Çakıllı Kum"],
+            ],
+        }
+        layers = normalize_section_layers(sondaj)
+        self.assertEqual(len(layers), 2)
+        self.assertEqual([layer["code"] for layer in layers], ["k", "k"])
+        self.assertEqual([layer["detail_name"] for layer in layers], ["Siltli Kum", "Çakıllı Kum"])
+        self.assertNotEqual(layers[0]["correlation_key"], layers[1]["correlation_key"])
+
+    def test_kesit_v2_ayni_detayli_birimi_birlestirir(self):
+        sondaj = {
+            "no": "SK-1",
+            "litoloji": [
+                ["0", "1.5", "Kahve renkli siltli kum"],
+                ["1.5", "3", "Sıkı siltli kum"],
+            ],
+        }
+        layers = normalize_section_layers(sondaj)
+        self.assertEqual(len(layers), 1)
+        self.assertEqual(layers[0]["detail_name"], "Siltli Kum")
+        self.assertEqual((layers[0]["top"], layers[0]["bot"]), (0.0, 3.0))
+
+    def test_kesit_v2_global_korelasyon_detayli_birimleri_ayirir(self):
+        left = {
+            "no": "SK-1",
+            "k": "100",
+            "_kot": 100.0,
+            "litoloji": [["0", "2", "Siltli Kum"], ["2", "4", "Çakıllı Kum"]],
+        }
+        right = {
+            "no": "SK-2",
+            "k": "100",
+            "_kot": 100.0,
+            "litoloji": [["0", "2.2", "Siltli Kum"], ["2.2", "4", "Çakıllı Kum"]],
+        }
+        layers1 = normalize_section_layers(left)
+        layers2 = normalize_section_layers(right)
+        link = build_pair_correlation(left, right, layers1, layers2, 25.0, {"corr_tolerance": 3.0})
+        self.assertEqual(link["matches_s1"], {0: 0, 1: 1})
+        self.assertFalse(link["facies_s1"])
+        self.assertTrue(all(item["source"] == "auto_v2" for item in link["relations"]))
+
+    def test_kesit_v2_manuel_korelasyon_kararlarini_uygular(self):
+        left = {
+            "no": "SK-1",
+            "k": "100",
+            "_kot": 100.0,
+            "litoloji": [["0", "2", "Siltli Kum"], ["2", "4", "Çakıllı Kum"]],
+        }
+        right = {
+            "no": "SK-2",
+            "k": "100",
+            "_kot": 100.0,
+            "litoloji": [["0", "2", "Siltli Kum"], ["2", "4", "Çakıllı Kum"]],
+        }
+        layers1 = normalize_section_layers(left)
+        layers2 = normalize_section_layers(right)
+        blocked_id = correlation_relation_id(
+            section_layer_id("SK-1", layers1[0]),
+            section_layer_id("SK-2", layers2[0]),
+        )
+        forced_left = section_layer_id("SK-1", layers1[1])
+        forced_right = section_layer_id("SK-2", layers2[0])
+        options = {
+            "corr_tolerance": 3.0,
+            "correlation_overrides": {
+                correlation_pair_key("SK-1", "SK-2"): {
+                    "blocked": [blocked_id],
+                    "forced": [{
+                        "left_id": forced_left,
+                        "right_id": forced_right,
+                        "kind": "match",
+                    }],
+                }
+            },
+        }
+        link = build_pair_correlation(left, right, layers1, layers2, 25.0, options)
+        self.assertNotIn(0, link["matches_s1"])
+        self.assertEqual(link["facies_s1"], {1: 0})
+        manual = next(item for item in link["relations"] if item["source"] == "manual")
+        self.assertEqual(manual["kind"], "facies")
+
+    def test_kesit_v2_detayli_adlari_kesitte_gosterir(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "100",
+                "der": "6",
+                "litoloji": [["0", "3", "Siltli Kum"], ["3", "6", "Çakıllı Kum"]],
+                "spt": [],
+            },
+            {
+                "no": "SK-2",
+                "k": "99.5",
+                "der": "6",
+                "litoloji": [["0", "2.8", "Siltli Kum"], ["2.8", "6", "Çakıllı Kum"]],
+                "spt": [],
+            },
+        ]
+        options = {
+            "mode": "schematic",
+            "section_engine": "v2",
+            "show_detailed_lithology_labels": True,
+            "show_legend": False,
+            "show_yass": False,
+            "show_distance_labels": False,
+            "show_layer_depth_labels": False,
+            "show_consistency_labels": False,
+        }
+        fig, _ = GeoEngine.kesit_ciz_interaktif(sondajlar, options=options)
+        texts = {text.get_text() for text in fig.axes[0].texts}
+        self.assertEqual(fig._geo_section_engine, "v2")
+        self.assertIn("SİLTLİ KUM", texts)
+        self.assertIn("ÇAKILLI KUM", texts)
+        report = build_section_quality_report(sondajlar, options)
+        self.assertEqual(report["stats"]["exact_matches"], 2)
+
     def test_kesit_kayit_dosya_adi_sondaj_araligini_uret(self):
         self.assertEqual(kesit_kayit_dosya_adi(["SK-1", "SK-2", "SK-3"]), "Kesit SK1-3")
         self.assertEqual(kesit_kayit_dosya_adi(["SK-1", "SK-3", "SK-5"]), "Kesit SK1-SK3-SK5")

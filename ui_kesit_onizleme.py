@@ -6,6 +6,7 @@ from tkinter import Frame, Listbox, Toplevel, filedialog, messagebox, ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from kesit_kalite import build_section_quality_report
+from kesit_korelasyon import correlation_relation_id, section_layer_id
 from motor import GeoEngine
 from performans import perf_tracked
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
@@ -95,8 +96,12 @@ class KesitOnizlemeMixin:
         self.pencere_hazirla(win, "Kesit Önizleme", "1200x800", (980, 640))
         f = Frame(win)
         f.pack(fill="both", expand=True)
-        top_bar = tk.Frame(f, bg="#333", height=40)
+        top_bar = tk.Frame(f, bg="#333")
         top_bar.pack(fill="x")
+        primary_bar = tk.Frame(top_bar, bg="#333")
+        primary_bar.pack(fill="x")
+        tool_bar = tk.Frame(top_bar, bg="#444")
+        tool_bar.pack(fill="x")
         edit_status_var = tk.StringVar(value="Değişen: 0 | Kayıtlı: 0 | Geri: 0 | İleri: 0")
 
         def on_draw_warning(msg, level="info"):
@@ -508,6 +513,305 @@ class KesitOnizlemeMixin:
                 actions.columnconfigure(col, weight=1)
             reload_rows()
 
+        def open_correlation_editor():
+            if str(getattr(fig, "_geo_section_engine", "v1")).lower() != "v2":
+                messagebox.showinfo(
+                    "Korelasyon",
+                    "Korelasyon düzenleyicisi V2 motorunda kullanılabilir.\n"
+                    "Ayarlar bölümünden Kesit Motoru V2'yi seçip yeniden çizin.",
+                )
+                return
+
+            links = list(getattr(fig, "_geo_correlation_links", []) or [])
+            if not links:
+                messagebox.showwarning("Korelasyon", "Düzenlenecek sondaj çifti bulunamadı.")
+                return
+
+            dialog = Toplevel(win)
+            self.pencere_hazirla(
+                dialog,
+                "Kesit Korelasyon Düzenleyicisi",
+                "980x620",
+                (860, 520),
+                modal=True,
+            )
+            body = ttk.Frame(dialog, padding=10)
+            body.pack(fill="both", expand=True)
+            overrides = copy.deepcopy(options.get("correlation_overrides") or {})
+            dirty_var = tk.StringVar(value="Otomatik korelasyonlar gösteriliyor.")
+
+            pair_labels = [
+                f"{link.get('left_no', 'SK')} → {link.get('right_no', 'SK')}"
+                for link in links
+            ]
+            pair_var = tk.StringVar(value=pair_labels[0])
+            header = ttk.Frame(body)
+            header.pack(fill="x")
+            ttk.Label(header, text="Sondaj çifti", font=FONT_BOLD).pack(side="left")
+            pair_combo = ttk.Combobox(
+                header,
+                textvariable=pair_var,
+                values=pair_labels,
+                width=28,
+                state="readonly",
+            )
+            pair_combo.pack(side="left", padx=8)
+            ttk.Label(header, textvariable=dirty_var, foreground="#8A5A00").pack(side="right")
+
+            relation_frame = ttk.LabelFrame(body, text="Mevcut ve bekleyen bağlantılar", padding=8)
+            relation_frame.pack(fill="both", expand=True, pady=(10, 8))
+            relation_list = Listbox(relation_frame, height=13, font=("Consolas", 9))
+            relation_list.pack(fill="both", expand=True)
+            relation_rows = []
+
+            editor = ttk.LabelFrame(body, text="Manuel korelasyon", padding=8)
+            editor.pack(fill="x")
+            left_var = tk.StringVar()
+            right_var = tk.StringVar()
+            kind_var = tk.StringVar(value="Aynı birim")
+            ttk.Label(editor, text="Sol tabaka").grid(row=0, column=0, sticky="w", padx=4, pady=3)
+            left_combo = ttk.Combobox(editor, textvariable=left_var, state="readonly", width=42)
+            left_combo.grid(row=1, column=0, sticky="ew", padx=4, pady=3)
+            ttk.Label(editor, text="Sağ tabaka").grid(row=0, column=1, sticky="w", padx=4, pady=3)
+            right_combo = ttk.Combobox(editor, textvariable=right_var, state="readonly", width=42)
+            right_combo.grid(row=1, column=1, sticky="ew", padx=4, pady=3)
+            ttk.Label(editor, text="Bağlantı türü").grid(row=0, column=2, sticky="w", padx=4, pady=3)
+            ttk.Combobox(
+                editor,
+                textvariable=kind_var,
+                values=("Aynı birim", "Fasiyes geçişi"),
+                width=18,
+                state="readonly",
+            ).grid(row=1, column=2, sticky="ew", padx=4, pady=3)
+            editor.columnconfigure(0, weight=1)
+            editor.columnconfigure(1, weight=1)
+
+            layer_state = {"left": [], "right": []}
+
+            def current_link():
+                try:
+                    idx = pair_labels.index(pair_var.get())
+                except ValueError:
+                    idx = 0
+                return links[idx]
+
+            def layer_label(layer):
+                return (
+                    f"{safe_float(layer.get('top')):.2f}-{safe_float(layer.get('bot')):.2f} m | "
+                    f"{layer.get('detail_name') or layer.get('text') or layer.get('code') or '-'}"
+                )
+
+            def pair_override(link):
+                key = link.get("pair_key") or f"{link.get('left_no')}::{link.get('right_no')}"
+                value = overrides.get(key)
+                if not isinstance(value, dict):
+                    value = {"blocked": [], "forced": []}
+                    overrides[key] = value
+                value.setdefault("blocked", [])
+                value.setdefault("forced", [])
+                return key, value
+
+            def reload_relations():
+                relation_rows.clear()
+                relation_list.delete(0, tk.END)
+                link = current_link()
+                _, override = pair_override(link)
+                forced_ids = {
+                    correlation_relation_id(item.get("left_id"), item.get("right_id"))
+                    for item in override.get("forced", [])
+                    if isinstance(item, dict)
+                }
+                current_ids = set()
+                for relation in link.get("relations", []):
+                    relation_id = relation.get("relation_id") or correlation_relation_id(
+                        relation.get("left_id"),
+                        relation.get("right_id"),
+                    )
+                    current_ids.add(relation_id)
+                    source = "MANUEL" if relation.get("source") == "manual" else "OTOMATİK"
+                    kind = "AYNI BİRİM" if relation.get("kind") == "match" else "FASİYES"
+                    if relation.get("kind") == "match":
+                        name = relation.get("detail_name") or "-"
+                    else:
+                        name = f"{relation.get('left_name') or '-'} → {relation.get('right_name') or '-'}"
+                    confidence = safe_float(relation.get("confidence")) * 100
+                    relation_rows.append({"type": "relation", "value": relation})
+                    relation_list.insert(
+                        tk.END,
+                        f"{source:<8} | {kind:<11} | %{confidence:>3.0f} | {name}",
+                    )
+
+                for forced in override.get("forced", []):
+                    if not isinstance(forced, dict):
+                        continue
+                    relation_id = correlation_relation_id(forced.get("left_id"), forced.get("right_id"))
+                    if relation_id in current_ids:
+                        continue
+                    relation_rows.append({"type": "forced", "value": forced})
+                    relation_list.insert(
+                        tk.END,
+                        f"BEKLİYOR | {'AYNI BİRİM' if forced.get('kind') == 'match' else 'FASİYES':<11} | --- | yeniden çizilecek",
+                    )
+
+                for relation_id in override.get("blocked", []):
+                    relation_rows.append({"type": "blocked", "value": relation_id})
+                    relation_list.insert(tk.END, f"ENGELLİ  | BAĞLANTI KESİK | --- | {relation_id}")
+
+                if not relation_rows:
+                    relation_list.insert(tk.END, "Bu sondaj çifti arasında korelasyon bulunamadı.")
+
+            def reload_layers(event=None):
+                link = current_link()
+                layer_state["left"] = list(link.get("layers1", []) or [])
+                layer_state["right"] = list(link.get("layers2", []) or [])
+                left_values = [layer_label(layer) for layer in layer_state["left"]]
+                right_values = [layer_label(layer) for layer in layer_state["right"]]
+                left_combo.configure(values=left_values)
+                right_combo.configure(values=right_values)
+                left_var.set(left_values[0] if left_values else "")
+                right_var.set(right_values[0] if right_values else "")
+                reload_relations()
+
+            def selected_layer(side, combo):
+                layers = layer_state.get(side, [])
+                idx = combo.current()
+                return layers[idx] if 0 <= idx < len(layers) else None
+
+            def add_forced_relation():
+                link = current_link()
+                left_layer = selected_layer("left", left_combo)
+                right_layer = selected_layer("right", right_combo)
+                if left_layer is None or right_layer is None:
+                    messagebox.showwarning("Korelasyon", "Sol ve sağ tabakayı seçin.", parent=dialog)
+                    return
+                left_id = section_layer_id(link.get("left_no"), left_layer)
+                right_id = section_layer_id(link.get("right_no"), right_layer)
+                relation_id = correlation_relation_id(left_id, right_id)
+                _, override = pair_override(link)
+                forced = [
+                    item for item in override.get("forced", [])
+                    if isinstance(item, dict)
+                    and item.get("left_id") != left_id
+                    and item.get("right_id") != right_id
+                ]
+                requested_kind = "match" if kind_var.get() == "Aynı birim" else "facies"
+                same_identity = (
+                    left_layer.get("code") == right_layer.get("code")
+                    and left_layer.get("correlation_key") == right_layer.get("correlation_key")
+                )
+                if requested_kind == "match" and not same_identity:
+                    requested_kind = "facies"
+                    kind_var.set("Fasiyes geçişi")
+                    self.set_status(
+                        "Farklı ayrıntılı birimler fasiyes geçişi olarak kaydedildi.",
+                        level="info",
+                    )
+                forced.append({
+                    "left_id": left_id,
+                    "right_id": right_id,
+                    "kind": requested_kind,
+                })
+                override["forced"] = forced
+                override["blocked"] = [
+                    item for item in override.get("blocked", [])
+                    if item != relation_id
+                ]
+                dirty_var.set("Manuel bağlantı bekliyor; yeniden çizerek uygulanacak.")
+                reload_relations()
+
+            def block_selected_relation():
+                selection = relation_list.curselection()
+                if not selection or selection[0] >= len(relation_rows):
+                    messagebox.showwarning("Korelasyon", "Kesilecek bağlantıyı seçin.", parent=dialog)
+                    return
+                row = relation_rows[selection[0]]
+                link = current_link()
+                _, override = pair_override(link)
+                if row["type"] == "blocked":
+                    return
+                value = row["value"]
+                relation_id = value.get("relation_id") if isinstance(value, dict) else ""
+                if not relation_id and isinstance(value, dict):
+                    relation_id = correlation_relation_id(value.get("left_id"), value.get("right_id"))
+                if not relation_id:
+                    return
+                if relation_id not in override["blocked"]:
+                    override["blocked"].append(relation_id)
+                override["forced"] = [
+                    item for item in override.get("forced", [])
+                    if correlation_relation_id(item.get("left_id"), item.get("right_id")) != relation_id
+                ]
+                dirty_var.set("Bağlantı kesilecek; yeniden çizerek uygulanacak.")
+                reload_relations()
+
+            def remove_selected_override():
+                selection = relation_list.curselection()
+                if not selection or selection[0] >= len(relation_rows):
+                    messagebox.showwarning("Korelasyon", "Kaldırılacak manuel kararı seçin.", parent=dialog)
+                    return
+                row = relation_rows[selection[0]]
+                link = current_link()
+                _, override = pair_override(link)
+                if row["type"] == "blocked":
+                    override["blocked"] = [
+                        item for item in override.get("blocked", [])
+                        if item != row["value"]
+                    ]
+                else:
+                    value = row["value"]
+                    relation_id = value.get("relation_id") if isinstance(value, dict) else ""
+                    if not relation_id and isinstance(value, dict):
+                        relation_id = correlation_relation_id(value.get("left_id"), value.get("right_id"))
+                    source = value.get("source") if isinstance(value, dict) else ""
+                    if source != "manual" and relation_id not in {
+                        correlation_relation_id(item.get("left_id"), item.get("right_id"))
+                        for item in override.get("forced", [])
+                        if isinstance(item, dict)
+                    }:
+                        messagebox.showinfo(
+                            "Korelasyon",
+                            "Otomatik bağlantıyı kaldırmak için 'Bağlantıyı Kes' kullanın.",
+                            parent=dialog,
+                        )
+                        return
+                    override["forced"] = [
+                        item for item in override.get("forced", [])
+                        if correlation_relation_id(item.get("left_id"), item.get("right_id")) != relation_id
+                    ]
+                dirty_var.set("Manuel karar kaldırıldı; yeniden çizerek uygulanacak.")
+                reload_relations()
+
+            def apply_and_redraw():
+                cleaned = {}
+                for key, value in overrides.items():
+                    if not isinstance(value, dict):
+                        continue
+                    blocked = list(dict.fromkeys(value.get("blocked", []) or []))
+                    forced = list(value.get("forced", []) or [])
+                    if blocked or forced:
+                        cleaned[key] = {"blocked": blocked, "forced": forced}
+                if cleaned:
+                    options["correlation_overrides"] = cleaned
+                else:
+                    options.pop("correlation_overrides", None)
+                save_section_edits(show_status=False)
+                self._kesit_ayarlari_kaydet(options.copy())
+                if self.aktif_dosya_yolu:
+                    self.veri_kaydet()
+                dialog.destroy()
+                win.destroy()
+                self.kesit_onizle_async(sondajlar, options)
+
+            pair_combo.bind("<<ComboboxSelected>>", reload_layers)
+            actions = ttk.Frame(body)
+            actions.pack(fill="x", pady=(0, 8))
+            ttk.Button(actions, text="Bağla / Kilitle", command=add_forced_relation).pack(side="left")
+            ttk.Button(actions, text="Bağlantıyı Kes", command=block_selected_relation).pack(side="left", padx=6)
+            ttk.Button(actions, text="Manuel Kararı Kaldır", command=remove_selected_override).pack(side="left")
+            ttk.Button(actions, text="Uygula ve Yeniden Çiz", command=apply_and_redraw).pack(side="right")
+            ttk.Button(actions, text="Vazgeç", command=dialog.destroy).pack(side="right", padx=6)
+            reload_layers()
+
         def undo_section_edit():
             tool = section_tool()
             if tool is not None and hasattr(tool, "undo") and tool.undo():
@@ -589,6 +893,10 @@ class KesitOnizlemeMixin:
             set_live_group_visible("distance", config.get("show_distance_labels", True))
             set_live_group_visible("legend", config.get("show_legend", True))
             set_live_group_visible("consistency", config.get("show_consistency_labels", True))
+            set_live_group_visible(
+                "detailed_lithology",
+                config.get("show_detailed_lithology_labels", False),
+            )
             yass_visible = config.get("show_yass", True)
             set_live_group_visible("yass", yass_visible)
             set_live_group_visible("yass_label", yass_visible and config.get("show_yass_labels", True))
@@ -622,8 +930,19 @@ class KesitOnizlemeMixin:
             yass_var = tk.BooleanVar(value=option_as_bool("show_yass", True))
             yass_label_var = tk.BooleanVar(value=option_as_bool("show_yass_labels", True))
             consistency_var = tk.BooleanVar(value=option_as_bool("show_consistency_labels", True))
+            detailed_lithology_var = tk.BooleanVar(
+                value=option_as_bool(
+                    "show_detailed_lithology_labels",
+                    str(options.get("section_engine", "v1")).lower() == "v2",
+                )
+            )
             seams_var = tk.BooleanVar(value=option_as_bool("hide_same_unit_seams", True))
             title_var = tk.StringVar(value=str(options.get("title_mode", "full")))
+            engine_var = tk.StringVar(
+                value="V2 (Deneysel)"
+                if str(options.get("section_engine", "v1")).lower() == "v2"
+                else "V1 (Stabil)"
+            )
 
             live_checks = [
                 ("Sta/Off", station_var),
@@ -635,11 +954,25 @@ class KesitOnizlemeMixin:
                 ("YASS etiketi", yass_label_var),
                 ("Sıkılık/kıvam", consistency_var),
                 ("Aynı birim çizgisini gizle", seams_var),
+                ("Detaylı litoloji adları", detailed_lithology_var),
             ]
             for idx, (label, var) in enumerate(live_checks):
                 ttk.Checkbutton(live_frame, text=label, variable=var).grid(row=idx // 3, column=idx % 3, sticky="w", padx=6, pady=3)
-            ttk.Label(live_frame, text="Başlık").grid(row=3, column=0, sticky="w", padx=6, pady=(8, 3))
-            ttk.Combobox(live_frame, textvariable=title_var, values=("full", "simple", "none"), width=10, state="readonly").grid(row=3, column=1, sticky="w", padx=6, pady=(8, 3))
+            ttk.Label(live_frame, text="Başlık").grid(row=4, column=0, sticky="w", padx=6, pady=(8, 3))
+            ttk.Combobox(live_frame, textvariable=title_var, values=("full", "simple", "none"), width=10, state="readonly").grid(row=4, column=1, sticky="w", padx=6, pady=(8, 3))
+            ttk.Label(redraw_frame, text="Kesit motoru").grid(row=0, column=3, sticky="e", padx=5, pady=3)
+            engine_combo = ttk.Combobox(
+                redraw_frame,
+                textvariable=engine_var,
+                values=("V1 (Stabil)", "V2 (Deneysel)"),
+                width=16,
+                state="readonly",
+            )
+            engine_combo.grid(row=0, column=4, sticky="w", padx=5, pady=3)
+            engine_combo.bind(
+                "<<ComboboxSelected>>",
+                lambda event=None: detailed_lithology_var.set(engine_var.get().startswith("V2")),
+            )
 
             entries = {}
             redraw_fields = [
@@ -680,6 +1013,7 @@ class KesitOnizlemeMixin:
                     "show_yass": yass_var.get(),
                     "show_yass_labels": yass_label_var.get(),
                     "show_consistency_labels": consistency_var.get(),
+                    "show_detailed_lithology_labels": detailed_lithology_var.get(),
                     "hide_same_unit_seams": seams_var.get(),
                     "title_mode": title_var.get(),
                 }
@@ -695,6 +1029,7 @@ class KesitOnizlemeMixin:
                 new_options["auto_lens"] = auto_lens_var.get()
                 new_options["two_well_lens"] = two_well_lens_var.get()
                 new_options["avoid_label_collisions"] = avoid_label_var.get()
+                new_options["section_engine"] = "v2" if engine_var.get().startswith("V2") else "v1"
                 new_options["section_signature"] = self._kesit_section_signature(new_options)
                 save_section_edits(show_status=False)
                 self._kesit_ayarlari_kaydet(new_options.copy())
@@ -837,14 +1172,15 @@ class KesitOnizlemeMixin:
             tool.set_history_callback(update_edit_status)
         update_edit_status(tool)
 
-        tk.Button(top_bar, text="Kesiti Kaydet", bg=COLOR_WARNING, fg="white", font=FONT_BOLD, command=save_kesit).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Düzenlemeyi Kaydet", bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD, command=save_section_edits).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Sıfırla", bg=COLOR_DANGER, fg="white", font=FONT_BOLD, command=reset_section_edits).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Geri Al", bg="#D6EAF8", fg="#111", font=FONT_BOLD, command=undo_section_edit).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="İleri Al", bg="#D5F5E3", fg="#111", font=FONT_BOLD, command=redo_section_edit).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Ayarlar", bg="#AED6F1", fg="#111", font=FONT_BOLD, command=open_preview_settings).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Mercek", bg="#D7BDE2", fg="#111", font=FONT_BOLD, command=open_lens_controls).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Liste", bg="#FAD7A0", fg="#111", font=FONT_BOLD, command=open_edit_list).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Kalite", bg="#F9E79F", fg="#111", font=FONT_BOLD, command=lambda: self.kesit_kalite_penceresi(win, sondajlar, options)).pack(side="left", padx=3, pady=5)
-        tk.Button(top_bar, text="Kayıtlı Hale Dön", bg="#E8DAEF", fg="#111", font=FONT_BOLD, command=restore_saved_section_edits).pack(side="left", padx=3, pady=5)
-        tk.Label(top_bar, textvariable=edit_status_var, bg="#333", fg="white", font=("Arial", 9, "bold")).pack(side="right", padx=8)
+        tk.Button(primary_bar, text="Kesiti Kaydet", bg=COLOR_WARNING, fg="white", font=FONT_BOLD, command=save_kesit).pack(side="left", padx=3, pady=4)
+        tk.Button(primary_bar, text="Düzenlemeyi Kaydet", bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD, command=save_section_edits).pack(side="left", padx=3, pady=4)
+        tk.Button(primary_bar, text="Geri Al", bg="#D6EAF8", fg="#111", font=FONT_BOLD, command=undo_section_edit).pack(side="left", padx=3, pady=4)
+        tk.Button(primary_bar, text="İleri Al", bg="#D5F5E3", fg="#111", font=FONT_BOLD, command=redo_section_edit).pack(side="left", padx=3, pady=4)
+        tk.Label(primary_bar, textvariable=edit_status_var, bg="#333", fg="white", font=("Arial", 9, "bold")).pack(side="right", padx=8)
+        tk.Button(tool_bar, text="Ayarlar", bg="#AED6F1", fg="#111", font=FONT_BOLD, command=open_preview_settings).pack(side="left", padx=3, pady=4)
+        tk.Button(tool_bar, text="Korelasyon", bg="#C7E9F1", fg="#111", font=FONT_BOLD, command=open_correlation_editor).pack(side="left", padx=3, pady=4)
+        tk.Button(tool_bar, text="Mercek", bg="#D7BDE2", fg="#111", font=FONT_BOLD, command=open_lens_controls).pack(side="left", padx=3, pady=4)
+        tk.Button(tool_bar, text="Liste", bg="#FAD7A0", fg="#111", font=FONT_BOLD, command=open_edit_list).pack(side="left", padx=3, pady=4)
+        tk.Button(tool_bar, text="Kalite", bg="#F9E79F", fg="#111", font=FONT_BOLD, command=lambda: self.kesit_kalite_penceresi(win, sondajlar, options)).pack(side="left", padx=3, pady=4)
+        tk.Button(tool_bar, text="Sıfırla", bg=COLOR_DANGER, fg="white", font=FONT_BOLD, command=reset_section_edits).pack(side="left", padx=3, pady=4)
+        tk.Button(tool_bar, text="Kayıtlı Hale Dön", bg="#E8DAEF", fg="#111", font=FONT_BOLD, command=restore_saved_section_edits).pack(side="left", padx=3, pady=4)

@@ -5,6 +5,7 @@ import statistics
 
 from sabitler import LEJANTLAR
 from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
+from kesit_korelasyon import build_pair_correlation, normalize_section_layers
 
 
 UNIT_NAMES = {item["kod"]: item["ad"] for item in LEJANTLAR}
@@ -221,6 +222,67 @@ def _check_layer_matching(sondajlar, merged_by_no, report, stats, options):
             )
 
 
+def _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options):
+    for left, right in zip(sondajlar, sondajlar[1:]):
+        left_no = left.get("no", "SK")
+        right_no = right.get("no", "SK")
+        layers1 = merged_by_no.get(left_no, [])
+        layers2 = merged_by_no.get(right_no, [])
+        left_coords = _coords(left)
+        right_coords = _coords(right)
+        if left_coords and right_coords:
+            dx_true = haversine_distance(
+                left_coords[0],
+                left_coords[1],
+                right_coords[0],
+                right_coords[1],
+            )
+        else:
+            dx_true = safe_float(options.get("dx_default", 25.0)) or 25.0
+
+        link = build_pair_correlation(left, right, layers1, layers2, dx_true, options)
+        matched_1 = set(link.get("matches_s1", {})) | set(link.get("facies_s1", {}))
+        matched_2 = set(link.get("matches_s2", {})) | set(link.get("facies_s2", {}))
+        stats["exact_matches"] += len(link.get("matches_s1", {}))
+        stats["facies_matches"] += len(link.get("facies_s1", {}))
+
+        for relation in link.get("relations", []):
+            confidence = safe_float(relation.get("confidence"))
+            if confidence >= 0.35:
+                continue
+            stats["low_confidence_matches"] += 1
+            if relation.get("kind") == "facies":
+                relation_name = (
+                    f"{relation.get('left_name') or '-'} / "
+                    f"{relation.get('right_name') or '-'}"
+                )
+            else:
+                relation_name = relation.get("detail_name") or "-"
+            report["warnings"].append(
+                f"{left_no}-{right_no}: {relation_name} korelasyonu düşük güvenli "
+                f"(%{confidence * 100:.0f})."
+            )
+
+        for idx1, layer in enumerate(layers1):
+            if idx1 in matched_1:
+                continue
+            stats["unmatched_layers"] += 1
+            report["warnings"].append(
+                f"{left_no}-{right_no}: {left_no} {layer['top']:.2f}-{layer['bot']:.2f} m "
+                f"{layer.get('detail_name') or _unit_name(layer.get('code'))} eşleşmedi; "
+                "V2 kesitte pinch-out olarak çizilebilir."
+            )
+        for idx2, layer in enumerate(layers2):
+            if idx2 in matched_2:
+                continue
+            stats["unmatched_layers"] += 1
+            report["warnings"].append(
+                f"{left_no}-{right_no}: {right_no} {layer['top']:.2f}-{layer['bot']:.2f} m "
+                f"{layer.get('detail_name') or _unit_name(layer.get('code'))} eşleşmedi; "
+                "V2 kesitte pinch-out olarak çizilebilir."
+            )
+
+
 def build_section_quality_report(sondajlar, options=None):
     options = options or {}
     sondajlar = list(sondajlar or [])
@@ -235,6 +297,8 @@ def build_section_quality_report(sondajlar, options=None):
     thin_limit = safe_float(options.get("section_qc_thin_layer", 0.30)) or 0.30
     spt_search_margin = safe_float(options.get("spt_label_search_margin", 1.5)) or 1.5
     mode = options.get("mode", "schematic")
+    section_engine = str(options.get("section_engine", "v1") or "v1").strip().lower()
+    use_correlation_v2 = section_engine in ("v2", "2", "yeni", "new")
     merged_by_no = {}
 
     if mode in ("true_distance", "line_projection"):
@@ -272,7 +336,7 @@ def build_section_quality_report(sondajlar, options=None):
         if _is_blank(sondaj.get("k")):
             report["warnings"].append(f"{no}: başlangıç kotu boş.")
 
-        layers = _normalize_layers(sondaj)
+        layers = normalize_section_layers(sondaj, merge_same_detail=False) if use_correlation_v2 else _normalize_layers(sondaj)
         stats["layer_count"] += len(layers)
         if not layers:
             report["errors"].append(f"{no}: litoloji satırı yok; kesit bu kuyuda eksik çizilir.")
@@ -280,7 +344,12 @@ def build_section_quality_report(sondajlar, options=None):
             continue
 
         layers_sorted = sorted(layers, key=lambda item: (item["top"], item["bot"]))
-        merged_by_no[no] = _merged_layers(layers_sorted)
+        if use_correlation_v2:
+            normalized_sondaj = dict(sondaj)
+            normalized_sondaj["litoloji"] = sondaj.get("litoloji", [])
+            merged_by_no[no] = normalize_section_layers(normalized_sondaj)
+        else:
+            merged_by_no[no] = _merged_layers(layers_sorted)
         first = layers_sorted[0]
         if first["top"] > 0.10:
             report["warnings"].append(f"{no}: litoloji 0.00 m yerine {first['top']:.2f} m'den başlıyor.")
@@ -335,7 +404,14 @@ def build_section_quality_report(sondajlar, options=None):
                 stats["depth_exceeded"] += 1
                 report["warnings"].append(f"{no}: litoloji {previous['bot']:.2f} m'ye iniyor, sondaj derinliği {depth:.2f} m.")
 
-    _check_layer_matching(sondajlar, merged_by_no, report, stats, options)
+    if use_correlation_v2:
+        _check_layer_matching_v2(sondajlar, merged_by_no, report, stats, options)
+        report["info"].append(
+            f"V2 korelasyon: {stats.get('exact_matches', 0)} ayrıntılı birim eşleşmesi, "
+            f"{stats.get('facies_matches', 0)} kontrollü fasiyes geçişi."
+        )
+    else:
+        _check_layer_matching(sondajlar, merged_by_no, report, stats, options)
 
     manual_edits = options.get("manual_edits") or {}
     if isinstance(manual_edits, dict) and manual_edits:
@@ -365,6 +441,8 @@ def format_section_quality_report(report):
             f"tanımsız={stats.get('unknown_units', 0)}",
             f"ince={stats.get('thin_layers', 0)}",
             f"eşleşmeyen={stats.get('unmatched_layers', 0)}",
+            f"v2_tam={stats.get('exact_matches', 0)}",
+            f"v2_fasiyes={stats.get('facies_matches', 0)}",
             f"kıvam_boş={stats.get('consistency_missing', 0)}",
             f"refu={stats.get('refusal_inferred', 0)}",
         ]
