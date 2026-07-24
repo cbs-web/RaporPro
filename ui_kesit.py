@@ -29,6 +29,8 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             norm_float(options.get("vertical_exaggeration", 1.0)),
             norm(options.get("print_scale_enabled", False)),
             norm(options.get("print_title_block", True)),
+            norm(options.get("print_multi_page", True)),
+            norm_float(options.get("print_page_overlap", 5.0)),
             norm(options.get("print_page_size", "A4 Yatay")),
             norm_float(options.get("horizontal_scale", 500.0)),
             norm_float(options.get("vertical_scale", 100.0)),
@@ -177,11 +179,13 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         e_ve = ttk.Entry(opt, width=12); e_ve.insert(0, saved_kesit.get("vertical_exaggeration", "1.0")); e_ve.grid(row=3, column=1, sticky="w", padx=5, pady=4)
         print_scale_var = tk.BooleanVar(value=saved_kesit.get("print_scale_enabled", False))
         print_title_block_var = tk.BooleanVar(value=saved_kesit.get("print_title_block", True))
-        print_page_var = tk.StringVar(value=saved_kesit.get("print_page_size", "A4 Yatay"))
+        print_multi_page_var = tk.BooleanVar(value=saved_kesit.get("print_multi_page", True))
+        print_page_var = tk.StringVar(value=saved_kesit.get("print_page_size", "Otomatik (A4/A3)"))
+        print_page_overlap_var = tk.StringVar(value=str(saved_kesit.get("print_page_overlap", "5.0")))
         horizontal_scale_var = tk.StringVar(value=str(saved_kesit.get("horizontal_scale", "500")))
         vertical_scale_var = tk.StringVar(value=str(saved_kesit.get("vertical_scale", "100")))
         print_frame = ttk.LabelFrame(opt, text="Gerçek Baskı Ölçeği", padding=7)
-        print_frame.grid(row=0, column=3, rowspan=6, sticky="nw", padx=(14, 5), pady=2)
+        print_frame.grid(row=0, column=3, rowspan=9, sticky="nw", padx=(14, 5), pady=2)
         ttk.Checkbutton(
             print_frame,
             text="Baskı ölçeğini kullan",
@@ -191,8 +195,8 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         ttk.Combobox(
             print_frame,
             textvariable=print_page_var,
-            values=("A4 Yatay", "A3 Yatay"),
-            width=12,
+            values=("Otomatik (A4/A3)", "A4 Yatay", "A3 Yatay"),
+            width=17,
             state="readonly",
         ).grid(row=1, column=1, sticky="w", pady=3)
         ttk.Label(print_frame, text="Yatay 1/").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=3)
@@ -218,6 +222,17 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             text="Pafta antetini göster",
             variable=print_title_block_var,
         ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Checkbutton(
+            print_frame,
+            text="Uzun kesiti çok sayfaya böl",
+            variable=print_multi_page_var,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Label(print_frame, text="Bindirme (m)").grid(row=7, column=0, sticky="e", padx=(0, 5), pady=3)
+        ttk.Entry(
+            print_frame,
+            textvariable=print_page_overlap_var,
+            width=10,
+        ).grid(row=7, column=1, sticky="w", pady=3)
 
         def sync_print_scale(event=None):
             horizontal = safe_float(horizontal_scale_var.get()) or 500.0
@@ -579,6 +594,8 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "vertical_exaggeration": e_ve.get(),
                 "print_scale_enabled": print_scale_var.get(),
                 "print_title_block": print_title_block_var.get(),
+                "print_multi_page": print_multi_page_var.get(),
+                "print_page_overlap": print_page_overlap_var.get(),
                 "print_page_size": print_page_var.get(),
                 "horizontal_scale": horizontal_scale_var.get(),
                 "vertical_scale": vertical_scale_var.get(),

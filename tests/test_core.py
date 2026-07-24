@@ -109,6 +109,7 @@ from kesit_korelasyon import (
 from kesit_kalite import build_section_quality_report
 from kesit_baski import (
     kesit_baski_yerlesimi,
+    kesit_cok_sayfa_plani,
     kesit_dusey_abarti,
     kesit_metre_baski_boyu,
 )
@@ -2247,6 +2248,39 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertGreater(layout["horizontal_scale"], 100)
         self.assertGreater(layout["vertical_scale"], 50)
 
+    def test_kesit_baski_otomatik_olarak_a3_sayfaya_gecer(self):
+        layout = kesit_baski_yerlesimi(
+            150,
+            10,
+            page_name="Otomatik (A4/A3)",
+            horizontal_scale=500,
+            vertical_scale=100,
+            legend_rows=0,
+        )
+        self.assertEqual(layout["page_name"], "A3 Yatay")
+        self.assertTrue(layout["automatic_page"])
+        self.assertFalse(layout["adjusted"])
+
+    def test_kesit_cok_sayfa_plani_olcegi_koruyarak_bindirir(self):
+        plan = kesit_cok_sayfa_plani(
+            0,
+            300,
+            page_name="Otomatik (A4/A3)",
+            horizontal_scale=500,
+            overlap_m=5,
+        )
+        self.assertEqual(plan["page_name"], "A3 Yatay")
+        self.assertEqual(plan["page_count"], 2)
+        self.assertEqual(plan["windows"][0][0], 0)
+        self.assertGreaterEqual(plan["windows"][-1][1], 300)
+        self.assertGreater(plan["windows"][0][1], plan["windows"][1][0])
+        self.assertAlmostEqual(
+            plan["windows"][0][1] - plan["windows"][1][0],
+            5.0,
+            places=5,
+        )
+        self.assertEqual(len(plan["actual_overlaps_m"]), 1)
+
     def test_kesit_motoru_gercek_baski_sayfasini_ve_ekseni_korur(self):
         sondajlar = [
             {
@@ -2343,6 +2377,72 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertIn("Kesit SK1-2", texts)
         self.assertIn("Y 1/500 | D 1/250", texts)
         self.assertIn("24.07.2026", texts)
+
+    def test_kesit_motoru_uzun_kesit_sayfa_penceresini_uygular(self):
+        sondajlar = [
+            {
+                "no": f"SK-{index + 1}",
+                "k": str(100 - index),
+                "der": "10",
+                "litoloji": [["0", "10", "Kil"]],
+                "spt": [],
+            }
+            for index in range(7)
+        ]
+        common_options = {
+            "mode": "schematic",
+            "dx_default": "50",
+            "print_scale_enabled": True,
+            "print_title_block": True,
+            "print_multi_page": True,
+            "print_page_size": "Otomatik (A4/A3)",
+            "horizontal_scale": "500",
+            "vertical_scale": "250",
+            "show_legend": False,
+            "show_yass": False,
+            "show_consistency_labels": False,
+            "section_name": "Kesit SK1-7",
+        }
+        preview_fig, _ = GeoEngine.kesit_ciz_interaktif(
+            copy.deepcopy(sondajlar),
+            options=common_options,
+        )
+        plan = preview_fig._geo_page_plan
+        self.assertGreater(plan["page_count"], 1)
+        preview_page_breaks = [
+            artist
+            for artist in preview_fig.axes[0].get_children()
+            if getattr(artist, "_geo_export_group", None) == "page_break"
+        ]
+        self.assertTrue(preview_page_breaks)
+        first_window = plan["windows"][0]
+
+        page_options = dict(common_options)
+        page_options.update({
+            "print_page_size": plan["page_name"],
+            "print_x_min": first_window[0],
+            "print_x_max": first_window[1],
+            "print_page_index": 1,
+            "print_page_count": plan["page_count"],
+            "print_multi_page": False,
+        })
+        page_fig, _ = GeoEngine.kesit_ciz_interaktif(
+            copy.deepcopy(sondajlar),
+            options=page_options,
+        )
+        self.assertAlmostEqual(page_fig.axes[0].get_xlim()[0], first_window[0])
+        self.assertAlmostEqual(page_fig.axes[0].get_xlim()[1], first_window[1])
+        title_block_text = "\n".join(
+            text.get_text()
+            for text in page_fig._geo_print_title_block_axes.texts
+        )
+        self.assertIn(f"(1/{plan['page_count']})", title_block_text)
+        page_break_artists = [
+            artist
+            for artist in page_fig.axes[0].get_children()
+            if getattr(artist, "_geo_export_group", None) == "page_break"
+        ]
+        self.assertFalse(page_break_artists)
 
     def test_kesit_motoru_tekrarli_birimleri_ayri_eslestirir(self):
         sondajlar = [

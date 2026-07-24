@@ -55,6 +55,46 @@ def kesit_baski_yerlesimi(
     bir üst standart paydaya taşınır. Dönen eksen dikdörtgenleri Matplotlib
     ``add_axes`` / ``set_position`` ile doğrudan kullanılabilir.
     """
+    if str(page_name or "").strip().upper().startswith(("OTOMATİK", "OTOMATIK", "AUTO")):
+        a4_layout = kesit_baski_yerlesimi(
+            x_span_m,
+            y_span_m,
+            page_name="A4 Yatay",
+            horizontal_scale=horizontal_scale,
+            vertical_scale=vertical_scale,
+            legend_rows=legend_rows,
+            show_title_block=show_title_block,
+            auto_fit=False,
+        )
+        if a4_layout["fits"]:
+            a4_layout["automatic_page"] = True
+            return a4_layout
+        a3_layout = kesit_baski_yerlesimi(
+            x_span_m,
+            y_span_m,
+            page_name="A3 Yatay",
+            horizontal_scale=horizontal_scale,
+            vertical_scale=vertical_scale,
+            legend_rows=legend_rows,
+            show_title_block=show_title_block,
+            auto_fit=False,
+        )
+        if a3_layout["fits"] or not auto_fit:
+            a3_layout["automatic_page"] = True
+            return a3_layout
+        a3_fitted = kesit_baski_yerlesimi(
+            x_span_m,
+            y_span_m,
+            page_name="A3 Yatay",
+            horizontal_scale=horizontal_scale,
+            vertical_scale=vertical_scale,
+            legend_rows=legend_rows,
+            show_title_block=show_title_block,
+            auto_fit=True,
+        )
+        a3_fitted["automatic_page"] = True
+        return a3_fitted
+
     page_label, (page_width, page_height) = kesit_sayfa_boyutu(page_name)
     requested_horizontal = max(1.0, float(horizontal_scale or 500.0))
     requested_vertical = max(1.0, float(vertical_scale or 100.0))
@@ -161,4 +201,69 @@ def kesit_baski_yerlesimi(
         "show_title_block": bool(show_title_block),
         "x_span_m": x_span,
         "y_span_m": y_span,
+        "automatic_page": False,
+    }
+
+
+def kesit_cok_sayfa_plani(
+    x_min,
+    x_max,
+    page_name="Otomatik (A4/A3)",
+    horizontal_scale=500,
+    overlap_m=5.0,
+):
+    """Uzun kesiti ölçeği bozmadan yatay sayfalara böler."""
+    start = float(x_min)
+    end = float(x_max)
+    if end < start:
+        start, end = end, start
+    span = max(0.01, end - start)
+    scale = max(1.0, float(horizontal_scale or 500.0))
+
+    def page_capacity(label):
+        resolved_label, (page_width, _) = kesit_sayfa_boyutu(label)
+        available_width = max(0.25, page_width - 0.72 - 0.38)
+        return resolved_label, available_width * scale / INCHES_PER_METER
+
+    normalized = str(page_name or "").strip().upper()
+    if normalized.startswith(("OTOMATİK", "OTOMATIK", "AUTO")):
+        a4_label, a4_capacity = page_capacity("A4 Yatay")
+        if span <= a4_capacity + 1e-9:
+            selected_label, capacity = a4_label, a4_capacity
+        else:
+            selected_label, capacity = page_capacity("A3 Yatay")
+    else:
+        selected_label, capacity = page_capacity(page_name)
+
+    overlap = max(0.0, min(float(overlap_m or 0.0), capacity * 0.20))
+    if span <= capacity + 1e-9:
+        windows = [(start, end)]
+    else:
+        step = max(capacity * 0.50, capacity - overlap)
+        windows = []
+        page_start = start
+        while page_start < end - 1e-9:
+            page_end = page_start + capacity
+            window = (page_start, page_end)
+            if not windows or any(abs(a - b) > 1e-9 for a, b in zip(windows[-1], window)):
+                windows.append(window)
+            if page_end >= end - 1e-9:
+                break
+            page_start += step
+
+    actual_overlaps = [
+        max(0.0, windows[index][1] - windows[index + 1][0])
+        for index in range(len(windows) - 1)
+    ]
+    return {
+        "page_name": selected_label,
+        "horizontal_scale": scale,
+        "capacity_m": capacity,
+        "overlap_m": overlap,
+        "actual_overlaps_m": actual_overlaps,
+        "x_min": start,
+        "x_max": end,
+        "span_m": span,
+        "page_count": len(windows),
+        "windows": windows,
     }

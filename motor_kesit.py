@@ -18,6 +18,7 @@ try:
     from cizim import GeoEngineDraw
     from kesit_baski import (
         kesit_baski_yerlesimi,
+        kesit_cok_sayfa_plani,
         kesit_dusey_abarti,
         kesit_sayfa_boyutu,
     )
@@ -40,6 +41,7 @@ except ImportError:
     def kesit_dusey_abarti(horizontal_scale, vertical_scale):
         return float(horizontal_scale or 1) / max(1.0, float(vertical_scale or 1))
     def kesit_baski_yerlesimi(*args, **kwargs): return {}
+    def kesit_cok_sayfa_plani(*args, **kwargs): return {"page_count": 1, "windows": []}
 
 from motor_interaktif import GeoInteractiveTool
 from kesit_korelasyon import (
@@ -76,6 +78,8 @@ class GeoEngineKesitMixin:
         vertical_scale = safe_float(options.get("vertical_scale", 100.0)) or 100.0
         print_auto_fit = option_bool("print_auto_fit", True)
         print_title_block = option_bool("print_title_block", True)
+        print_multi_page = option_bool("print_multi_page", True)
+        print_page_overlap = safe_float(options.get("print_page_overlap", 5.0)) or 5.0
         vertical_exaggeration = safe_float(options.get("vertical_exaggeration", 1.0)) or 1.0
         if print_scale_enabled:
             vertical_exaggeration = kesit_dusey_abarti(horizontal_scale, vertical_scale)
@@ -538,8 +542,25 @@ class GeoEngineKesitMixin:
         
         xs, ys = [s["_plot_x"] for s in sondajlar], [s["_kot"] for s in sondajlar]
         
-        min_x_plot = xs[0] - MARGIN
-        max_x_plot = xs[-1] + MARGIN
+        full_min_x_plot = xs[0] - MARGIN
+        full_max_x_plot = xs[-1] + MARGIN
+        min_x_plot = full_min_x_plot
+        max_x_plot = full_max_x_plot
+        try:
+            requested_x_min = float(options.get("print_x_min"))
+            requested_x_max = float(options.get("print_x_max"))
+        except (TypeError, ValueError):
+            requested_x_min = None
+            requested_x_max = None
+        has_print_window = (
+            print_scale_enabled
+            and requested_x_min is not None
+            and requested_x_max is not None
+            and requested_x_max > requested_x_min
+        )
+        if has_print_window:
+            min_x_plot = requested_x_min
+            max_x_plot = requested_x_max
         
         try:
             from scipy.interpolate import make_interp_spline
@@ -1927,7 +1948,16 @@ class GeoEngineKesitMixin:
 
         print_layout = None
         title_block_ax = None
+        page_plan = None
         if print_scale_enabled:
+            if print_multi_page:
+                page_plan = kesit_cok_sayfa_plani(
+                    full_min_x_plot,
+                    full_max_x_plot,
+                    page_name=print_page_size,
+                    horizontal_scale=horizontal_scale,
+                    overlap_m=print_page_overlap,
+                )
             x_limits = ax.get_xlim()
             y_limits = ax.get_ylim()
             print_layout = kesit_baski_yerlesimi(
@@ -1940,6 +1970,7 @@ class GeoEngineKesitMixin:
                 show_title_block=print_title_block,
                 auto_fit=print_auto_fit,
             )
+            fig.set_size_inches(*print_layout["figure_size"], forward=True)
             ax.set_position(print_layout["axes_rect"])
             if legend_ax is not None and print_layout.get("legend_rect"):
                 legend_ax.set_position(print_layout["legend_rect"])
@@ -2010,6 +2041,10 @@ class GeoEngineKesitMixin:
                 if not section_name:
                     section_name = " - ".join(str(item) for item in selected_names if str(item).strip())
                 section_name = section_name or "Kesit"
+                page_index = int(safe_float(options.get("print_page_index", 0)) or 0)
+                page_count = int(safe_float(options.get("print_page_count", 0)) or 0)
+                if page_index > 0 and page_count > 1:
+                    section_name = f"{section_name} ({page_index}/{page_count})"
                 print_date = str(options.get("print_date") or datetime.now().strftime("%d.%m.%Y"))
 
                 def block_text(x, y, label, value, width, fontsize=6.4):
@@ -2053,11 +2088,107 @@ class GeoEngineKesitMixin:
                 )
                 block_text(0.605, 0.145, "Tarih", print_date, 20)
 
+            if page_plan and page_plan["page_count"] > 1 and not has_print_window:
+                for page_index, (page_start, page_end) in enumerate(page_plan["windows"], start=1):
+                    if page_index < page_plan["page_count"]:
+                        boundary = page_end
+                        page_line = ax.axvline(
+                            boundary,
+                            color="#2471A3",
+                            linewidth=0.9,
+                            linestyle=(0, (5, 4)),
+                            alpha=0.85,
+                            zorder=54,
+                        )
+                        page_line._geo_export_group = "page_break"
+                    page_mid = (page_start + page_end) / 2.0
+                    page_label = ax.text(
+                        page_mid,
+                        plot_top + 0.55,
+                        f"Sayfa {page_index}",
+                        ha="center",
+                        va="center",
+                        fontsize=6.5,
+                        color="#2471A3",
+                        bbox=dict(facecolor="white", edgecolor="#2471A3", linewidth=0.4, pad=1.2),
+                        zorder=55,
+                    )
+                    page_label._geo_export_group = "page_break"
+
+            if has_print_window:
+                def clip_polygon_x(vertices, x_min, x_max):
+                    points = [
+                        (float(x), float(y))
+                        for x, y in vertices
+                        if math.isfinite(float(x)) and math.isfinite(float(y))
+                    ]
+                    if len(points) < 3:
+                        return []
+                    if points[0] == points[-1]:
+                        points = points[:-1]
+
+                    def clip_side(source, boundary, keep_greater):
+                        if not source:
+                            return []
+                        result = []
+                        previous = source[-1]
+                        previous_inside = previous[0] >= boundary if keep_greater else previous[0] <= boundary
+                        for current in source:
+                            current_inside = current[0] >= boundary if keep_greater else current[0] <= boundary
+                            if current_inside != previous_inside:
+                                dx = current[0] - previous[0]
+                                if abs(dx) > 1e-12:
+                                    ratio = (boundary - previous[0]) / dx
+                                    crossing_y = previous[1] + ratio * (current[1] - previous[1])
+                                    result.append((boundary, crossing_y))
+                            if current_inside:
+                                result.append(current)
+                            previous = current
+                            previous_inside = current_inside
+                        return result
+
+                    points = clip_side(points, x_min, True)
+                    points = clip_side(points, x_max, False)
+                    if len(points) >= 3:
+                        points.append(points[0])
+                    return points
+
+                for polygon in ax.patches:
+                    if not isinstance(polygon, mpatches.Polygon):
+                        continue
+                    try:
+                        clipped_vertices = clip_polygon_x(
+                            polygon.get_xy(),
+                            min_x_plot,
+                            max_x_plot,
+                        )
+                        polygon.set_xy(clipped_vertices)
+                        polygon.set_visible(bool(clipped_vertices))
+                        for pattern_artist in getattr(polygon, "_geo_pattern_artists", []) or []:
+                            pattern_artist.set_visible(bool(clipped_vertices))
+                    except Exception:
+                        pass
+                for artist in [
+                    *ax.lines,
+                    *ax.collections,
+                    *ax.patches,
+                    *ax.texts,
+                ]:
+                    try:
+                        artist.set_clip_box(ax.bbox)
+                        if artist in ax.texts:
+                            artist.set_clip_on(True)
+                            artist.set_clip_path(ax.patch)
+                    except Exception:
+                        pass
+
         fig._geo_hide_same_unit_seams = hide_same_unit_seams
         fig._geo_section_engine = "v2" if use_correlation_v2 else "v1"
         fig._geo_correlation_links = pair_links if use_correlation_v2 else []
         fig._geo_semantic_lenses = semantic_lens_tracks if use_correlation_v2 else []
         fig._geo_print_layout = print_layout
+        fig._geo_page_plan = page_plan
+        fig._geo_full_x_limits = (full_min_x_plot, full_max_x_plot)
         fig._geo_print_title_block_axes = title_block_ax
         fig._geo_tool = GeoInteractiveTool(fig, ax, snap_lines, interactive_polys)
 

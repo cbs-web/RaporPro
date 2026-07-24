@@ -1,9 +1,11 @@
 # Dosya: RaporPro/ui_kesit_onizleme.py
 import copy
+from pathlib import Path
 import tkinter as tk
 from tkinter import Frame, Listbox, Toplevel, filedialog, messagebox, ttk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_pdf import PdfPages
 
 from kesit_kalite import build_section_quality_report
 from kesit_korelasyon import correlation_relation_id, section_layer_id
@@ -978,7 +980,9 @@ class KesitOnizlemeMixin:
             )
             print_scale_var = tk.BooleanVar(value=option_as_bool("print_scale_enabled", False))
             print_title_block_var = tk.BooleanVar(value=option_as_bool("print_title_block", True))
-            print_page_var = tk.StringVar(value=str(options.get("print_page_size", "A4 Yatay")))
+            print_multi_page_var = tk.BooleanVar(value=option_as_bool("print_multi_page", True))
+            print_page_var = tk.StringVar(value=str(options.get("print_page_size", "Otomatik (A4/A3)")))
+            print_page_overlap_var = tk.StringVar(value=str(options.get("print_page_overlap", "5.0")))
             horizontal_scale_var = tk.StringVar(value=str(options.get("horizontal_scale", "500")))
             vertical_scale_var = tk.StringVar(value=str(options.get("vertical_scale", "100")))
             ttk.Checkbutton(
@@ -990,8 +994,8 @@ class KesitOnizlemeMixin:
             ttk.Combobox(
                 redraw_frame,
                 textvariable=print_page_var,
-                values=("A4 Yatay", "A3 Yatay"),
-                width=14,
+                values=("Otomatik (A4/A3)", "A4 Yatay", "A3 Yatay"),
+                width=18,
                 state="readonly",
             ).grid(row=3, column=4, sticky="w", padx=5, pady=3)
             ttk.Label(redraw_frame, text="Yatay ölçek 1/").grid(row=4, column=3, sticky="e", padx=5, pady=3)
@@ -1013,6 +1017,17 @@ class KesitOnizlemeMixin:
                 text="Pafta antetini göster",
                 variable=print_title_block_var,
             ).grid(row=6, column=3, columnspan=2, sticky="w", padx=5, pady=3)
+            ttk.Checkbutton(
+                redraw_frame,
+                text="Uzun kesiti çok sayfaya böl",
+                variable=print_multi_page_var,
+            ).grid(row=7, column=3, columnspan=2, sticky="w", padx=5, pady=3)
+            ttk.Label(redraw_frame, text="Bindirme (m)").grid(row=8, column=3, sticky="e", padx=5, pady=3)
+            ttk.Entry(
+                redraw_frame,
+                textvariable=print_page_overlap_var,
+                width=14,
+            ).grid(row=8, column=4, sticky="w", padx=5, pady=3)
 
             entries = {}
             redraw_fields = [
@@ -1072,6 +1087,8 @@ class KesitOnizlemeMixin:
                 new_options["section_engine"] = "v2" if engine_var.get().startswith("V2") else "v1"
                 new_options["print_scale_enabled"] = print_scale_var.get()
                 new_options["print_title_block"] = print_title_block_var.get()
+                new_options["print_multi_page"] = print_multi_page_var.get()
+                new_options["print_page_overlap"] = print_page_overlap_var.get()
                 new_options["print_page_size"] = print_page_var.get()
                 new_options["horizontal_scale"] = horizontal_scale_var.get()
                 new_options["vertical_scale"] = vertical_scale_var.get()
@@ -1107,6 +1124,7 @@ class KesitOnizlemeMixin:
             legend_var = tk.BooleanVar(value=option_as_bool("export_show_legend", True))
             result = {"config": None}
             print_layout = getattr(fig, "_geo_print_layout", None)
+            page_plan = getattr(fig, "_geo_page_plan", None)
 
             ttk.Label(body, text="Format").grid(row=0, column=0, sticky="w", pady=4)
             ttk.Combobox(body, textvariable=fmt_var, values=("JPG", "PNG", "PDF", "SVG"), width=12, state="readonly").grid(row=0, column=1, sticky="ew", pady=4)
@@ -1116,8 +1134,9 @@ class KesitOnizlemeMixin:
             ttk.Combobox(body, textvariable=title_var, values=("simple", "full", "none"), width=12, state="readonly").grid(row=2, column=1, sticky="ew", pady=4)
             status_row = 3
             if print_layout:
+                is_multi_page = bool(page_plan and page_plan.get("page_count", 1) > 1)
                 scale_text = (
-                    f"{print_layout['page_name']} | "
+                    f"{'Önizleme: ' if is_multi_page else ''}{print_layout['page_name']} | "
                     f"Y 1/{print_layout['horizontal_scale']:g} | "
                     f"D 1/{print_layout['vertical_scale']:g} | "
                     f"D.A. x{print_layout['vertical_exaggeration']:g}"
@@ -1131,10 +1150,28 @@ class KesitOnizlemeMixin:
                 ).grid(row=status_row, column=1, sticky="w", pady=4)
                 status_row += 1
                 if print_layout.get("adjusted"):
+                    adjustment_text = (
+                        "Tam görünüm önizlemede sayfaya sığdırıldı; çok sayfalı çıktı seçilen "
+                        "yatay ölçeği koruyacak."
+                        if is_multi_page
+                        else "Seçilen ölçek sayfaya sığmadığı için bir üst standart ölçek kullanıldı."
+                    )
                     ttk.Label(
                         body,
-                        text="Seçilen ölçek sayfaya sığmadığı için bir üst standart ölçek kullanıldı.",
+                        text=adjustment_text,
                         foreground="#C0392B",
+                        wraplength=430,
+                    ).grid(row=status_row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+                    status_row += 1
+                if page_plan and page_plan.get("page_count", 1) > 1:
+                    ttk.Label(
+                        body,
+                        text=(
+                            f"Uzun kesit çıktısı: {page_plan['page_count']} sayfa, "
+                            f"{page_plan['page_name']}, Y 1/{page_plan['horizontal_scale']:g}, "
+                            f"en az {page_plan['overlap_m']:g} m bindirme."
+                        ),
+                        foreground="#2471A3",
                         wraplength=430,
                     ).grid(row=status_row, column=0, columnspan=2, sticky="w", pady=(0, 4))
                     status_row += 1
@@ -1189,6 +1226,75 @@ class KesitOnizlemeMixin:
                 filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
             )
             if not path:
+                return
+            page_plan = getattr(fig, "_geo_page_plan", None)
+            print_layout = getattr(fig, "_geo_print_layout", None)
+            if (
+                print_layout
+                and page_plan
+                and page_plan.get("page_count", 1) > 1
+                and option_as_bool("print_multi_page", True)
+            ):
+                save_section_edits(show_status=False)
+                page_count = page_plan["page_count"]
+                output_path = Path(path)
+
+                def render_export_page(page_index, x_window):
+                    page_options = dict(options)
+                    page_options.update({
+                        "print_page_size": page_plan["page_name"],
+                        "print_x_min": x_window[0],
+                        "print_x_max": x_window[1],
+                        "print_page_index": page_index,
+                        "print_page_count": page_count,
+                        "print_multi_page": False,
+                        "print_auto_fit": True,
+                        "show_station_offset_labels": False,
+                        "show_legend": export_config["show_legend"],
+                        "title_mode": export_config["title_mode"],
+                    })
+                    page_fig, _ = GeoEngine.kesit_ciz_interaktif(
+                        copy.deepcopy(list(sondajlar or [])),
+                        options=page_options,
+                    )
+                    page_tool = getattr(page_fig, "_geo_tool", None)
+                    page_info = getattr(page_tool, "info_text", None)
+                    page_markers = getattr(page_tool, "vertex_markers", None)
+                    if page_info is not None:
+                        page_info.set_visible(False)
+                    if page_markers is not None:
+                        page_markers.set_visible(False)
+                    if page_tool is not None and hasattr(page_tool, "refresh_same_unit_seams"):
+                        page_tool.refresh_same_unit_seams()
+                    return page_fig
+
+                if fmt == "pdf":
+                    with PdfPages(path) as pdf:
+                        for page_index, x_window in enumerate(page_plan["windows"], start=1):
+                            page_fig = render_export_page(page_index, x_window)
+                            pdf.savefig(
+                                page_fig,
+                                dpi=export_config["dpi"],
+                                bbox_inches=None,
+                                facecolor="white",
+                            )
+                            page_fig.clear()
+                    saved_message = f"Kesit {page_count} sayfalı PDF olarak kaydedildi."
+                else:
+                    for page_index, x_window in enumerate(page_plan["windows"], start=1):
+                        page_fig = render_export_page(page_index, x_window)
+                        page_path = output_path.with_name(
+                            f"{output_path.stem}_Sayfa{page_index}{output_path.suffix}"
+                        )
+                        page_fig.savefig(
+                            page_path,
+                            dpi=export_config["dpi"],
+                            bbox_inches=None,
+                            facecolor="white",
+                        )
+                        page_fig.clear()
+                    saved_message = f"Kesit {page_count} ayrı {fmt.upper()} sayfası olarak kaydedildi."
+                messagebox.showinfo("Başarılı", saved_message)
                 return
             ax = fig.axes[0] if fig.axes else None
             old_title = ax.get_title() if ax else ""
