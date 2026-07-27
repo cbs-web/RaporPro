@@ -111,8 +111,8 @@ class ArayuzAraclarMixin:
         nb.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
         general_tab = ttk.Frame(nb)
         taahhut_tab = ttk.Frame(nb)
-        form = self.scrollable_page(general_tab, padding=15)
-        taahhut_form = self.scrollable_page(taahhut_tab, padding=15)
+        form, _ = self.scrollable_page(general_tab, padding=15)
+        taahhut_form, _ = self.scrollable_page(taahhut_tab, padding=15)
         nb.add(general_tab, text="Genel")
         nb.add(taahhut_tab, text="Taahhütname")
 

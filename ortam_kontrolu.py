@@ -11,6 +11,7 @@ REQUIRED_DEPENDENCIES = [
     ("docx", "python-docx", "Word raporu üretimi"),
     ("PIL", "Pillow", "Görsel işleme"),
     ("fitz", "PyMuPDF", "Ekler PDF üretimi"),
+    ("win32com", "pywin32", "Word raporu PDF önizlemesi"),
     ("tkintermapview", "tkintermapview", "Harita ekranları"),
 ]
 

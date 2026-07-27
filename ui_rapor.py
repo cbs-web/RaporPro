@@ -33,7 +33,6 @@ from sabitler import (
     SPACE_XS,
 )
 from performans import perf_tracked
-from proje_motoru import hesap_ozeti, proje_saglik_ozeti, rapor_onizleme_metni
 from kalite_kontrol import build_preflight_report
 from motor import GeoEngine
 from raporlama import (
@@ -65,9 +64,10 @@ from yonetmelik_motoru import (
     yonetmelik_sil,
     yonetmelikleri_listele,
 )
+from ui_rapor_onizleme import RaporOnizlemeMixin
 
 
-class RaporSekmesiMixin:
+class RaporSekmesiMixin(RaporOnizlemeMixin):
     @staticmethod
     def rapor_hazirlik_ozeti(template_ready, lab_ready, jeo_ready, visual_ready, visual_total=6):
         """Rapor kaynaklarının kısa durum metnini ve seviyesini döndür."""
@@ -452,7 +452,7 @@ class RaporSekmesiMixin:
         ).pack(side="left", fill="x", expand=True, padx=(0, SPACE_XS))
         self.modern_button(
             primary_actions,
-            "Rapor Önizleme",
+            "Profesyonel Önizleme",
             command=self.rapor_onizleme_penceresi,
             role="accent",
             outline=True,
@@ -613,17 +613,7 @@ class RaporSekmesiMixin:
 
     @perf_tracked("report.preview")
     def rapor_onizleme_penceresi(self):
-        self.guncelle_veri_objesi(silent=True)
-        health = proje_saglik_ozeti(self.veri, self._dosya_map())
-        summary = hesap_ozeti(self.veri)
-        text = rapor_onizleme_metni(self.veri, self._dosya_map(), health, summary)
-        win = Toplevel(self.root)
-        self.pencere_hazirla(win, "Rapor Önizleme", "760x620", (680, 460), modal=True)
-        txt = tk.Text(win, wrap="word", font=("Consolas", 10))
-        txt.pack(fill="both", expand=True, padx=10, pady=10)
-        txt.insert("1.0", text)
-        txt.config(state="disabled")
-        self.modern_button(win, text="Kapat", command=win.destroy, role="primary").pack(pady=(0, 10))
+        return self.profesyonel_rapor_onizleme_penceresi()
 
     def sablon_sec(self):
         f = filedialog.askopenfilename(filetypes=[("Word", "*.docx")])
