@@ -24,6 +24,7 @@ from performans import log_exception, perf_log, perf_timer
 from rapor_sablonu import rapor_sablonu_durumu
 from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
+from raporlama_arazi import arazi_deney_rapor_verileri, arazi_deney_word_bolumlerini_uygula
 from raporlama_litoloji import (
     INCE_DANELILER,
     IRI_DANELILER,
@@ -1072,14 +1073,11 @@ def raporla(app_instance, final_path=None, autosave=True):
         perf_log("report.lab_and_lithology.detail", time.perf_counter() - lab_section_start, lab_detail)
         report_step("lab_and_lithology", lab_detail)
 
-        spt_data = []; pmt_data = []; kaya_data = []
-        for s in app_instance.veri["sondaj"]:
-            for row in s.get("spt", []): 
-                if len(row)>=5: spt_data.append([s["no"], row[0], row[1], row[2], row[3], row[4]])
-            for row in s.get("pmt", []): 
-                if len(row)>=3: pmt_data.append([s["no"], row[0], row[1], row[2]])
-            for row in s.get("kaya", []): 
-                if len(row)>=4: kaya_data.append([s["no"], row[0], row[1], row[2], row[3]])
+        field_report_data = arazi_deney_rapor_verileri(app_instance.veri["sondaj"])
+        spt_data = field_report_data["spt_data"]
+        pmt_data = field_report_data["pmt_data"]
+        kaya_data = field_report_data["kaya_data"]
+        arazi_deney_word_bolumlerini_uygula(doc, report_tag_index, field_report_data)
         field_tables_start = time.perf_counter()
         p = report_tag_index.get("[SPT]")
         if p is not None and "[SPT]" in p.text:
@@ -1097,8 +1095,10 @@ def raporla(app_instance, final_path=None, autosave=True):
                 apply_report_table_style(table, header_rows=1, widths_cm=[2.0, 2.0, 1.5, 1.5, 1.5, 1.5])
                 p._p.addnext(table._tbl)
 
-        islem_tablo_yerlestir(doc, "[PMT]", ["Kuyu No", "Derinlik", "Em (kg/cm2)", "Pl (kg/cm2)"], pmt_data, paragraph_index=report_tag_index)
-        islem_tablo_yerlestir(doc, "[KAYA_TABLO]", ["Kuyu No", "Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"], kaya_data, paragraph_index=report_tag_index)
+        if pmt_data:
+            islem_tablo_yerlestir(doc, "[PMT]", ["Kuyu No", "Derinlik", "Em (kg/cm2)", "Pl (kg/cm2)"], pmt_data, paragraph_index=report_tag_index)
+        if kaya_data:
+            islem_tablo_yerlestir(doc, "[KAYA_TABLO]", ["Kuyu No", "Derinlik", "TCR (%)", "SCR (%)", "RQD (%)"], kaya_data, paragraph_index=report_tag_index)
         field_detail = _report_detail(spt=len(spt_data), pmt=len(pmt_data), kaya=len(kaya_data))
         perf_log("report.table.field_tests", time.perf_counter() - field_tables_start, field_detail)
         report_step("field_test_tables", field_detail)
