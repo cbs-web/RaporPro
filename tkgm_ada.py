@@ -619,7 +619,7 @@ def ada_gorseli_ciz(
     footer_font = _font_yukle(14, bold=False)
     footer_draw.text(
         (10, 5),
-        "TKGM Parsel Sorgu verisi - Bilgilendirme amaçlıdır; resmî aplikasyon yerine geçmez.",
+        "https://parselsorgu.tkgm.gov.tr/",
         font=footer_font,
         fill="white",
     )
