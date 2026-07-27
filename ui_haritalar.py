@@ -24,6 +24,7 @@ from sabitler import (
     SPACE_SM,
     SPACE_XS,
 )
+from tkgm_ada import tkgm_ada_gorseli_olustur
 from tkgm_kml import tkgm_parsel_kml_olustur
 from tutarlilik_ortak import koordinat_durumu
 from yerbuldurur_motoru import YerbuldururMotoru
@@ -129,6 +130,14 @@ class HaritalarSekmesiMixin:
             command=self.tkgm_kml_al,
             role="accent",
             outline=True,
+            padx=7,
+            pady=4,
+        ).pack(side="left", padx=(0, SPACE_XS))
+        self.modern_button(
+            kml_actions,
+            "Ada Görseli",
+            command=self.tkgm_ada_gorseli_al,
+            role="primary",
             padx=7,
             pady=4,
         ).pack(side="left")
@@ -287,6 +296,7 @@ class HaritalarSekmesiMixin:
             ("jeofizik", "Jeofizik Lokasyon"),
             ("mjh", "Mühendislik Jeolojisi"),
             ("yer", "Yerbuldurur"),
+            ("tkgm", "TKGM Ada Görseli"),
         ):
             card = tk.Frame(
                 output_grid,
@@ -315,7 +325,7 @@ class HaritalarSekmesiMixin:
             status.pack(fill="x", pady=(2, 0))
             self.harita_output_labels[key] = status
             output_cards.append(card)
-        self.responsive_widget_grid(output_grid, output_cards, min_width=190, max_cols=4, padx=4, pady=4)
+        self.responsive_widget_grid(output_grid, output_cards, min_width=180, max_cols=5, padx=4, pady=4)
 
         self.harita_durum_yenile()
 
@@ -390,6 +400,7 @@ class HaritalarSekmesiMixin:
             "jeofizik": getattr(self, "word_img_jeofizik", None),
             "mjh": getattr(self, "img_mjh", None),
             "yer": getattr(self, "img_yer", None),
+            "tkgm": getattr(self, "img_tkgm", None),
         }
         output_ready = 0
         for key, label in getattr(self, "harita_output_labels", {}).items():
@@ -513,6 +524,114 @@ class HaritalarSekmesiMixin:
             self.otomatik_kaydet()
         self.set_status(f"TKGM KML bağlandı: {os.path.basename(path)}", level="success")
         messagebox.showinfo("TKGM KML", f"KML oluşturuldu ve projeye bağlandı:\n{path}")
+
+    def tkgm_ada_gorseli_al(self):
+        self.guncelle_veri_objesi()
+        kunye = dict(self.veri.get("kunye", {}))
+        required = (
+            ("il", "İl"),
+            ("ilce", "İlçe"),
+            ("mah", "Mahalle/Köy"),
+            ("ada", "Ada"),
+            ("par", "Parsel"),
+        )
+        missing = [label for key, label in required if not str(kunye.get(key) or "").strip()]
+        if missing:
+            messagebox.showwarning(
+                "TKGM Ada Görseli",
+                "Ada görseli oluşturmak için Künye sekmesinde şu alanlar dolu olmalı:\n- "
+                + "\n- ".join(missing),
+            )
+            return
+
+        tile_name = self.harita_altlik_var.get() if hasattr(self, "harita_altlik_var") else DEFAULT_TILE_SERVER
+        if tile_name not in TILE_SERVERS:
+            tile_name = DEFAULT_TILE_SERVER
+        self.harita_altlik_kaydet(tile_name)
+        tile_provider = dict(TILE_SERVERS[tile_name])
+        fallback_provider = dict(TILE_SERVERS[DEFAULT_TILE_SERVER])
+        output_dir = self._tkgm_kml_output_dir()
+
+        progress = tk.Toplevel(self.root)
+        self.pencere_hazirla(progress, "TKGM Ada Görseli", "430x150", (400, 135), modal=False)
+        ttk.Label(
+            progress,
+            text=f"{kunye.get('ada', '')} adasındaki parseller hazırlanıyor...",
+            font=FONT_BOLD,
+        ).pack(anchor="w", padx=14, pady=(14, 6))
+        ttk.Label(
+            progress,
+            text="Komşu parseller bulunuyor ve uydu görüntüsü çiziliyor.",
+            foreground="#555555",
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+        bar = ttk.Progressbar(progress, mode="indeterminate")
+        bar.pack(fill="x", padx=14, pady=(0, 12))
+        bar.start(12)
+
+        def worker():
+            return tkgm_ada_gorseli_olustur(
+                kunye,
+                output_dir,
+                tile_provider,
+                tile_name=tile_name,
+                fallback_tile_provider=fallback_provider,
+            )
+
+        def success(result):
+            if progress.winfo_exists():
+                progress.destroy()
+            path = result.get("path")
+            if not path or not os.path.isfile(path):
+                messagebox.showerror("TKGM Ada Görseli", "Ada görseli dosyası oluşturulamadı.")
+                return
+            self.img_tkgm = path
+            self.veri.setdefault("dosyalar", {})["img_tkgm"] = path
+            if hasattr(self, "lbl_tkgm"):
+                self.lbl_tkgm.config(text=os.path.basename(path), foreground=COLOR_SUCCESS)
+            self.harita_durum_yenile()
+            if hasattr(self, "rapor_etiketlerini_guncelle"):
+                self.rapor_etiketlerini_guncelle()
+            if hasattr(self, "ozet_yenile"):
+                self.ozet_yenile(collect=False)
+            if hasattr(self, "otomatik_kaydet"):
+                self.otomatik_kaydet()
+            source_text = (
+                "TKGM parsel listesi"
+                if result.get("source") == "parsel_listesi"
+                else "geometrik komşuluk taraması"
+            )
+            fallback_text = "\nHGM altlığı alınamadığı için Google Uydu kullanıldı." if result.get("fallback_used") else ""
+            limit_text = "\nParsel güvenlik sınırına ulaşıldı; görseli kontrol edin." if result.get("limit_reached") else ""
+            self.set_status(
+                f"TKGM ada görseli hazır: {result.get('parcel_count', 0)} parsel",
+                level="success",
+            )
+            messagebox.showinfo(
+                "TKGM Ada Görseli",
+                f"{result.get('ada', '')} adasında {result.get('parcel_count', 0)} parsel çizildi.\n"
+                f"Kaynak yöntemi: {source_text}\n"
+                f"Rapor etiketi: RESIM:TKGM\n\n{path}{fallback_text}{limit_text}",
+            )
+
+        def error(exc):
+            if progress.winfo_exists():
+                progress.destroy()
+            messagebox.showerror(
+                "TKGM Ada Görseli",
+                "Ada görseli oluşturulamadı.\n\n"
+                f"{exc}\n\n"
+                "TKGM servisi geçici olarak yoğun ise kısa bir süre sonra yeniden deneyebilirsiniz.",
+            )
+
+        self.arka_plan_gorevi_baslat(
+            "TKGM ada görseli",
+            worker,
+            status_start="TKGM ada parselleri ve uydu görüntüsü hazırlanıyor.",
+            status_success="TKGM ada görseli hazırlandı.",
+            status_error="TKGM ada görseli hazırlanamadı: {error}",
+            on_success=success,
+            on_error=error,
+        )
 
     def harita_cizici_ac(self, harita_tipi):
         with perf_timer("map.image_marker_data_prepare", harita_tipi):

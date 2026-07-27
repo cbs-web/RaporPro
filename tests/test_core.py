@@ -80,6 +80,12 @@ from sondaj_derinlik import (
 from sondaj_derinlik_foyu import sondaj_derinligi_foyu_olustur
 from ui_spt_okuma_yardimci import collect_image_paths, duplicate_keys as spt_duplicate_keys, record_quality as spt_record_quality
 from taahhutname import taahhutname_context, taahhutname_olustur, taahhutname_yapi_adresi
+from tkgm_ada import (
+    ada_gorseli_ciz,
+    komsu_parsel_noktalari,
+    parsel_listesi_ayikla,
+    tkgm_ada_parsellerini_getir,
+)
 from tkgm_kml import geojson_kml_olustur, konum_adi_normalize_et
 from tutanaklar import tutanaklari_olustur
 from ekler import (
@@ -1734,6 +1740,161 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         kml = geojson_kml_olustur(geometry, name="Deneme Parsel")
         self.assertIn("<Placemark>", kml)
         self.assertIn("26.00000000,40.00000000,0.00", kml)
+
+    def test_tkgm_parsel_listesi_numaralari_ayiklar_ve_siralar(self):
+        payload = [
+            {"id": 12, "text": "12"},
+            {"id": 2, "text": "2"},
+            {"properties": {"parselNo": "7"}},
+            {"id": 2, "text": "2"},
+        ]
+        self.assertEqual(parsel_listesi_ayikla(payload), ["2", "7", "12"])
+
+    def test_tkgm_komsu_sorgu_noktalari_kenarin_iki_yanindadir(self):
+        geometry = {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [26.0000, 40.0000],
+                    [26.0010, 40.0000],
+                    [26.0010, 40.0010],
+                    [26.0000, 40.0010],
+                    [26.0000, 40.0000],
+                ]
+            ],
+        }
+        points = komsu_parsel_noktalari(geometry)
+        self.assertTrue(points)
+        self.assertTrue(any(lat < 40.0 for lat, _lon in points))
+        self.assertTrue(any(lat > 40.001 for lat, _lon in points))
+        self.assertTrue(any(lon < 26.0 for _lat, lon in points))
+        self.assertTrue(any(lon > 26.001 for _lat, lon in points))
+
+    def test_tkgm_ada_parsellerini_ortak_kenardan_bulur(self):
+        def feature(parsel, min_lon, max_lon):
+            return {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [min_lon, 40.0],
+                            [max_lon, 40.0],
+                            [max_lon, 40.001],
+                            [min_lon, 40.001],
+                            [min_lon, 40.0],
+                        ]
+                    ],
+                },
+                "properties": {
+                    "adaNo": "10",
+                    "parselNo": str(parsel),
+                    "mahalleId": 3,
+                    "ozet": f"Arslanca-10/{parsel}",
+                },
+            }
+
+        selected = feature(1, 26.0, 26.001)
+        neighbor = feature(2, 26.001, 26.002)
+
+        def fake_fetcher(url, timeout=25):
+            del timeout
+            if url.endswith("ilListe.json"):
+                return [{"id": 1, "text": "Canakkale"}]
+            if "ilceListe/1" in url:
+                return [{"id": 2, "text": "Merkez"}]
+            if "mahalleListe/2" in url:
+                return [{"id": 3, "text": "Arslanca"}]
+            if "parselListe/" in url:
+                raise RuntimeError("liste servisi kapali")
+            if url.endswith("/parsel/3/10/1"):
+                return selected
+            parts = url.rstrip("/").split("/")
+            lat = float(parts[-2])
+            lon = float(parts[-1])
+            if 26.0 < lon < 26.001 and 40.0 < lat < 40.001:
+                return selected
+            if 26.001 < lon < 26.002 and 40.0 < lat < 40.001:
+                return neighbor
+            raise RuntimeError("parsel yok")
+
+        result = tkgm_ada_parsellerini_getir(
+            {
+                "il": "Canakkale",
+                "ilce": "Merkez",
+                "mah": "Arslanca",
+                "ada": "10",
+                "par": "1",
+            },
+            fetcher=fake_fetcher,
+        )
+        self.assertEqual(result["source"], "komsuluk_taramasi")
+        self.assertEqual([record["parsel"] for record in result["records"]], ["1", "2"])
+
+    def test_tkgm_ada_gorseli_parselleri_uydu_altligina_cizer(self):
+        from PIL import Image, ImageDraw
+
+        records = [
+            {
+                "ada": "1262",
+                "parsel": "1",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [26.0000, 40.0000],
+                            [26.0005, 40.0000],
+                            [26.0005, 40.0005],
+                            [26.0000, 40.0005],
+                            [26.0000, 40.0000],
+                        ]
+                    ],
+                },
+            },
+            {
+                "ada": "1262",
+                "parsel": "2",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [26.0005, 40.0000],
+                            [26.0010, 40.0000],
+                            [26.0010, 40.0005],
+                            [26.0005, 40.0005],
+                            [26.0005, 40.0000],
+                        ]
+                    ],
+                },
+            },
+        ]
+
+        def fake_tile_loader(_url, _headers, _timeout):
+            image = Image.new("RGB", (256, 256), "#7A9B70")
+            draw = ImageDraw.Draw(image)
+            draw.line((0, 0, 256, 256), fill="#D7D1BD", width=20)
+            return image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = os.path.join(tmp, "ada.jpg")
+            info = ada_gorseli_ciz(
+                records,
+                output_path,
+                {"url": "https://tiles.invalid/{z}/{x}/{y}.jpg", "max_zoom": 22},
+                selected_parsel="1",
+                width=700,
+                height=450,
+                tile_loader=fake_tile_loader,
+            )
+            self.assertTrue(os.path.isfile(output_path))
+            self.assertEqual((info["width"], info["height"]), (700, 450))
+            rendered = Image.open(output_path).convert("RGB")
+            red_pixels = sum(
+                1
+                for red, green, blue in rendered.get_flattened_data()
+                if red > green * 1.3 and red > blue * 1.3
+            )
+            self.assertGreater(red_pixels, 100)
 
     def test_litoloji_yazim_uyarisi_yakin_hatalari_bulur(self):
         self.assertTrue(any("kumlu" in item for item in litoloji_yazim_uyarilari("Killi kumluu")))
