@@ -104,13 +104,17 @@ class ArayuzAraclarMixin:
         ayarlar = self.veri.setdefault("ayarlar", {})
         win = Toplevel(self.root)
         self.pencere_hazirla(win, "Ayarlar", "760x600", (680, 500), modal=True)
+        win.grid_rowconfigure(0, weight=1)
+        win.grid_columnconfigure(0, weight=1)
 
         nb = ttk.Notebook(win)
-        nb.pack(fill="both", expand=True, padx=12, pady=12)
-        form = ttk.Frame(nb, padding=15)
-        taahhut_form = ttk.Frame(nb, padding=15)
-        nb.add(form, text="Genel")
-        nb.add(taahhut_form, text="Taahhütname")
+        nb.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
+        general_tab = ttk.Frame(nb)
+        taahhut_tab = ttk.Frame(nb)
+        form = self.scrollable_page(general_tab, padding=15)
+        taahhut_form = self.scrollable_page(taahhut_tab, padding=15)
+        nb.add(general_tab, text="Genel")
+        nb.add(taahhut_tab, text="Taahhütname")
 
         fields = [
             ("Firma adı", "firma_adi"),
@@ -234,10 +238,30 @@ class ArayuzAraclarMixin:
                 self.veri_kaydet()
             win.destroy()
 
-        btns = ttk.Frame(win, padding=(12, 0, 12, 12))
-        btns.pack(fill="x")
-        tk.Button(btns, text="Kaydet", command=kaydet, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=5)
-        tk.Button(btns, text="Vazgeç", command=win.destroy, bg="#ECF0F1").pack(side="right", padx=5)
+        btns = ttk.Frame(win, padding=(12, 6, 12, 12))
+        btns.grid(row=1, column=0, sticky="ew")
+        save_btn = tk.Button(
+            btns,
+            text="Kaydet",
+            command=kaydet,
+            bg=COLOR_SUCCESS,
+            fg="white",
+            font=FONT_BOLD,
+            padx=16,
+            pady=6,
+        )
+        save_btn.pack(side="right", padx=(5, 0))
+        cancel_btn = tk.Button(
+            btns,
+            text="Vazgeç",
+            command=win.destroy,
+            bg="#ECF0F1",
+            padx=14,
+            pady=6,
+        )
+        cancel_btn.pack(side="right", padx=5)
+        win.bind("<Control-s>", lambda _event: kaydet())
+        win.bind("<Escape>", lambda _event: win.destroy())
 
     def _ayar_dosya_sec(self, entry, filetypes):
         path = filedialog.askopenfilename(filetypes=filetypes)
