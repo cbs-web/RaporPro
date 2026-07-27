@@ -397,6 +397,8 @@ class ArayuzAraclarMixin:
             analysis_text.config(state="disabled")
 
     def notebook_tab_changed(self, event):
+        if hasattr(self, "ana_navigasyon_secimi_guncelle"):
+            self.ana_navigasyon_secimi_guncelle()
         if hasattr(self, "tab_ozet") and event.widget.select() == str(self.tab_ozet):
             self.ozet_yenile()
         elif hasattr(self, "tab_haritalar") and event.widget.select() == str(self.tab_haritalar):

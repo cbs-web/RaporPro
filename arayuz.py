@@ -324,9 +324,11 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         main_splitter = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashwidth=4, bg=COLOR_BG)
         main_splitter.pack(fill="both", expand=True)
         top_frame = ttk.Frame(main_splitter)
-        nb = ttk.Notebook(top_frame)
+        top_frame.grid_rowconfigure(0, weight=1)
+        top_frame.grid_columnconfigure(1, weight=1)
+        nb = ttk.Notebook(top_frame, style="Main.TNotebook")
         self.nb = nb
-        nb.pack(fill="both", expand=True)
+        nb.grid(row=0, column=1, sticky="nsew")
         main_splitter.add(top_frame, height=750)
         
         self.tab_ozet=ttk.Frame(nb); nb.add(self.tab_ozet, text="0. Özet"); self.p_ozet(self.tab_ozet)
@@ -337,6 +339,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.tab_jeofizik=ttk.Frame(nb); nb.add(self.tab_jeofizik, text="5. Jeofizik"); self.p_jeofizik(self.tab_jeofizik)
         self.tab_haritalar=ttk.Frame(nb); nb.add(self.tab_haritalar, text="6. Haritalar"); self.p_haritalar(self.tab_haritalar)
         self.tab_rapor=ttk.Frame(nb); nb.add(self.tab_rapor, text="7. Rapor"); self.p_rapor(self.tab_rapor)
+        self.ana_navigasyon_kur(top_frame)
         nb.bind("<<NotebookTabChanged>>", self.notebook_tab_changed)
         
         log_frame = tk.Frame(main_splitter, bg=COLOR_LOG_BG)

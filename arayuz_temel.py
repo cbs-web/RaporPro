@@ -37,6 +37,8 @@ class ArayuzTemelMixin:
         style.configure("TEntry", font=FONT_MAIN, padding=5)
         style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
         style.configure("TNotebook.Tab", font=FONT_BOLD, padding=(12, 7))
+        style.configure("Main.TNotebook", background=COLOR_BG, borderwidth=0, tabmargins=0)
+        style.layout("Main.TNotebook.Tab", [])
         style.configure("Treeview", rowheight=26, font=FONT_MAIN)
         style.configure("Treeview.Heading", font=FONT_BOLD)
         style.configure("TCombobox", font=FONT_MAIN, padding=4)
@@ -70,6 +72,165 @@ class ArayuzTemelMixin:
                 lightcolor=color,
                 darkcolor=color,
                 thickness=8,
+            )
+
+    def ana_navigasyon_kur(self, parent):
+        """Ana Notebook sayfaları için daraltılabilir sol navigasyonu oluştur."""
+        self.ana_nav_expanded = True
+        self.ana_nav_manual = False
+        self.ana_nav_items = []
+
+        nav = tk.Frame(parent, bg=COLOR_PRIMARY, width=174, bd=0, highlightthickness=0)
+        nav.grid(row=0, column=0, sticky="ns")
+        nav.grid_propagate(False)
+        nav.grid_columnconfigure(0, weight=1)
+        self.ana_nav_frame = nav
+
+        header = tk.Frame(nav, bg=COLOR_PRIMARY, height=52)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+        header.grid_columnconfigure(0, weight=1)
+        self.ana_nav_title = tk.Label(
+            header,
+            text="RaporPro",
+            bg=COLOR_PRIMARY,
+            fg="white",
+            font=FONT_UI_SECTION,
+            anchor="w",
+        )
+        self.ana_nav_title.grid(row=0, column=0, sticky="nsew", padx=(14, 4))
+        self.ana_nav_toggle = tk.Button(
+            header,
+            text="\u2039",
+            command=lambda: self.ana_navigasyon_daralt(not self.ana_nav_expanded, manual=True),
+            bg=COLOR_PRIMARY,
+            activebackground="#34495E",
+            fg="white",
+            activeforeground="white",
+            relief="flat",
+            bd=0,
+            width=3,
+            font=("Segoe UI", 14),
+            cursor="hand2",
+            takefocus=True,
+        )
+        self.ana_nav_toggle.grid(row=0, column=1, sticky="ns")
+        self.tooltip_ekle(self.ana_nav_toggle, "Sol menüyü daralt veya genişlet")
+
+        nav_specs = (
+            ("0", "Özet", "project", self.tab_ozet),
+            ("1", "Künye", "tag", self.tab_kunye),
+            ("2", "Bina", "project", self.tab_bina),
+            ("3", "Arazi", "map", self.tab_arazi),
+            ("4", "Sondaj", "borehole", self.tab_sondaj),
+            ("5", "Jeofizik", "gauge", self.tab_jeofizik),
+            ("6", "Haritalar", "map", self.tab_haritalar),
+            ("7", "Rapor", "report", self.tab_rapor),
+        )
+        for row, (number, label, icon_key, tab) in enumerate(nav_specs, start=1):
+            item_frame = tk.Frame(nav, bg=COLOR_PRIMARY, height=44)
+            item_frame.grid(row=row, column=0, sticky="ew")
+            item_frame.grid_propagate(False)
+            item_frame.grid_columnconfigure(1, weight=1)
+            indicator = tk.Frame(item_frame, bg=COLOR_PRIMARY, width=4)
+            indicator.grid(row=0, column=0, sticky="ns")
+            inactive_image = self.ui_icons.get(icon_key, color="#D8E1E8", size=18)
+            active_image = self.ui_icons.get(icon_key, color="white", size=18)
+            button = tk.Button(
+                item_frame,
+                text=f"{number}.  {label}",
+                image=inactive_image,
+                compound="left",
+                command=lambda target=tab: self.nb.select(target),
+                bg=COLOR_PRIMARY,
+                activebackground="#34495E",
+                fg="#E8EDF2",
+                activeforeground="white",
+                relief="flat",
+                bd=0,
+                padx=13,
+                pady=9,
+                anchor="w",
+                font=FONT_UI_BODY_BOLD,
+                cursor="hand2",
+                takefocus=True,
+            )
+            button.grid(row=0, column=1, sticky="nsew")
+            self.tooltip_ekle(button, f"{number}. {label} sekmesine git")
+            self.ana_nav_items.append(
+                {
+                    "number": number,
+                    "label": label,
+                    "tab": tab,
+                    "frame": item_frame,
+                    "indicator": indicator,
+                    "button": button,
+                    "inactive_image": inactive_image,
+                    "active_image": active_image,
+                }
+            )
+
+        self.root.bind("<Configure>", self.ana_navigasyon_pencere_degisti, add="+")
+        self.root.after_idle(self.ana_navigasyon_ilk_boyut)
+        self.root.after_idle(self.ana_navigasyon_secimi_guncelle)
+
+    def ana_navigasyon_daralt(self, expanded, manual=False):
+        """Sol navigasyonu geniş veya kompakt görünüme geçir."""
+        self.ana_nav_expanded = bool(expanded)
+        if manual:
+            self.ana_nav_manual = True
+        width = 174 if self.ana_nav_expanded else 54
+        self.ana_nav_frame.configure(width=width)
+        self.ana_nav_title.configure(text="RaporPro" if self.ana_nav_expanded else "")
+        self.ana_nav_toggle.configure(text="\u2039" if self.ana_nav_expanded else "\u203a")
+        for item in self.ana_nav_items:
+            button = item["button"]
+            if self.ana_nav_expanded:
+                button.configure(
+                    text=f"{item['number']}.  {item['label']}",
+                    compound="left",
+                    anchor="w",
+                    padx=13,
+                )
+            else:
+                button.configure(text="", compound="none", anchor="center", padx=0)
+        self.ana_navigasyon_secimi_guncelle()
+
+    def ana_navigasyon_ilk_boyut(self):
+        """İlk gerçek pencere boyutuna göre menünün başlangıç görünümünü seç."""
+        try:
+            expanded = self.root.winfo_width() >= 1280
+        except tk.TclError:
+            return
+        self.ana_navigasyon_daralt(expanded, manual=False)
+
+    def ana_navigasyon_pencere_degisti(self, event):
+        """Dar pencerelerde içerik alanını korumak için menüyü otomatik daralt."""
+        if event.widget is not self.root or self.ana_nav_manual:
+            return
+        if event.width < 1180 and self.ana_nav_expanded:
+            self.ana_navigasyon_daralt(False)
+        elif event.width >= 1280 and not self.ana_nav_expanded:
+            self.ana_navigasyon_daralt(True)
+
+    def ana_navigasyon_secimi_guncelle(self):
+        """Notebook seçimini sol menünün aktif görünümüyle eşitle."""
+        if not hasattr(self, "nb") or not hasattr(self, "ana_nav_items"):
+            return
+        try:
+            selected = self.nb.select()
+        except tk.TclError:
+            return
+        for item in self.ana_nav_items:
+            active = selected == str(item["tab"])
+            background = COLOR_ACCENT if active else COLOR_PRIMARY
+            item["frame"].configure(bg=background)
+            item["indicator"].configure(bg="white" if active else COLOR_PRIMARY)
+            item["button"].configure(
+                bg=background,
+                activebackground=COLOR_ACCENT if active else "#34495E",
+                fg="white" if active else "#E8EDF2",
+                image=item["active_image"] if active else item["inactive_image"],
             )
 
     def scrollable_page(self, parent, padding=12):
