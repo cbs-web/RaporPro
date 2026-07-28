@@ -1563,6 +1563,12 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         doc = Document()
         doc.add_paragraph("Kapak")
         heading = doc.add_paragraph("1. GENEL BİLGİLER")
+        heading_gap = doc.add_paragraph("")
+        subheading = doc.add_paragraph("1.1. ETÜDÜN AMACI VE KAPSAMI")
+        subheading.style = "Heading 2"
+        subheading.paragraph_format.page_break_before = True
+        nested_heading = doc.add_paragraph("1.1.1. İnceleme Alanı")
+        nested_heading.paragraph_format.page_break_before = True
         normal = doc.add_paragraph("Bu normal bir paragraftır.")
         styled = doc.add_paragraph("İKİNCİ BÜYÜK BAŞLIK")
         styled.style = "Heading 1"
@@ -1571,8 +1577,34 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
         self.assertEqual(count, 2)
         self.assertTrue(heading.paragraph_format.page_break_before)
+        self.assertTrue(heading_gap.paragraph_format.keep_with_next)
+        self.assertFalse(subheading.paragraph_format.page_break_before)
+        self.assertTrue(subheading.paragraph_format.keep_with_next)
+        self.assertFalse(nested_heading.paragraph_format.page_break_before)
+        self.assertTrue(nested_heading.paragraph_format.keep_with_next)
         self.assertFalse(bool(normal.paragraph_format.page_break_before))
         self.assertTrue(styled.paragraph_format.page_break_before)
+
+    def test_dahili_rapor_sablonunda_alt_basliklar_yeni_sayfaya_zorlanmaz(self):
+        from docx import Document
+
+        doc = Document(dahili_rapor_sablonu_yolu())
+        buyuk_basliklari_yeni_sayfaya_al(doc)
+        paragraphs = {p.text.strip(): p for p in doc.paragraphs}
+
+        giris = paragraphs["1. GİRİŞ"]
+        amac = paragraphs["1.1. ETÜDÜN AMACI VE KAPSAMI"]
+        laboratuvar = paragraphs["5. LABORATUVAR DENEYLERİ VE ANALİZLER"]
+        fiziksel = paragraphs["5.1. ZEMİN INDEX – FİZİKSEL ÖZELLİKLERİNİN BELİRLENMESİ"]
+        mekanik = paragraphs["5.2. ZEMİNLERİN MEKANİK ÖZELLİKLERİNİN BELİRLENMESİ"]
+
+        self.assertTrue(giris.paragraph_format.page_break_before)
+        self.assertTrue(laboratuvar.paragraph_format.page_break_before)
+        self.assertFalse(amac.paragraph_format.page_break_before)
+        self.assertFalse(fiziksel.paragraph_format.page_break_before)
+        self.assertFalse(mekanik.paragraph_format.page_break_before)
+        self.assertTrue(amac.paragraph_format.keep_with_next)
+        self.assertTrue(fiziksel.paragraph_format.keep_with_next)
 
     def test_duzeltme_etiket_sablonu_secili_etiketleri_yazar(self):
         from docx import Document

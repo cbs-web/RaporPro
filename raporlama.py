@@ -250,6 +250,20 @@ def _normalize_style_name(name):
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return text.replace("ı", "i")
 
+def _numbered_heading_level(text):
+    clean = _plain_heading_text(text)
+    match = re.match(r"^(\d+(?:\.\d+)*)\.?\s+.+", clean)
+    if not match:
+        return 0
+    return len(match.group(1).split("."))
+
+def _heading_style_level(paragraph):
+    style_name = _normalize_style_name(getattr(getattr(paragraph, "style", None), "name", ""))
+    match = re.match(r"^(?:heading|baslik|başlık)\s*(\d+)", style_name)
+    if not match:
+        return 0
+    return int(match.group(1))
+
 def _major_heading_mi(paragraph):
     text = _plain_heading_text(paragraph.text)
     if not text or "[" in text or "]" in text:
@@ -257,14 +271,13 @@ def _major_heading_mi(paragraph):
     if len(text) > 120:
         return False
 
-    style_name = _normalize_style_name(getattr(getattr(paragraph, "style", None), "name", ""))
-    if style_name in {"heading 1", "baslik 1", "başlık 1"} or style_name.startswith("heading 1"):
+    style_level = _heading_style_level(paragraph)
+    if style_level == 1:
         return True
-    if style_name.startswith("baslik 1") or style_name.startswith("başlık 1"):
-        return True
+    if style_level > 1:
+        return False
 
-    numbered = re.match(r"^\d+(\.\d+)*\.?\s+.+", text)
-    if not numbered:
+    if _numbered_heading_level(text) != 1:
         return False
     letters = [ch for ch in text if ch.isalpha()]
     if not letters:
@@ -275,14 +288,30 @@ def _major_heading_mi(paragraph):
 
 def buyuk_basliklari_yeni_sayfaya_al(doc):
     count = 0
+    heading_indexes = []
     for idx, paragraph in enumerate(doc.paragraphs):
-        if idx == 0:
+        numbered_level = _numbered_heading_level(paragraph.text)
+        style_level = _heading_style_level(paragraph)
+        if numbered_level > 1 or style_level > 1:
+            paragraph.paragraph_format.page_break_before = False
+            paragraph.paragraph_format.keep_with_next = True
+            heading_indexes.append(idx)
             continue
-        if not _major_heading_mi(paragraph):
+        if idx == 0 or not _major_heading_mi(paragraph):
             continue
         paragraph.paragraph_format.page_break_before = True
         paragraph.paragraph_format.keep_with_next = True
+        heading_indexes.append(idx)
         count += 1
+
+    paragraphs = doc.paragraphs
+    for heading_index in heading_indexes:
+        next_index = heading_index + 1
+        while next_index < len(paragraphs) and not paragraphs[next_index].text.strip():
+            blank = paragraphs[next_index]
+            blank.paragraph_format.page_break_before = False
+            blank.paragraph_format.keep_with_next = True
+            next_index += 1
     return count
 
 def jeo_parametre_degeri_formatla(anahtar, deger, son_tabaka=False):
