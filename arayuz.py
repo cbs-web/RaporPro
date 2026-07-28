@@ -14,6 +14,7 @@ from widgets import UndoRedoEntry
 from ui_cikti import CiktiMerkeziMixin
 from ui_gorev_merkezi import GorevMerkeziMixin
 from ui_haritalar import HaritalarSekmesiMixin
+from ui_hidrojeoloji import HidrojeolojiUIMixin
 from ui_jeofizik import JeofizikMixin
 from ui_jeofizik_sheet import JeofizikSheetMixin
 from ui_karot_tcr import KarotTCRMixin
@@ -44,7 +45,7 @@ AUTOSAVE_PATH = str(
 AUTOSAVE_DIR = os.path.dirname(AUTOSAVE_PATH)
 # ============================================================================
 # ÖZEL SPT VERİ GİRİŞ PENCERESİ (OTOMATİK HESAPLAMA VE DERİNLİK ARTIŞI)
-class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
+class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, HidrojeolojiUIMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
     @perf_tracked("ui.__init__")
     def __init__(self, root):
         self.root = root
@@ -940,12 +941,19 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
                 warning = key in invalid_numeric or key in required_missing
                 widget.configure(style="Warning.TEntry" if warning else "Valid.TEntry")
 
-        filled = sum(bool(value) for value in values.values())
+        hydro_filled = 0
+        hydro_total = 0
+        if hasattr(self, "hidrojeoloji_form_durumu"):
+            hydro_filled, hydro_total, hydro_warnings = self.hidrojeoloji_form_durumu()
+            warnings.extend(hydro_warnings)
+
+        filled = sum(bool(value) for value in values.values()) + hydro_filled
+        total = len(values) + hydro_total
         if warnings:
-            self.arazi_durum_var.set(f"{filled}/{len(values)} alan dolu · {warnings[0]}")
+            self.arazi_durum_var.set(f"{filled}/{total} alan dolu · {warnings[0]}")
             self.arazi_durum_label.configure(foreground=COLOR_WARNING)
         else:
-            self.arazi_durum_var.set(f"{filled}/{len(values)} alan dolu · Arazi bilgileri hazır")
+            self.arazi_durum_var.set(f"{filled}/{total} alan dolu · Arazi bilgileri hazır")
             self.arazi_durum_label.configure(foreground=COLOR_SUCCESS)
 
     def p_arazi(self, p):
@@ -1044,6 +1052,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.e_arazi["imar_durumu"].grid(row=1, column=1, sticky="ew", pady=SPACE_XS)
         self.e_arazi["imar_durumu"].current(0)
 
+        hydro_navigation = self.hidrojeoloji_paneli_olustur(body, row=2)
         navigation = [
             *terrain_entries,
             area_y,
@@ -1051,6 +1060,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             self.e_arazi["kategori"],
             imar_alani,
             self.e_arazi["imar_durumu"],
+            *hydro_navigation,
         ]
         self.form_klavye_gecisi_ekle(navigation)
         for widget in navigation:
@@ -1069,6 +1079,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         for k,e in self.e_arazi.items():
             if k == "imar_durumu" or k == "kategori": self.veri["arazi"][k] = e.get()
             else: self.veri["arazi"][k] = e.get()
+        if hasattr(self, "hidrojeoloji_verisini_topla"):
+            self.hidrojeoloji_verisini_topla()
         if "dosyalar" not in self.veri: self.veri["dosyalar"] = {}
         self.veri["dosyalar"]["kml_path"] = getattr(self, 'kml_path', None)
         self.veri["dosyalar"]["word_path"] = getattr(self, 'word_path', None)
@@ -1096,6 +1108,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         for k,e in self.e_arazi.items():
             if k == "imar_durumu" or k == "kategori": e.set(self.veri["arazi"].get(k,""))
             else: e.delete(0,'end'); e.insert(0, self.veri["arazi"].get(k,""))
+        if hasattr(self, "hidrojeoloji_verisini_yukle"):
+            self.hidrojeoloji_verisini_yukle()
         if hasattr(self, "kunye_durum_guncelle"):
             self.kunye_durum_guncelle()
         if hasattr(self, "arazi_durum_guncelle"):

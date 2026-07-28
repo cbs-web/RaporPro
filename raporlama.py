@@ -19,6 +19,10 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 
 from yardimcilar import atomic_docx_save, temizle_baslik, zemin_sinifi_cevir, safe_float
 from motor import GeoEngine
+from hidrojeoloji_raporu import (
+    hidrojeoloji_durum_metni,
+    hidrojeoloji_word_paragrafini_uygula,
+)
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_ss_koordinatlarini_koru
 from performans import log_exception, perf_log, perf_timer
 from rapor_sablonu import rapor_sablonu_durumu
@@ -81,6 +85,7 @@ DUZELTME_ETIKET_GRUPLARI = [
             ("[Sondaj]", "Sondaj / litoloji tablosu"),
             ("[YASS_TABLO]", "Yeraltı suyu tablosu"),
             ("[YASS_ONERI]", "Yeraltı suyu önerisi"),
+            ("[HIDROJEOLOJI_DURUM]", "Hidrojeoloji durum açıklaması"),
         ],
     ),
     (
@@ -644,7 +649,7 @@ def raporla(app_instance, final_path=None, autosave=True):
             "[BINA_BILGILERI]", "[Sondaj]", "[YASS_TABLO]", "[LAB_FIZIK]", "[LAB_MEKANIK]",
             "[ZEMIN_OZET]", "[LITOLOJI_DAGILIM]", "[SPT]", "[PMT]", "[KAYA_TABLO]",
             "[JEO_PARAMETRE]", "[MASW]", "[VP]", "[JEO_KOOR]", "[MT_TABLO]",
-            "[JEO_SONUC]", "[YASS_ONERI]",
+            "[JEO_SONUC]", "[YASS_ONERI]", "[HIDROJEOLOJI_DURUM]",
             "RESIM:Yerbuldurur", "[RESIM_YERBULDURUR]", "RESIM:TKGM", "RESIM:PGA",
             "[RESIM_JEOFIZIK]", "RESIM:MJH", "[RESIM_MJH]", "[RESIM:MJH]",
             "[RESIM_SONDAJ]", "[RESIM:SONDAJ]",
@@ -1390,7 +1395,21 @@ def raporla(app_instance, final_path=None, autosave=True):
             
         replace_text(doc, "[JEO_SONUC]", jeo_sonuc_cumlesi, paragraph_index=report_tag_index)
         replace_text(doc, "[YASS_ONERI]", yass_oneri, paragraph_index=report_tag_index)
-        report_step("result_texts", _report_detail(vs30=len(tum_vs30), t0=len(tum_t0), yass=len(yass_seviyeleri)))
+        hidrojeoloji_metni = hidrojeoloji_durum_metni(arazi, sondajlar)
+        hidrojeoloji_word_paragrafini_uygula(
+            doc,
+            report_tag_index,
+            hidrojeoloji_metni,
+        )
+        report_step(
+            "result_texts",
+            _report_detail(
+                vs30=len(tum_vs30),
+                t0=len(tum_t0),
+                yass=len(yass_seviyeleri),
+                hidrojeoloji=bool(hidrojeoloji_metni),
+            ),
+        )
 
         mjh_path = mjh_resim_yolu(app_instance)
         image_paths = [

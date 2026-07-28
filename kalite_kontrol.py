@@ -29,7 +29,7 @@ KNOWN_TAGS = {
     "[PROJE_ADI]", "[RESIM:PGA]", "[RESIM:SONDAJ]", "[RESIM:TKGM]",
     "[RESIM:MJH]", "[RESIM_JEOFIZIK]", "[RESIM_MJH]", "[RESIM_SONDAJ]", "[RESIM_YERBULDURUR]",
     "[SAYI_MT]", "[SAYI_SS]", "[SONDAJ_BILGISI]", "[SPT]", "[Sondaj]",
-    "[VP]", "[YASS_ONERI]", "[YASS_TABLO]", "[YEREL_ZEMIN]",
+    "[VP]", "[YASS_ONERI]", "[YASS_TABLO]", "[HIDROJEOLOJI_DURUM]", "[YEREL_ZEMIN]",
     "[ZEMIN_OZET]", "RESIM:MJH", "RESIM:PGA", "RESIM:TKGM",
     "RESIM:Yerbuldurur",
 }
@@ -83,6 +83,7 @@ TAG_DESCRIPTIONS = {
     "[Sondaj]": "Sondaj konum, tarih, kot, derinlik ve litoloji tablosunu ekler.",
     "[YASS_TABLO]": "Yeraltisuyu olcumleri tablosunu ekler.",
     "[YASS_ONERI]": "Yeraltısuyu durumuna göre öneri paragrafını yazar.",
+    "[HIDROJEOLOJI_DURUM]": "Dere, taşkın, deniz ve yeraltı suyu durumunu yazar.",
     "[LAB_FIZIK]": "Laboratuvar fiziksel deney ozet tablosunu ekler.",
     "[LAB_MEKANIK]": "Laboratuvar mekanik deney ozet tablosunu ekler.",
     "[ZEMIN_OZET]": "Laboratuvar ve SPT verilerine gore zemin ozet metnini yazar.",
@@ -112,7 +113,7 @@ TAG_DESCRIPTIONS = {
 
 RECOMMENDED_TAGS = [
     "[PROJE_ADI]", "[IL]", "[ILCE]", "[MAHALLE]", "[SONDAJ_BILGISI]",
-    "[Sondaj]", "[SPT]", "[YASS_TABLO]", "[LAB_FIZIK]", "[JEO_PARAMETRE]",
+    "[Sondaj]", "[SPT]", "[YASS_TABLO]", "[HIDROJEOLOJI_DURUM]", "[LAB_FIZIK]", "[JEO_PARAMETRE]",
     "[JEO_KOOR]", "[RESIM_SONDAJ]", "[RESIM_JEOFIZIK]",
 ]
 

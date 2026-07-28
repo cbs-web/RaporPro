@@ -35,6 +35,12 @@ DUZELTME_ETIKET_KURALLARI = [
         "action": "Yeraltı suyu değerlendirme ve öneri metnini kontrol et.",
     },
     {
+        "tag": "[HIDROJEOLOJI_DURUM]",
+        "label": "Hidrojeoloji durum açıklaması",
+        "keywords": ["hidrojeoloji", "akar dere", "kuru dere", "taşkın", "taskin", "deniz", "yeraltı su", "yer alti su"],
+        "action": "Arazi sekmesindeki dere, taşkın, deniz ve YASS bilgilerini kontrol et.",
+    },
+    {
         "tag": "[LAB_FIZIK]",
         "label": "Laboratuvar fiziksel deneyler",
         "keywords": ["laboratuvar", "lab", "elek", "atterberg", "kivam", "kıvam", "su muhtev", "dogal birim hacim", "doğal birim hacim"],
@@ -494,6 +500,8 @@ def _sekme_oner(tag):
         return "Haritalar / Rapor"
     if tag in ("[YASS_TABLO]", "[YASS_ONERI]"):
         return "Sondaj / Rapor"
+    if tag == "[HIDROJEOLOJI_DURUM]":
+        return "Arazi / Rapor"
     if tag == "[BINA_BILGILERI]":
         return "Bina / Rapor"
     return "Rapor"

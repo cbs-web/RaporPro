@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, Listbox, Toplevel
 
 from harita_cikti import eski_paylasimli_temp_harita_yolu_mu
+from hidrojeoloji_raporu import hidrojeoloji_varsayilanlari
 from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT
 from sabitler import *
 from yardimcilar import *
@@ -360,7 +361,12 @@ class ArayuzProjeMixin:
             "schema_version": PROJE_SEMA_SURUMU,
             "kunye": {"sahibi":"", "il":"", "ilce":"", "mah":"", "mev":"", "paf":"", "ada":"", "par":""},
             "bina": {"kul":"", "sinif":"", "onem":"", "malz":"", "bod":"", "kat":"", "plan":"", "yukseklik":"", "yukseklik_sinif":"", "temel_alan":"", "ins":"", "der":"", "gqe_min":"", "gqe_max":"", "gqe_ort":"", "comb_min":"", "comb_max":"", "comb_ort":"", "ysinif":"", "tem":"", "coklu_blok": False, "bloklar": []},
-            "arazi": {"kot":"", "yon":"", "egim":"", "min":"", "max":"", "ort":"", "imar_alani":"", "imar_durumu":"", "zemin":"", "kategori": "", "pga":"", "alan_y": "", "alan_x": ""},
+            "arazi": {
+                "kot": "", "yon": "", "egim": "", "min": "", "max": "", "ort": "",
+                "imar_alani": "", "imar_durumu": "", "zemin": "", "kategori": "",
+                "pga": "", "alan_y": "", "alan_x": "",
+                "hidrojeoloji": hidrojeoloji_varsayilanlari(),
+            },
             "sondaj": [],
             "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
             "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},

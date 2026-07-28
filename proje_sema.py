@@ -6,8 +6,10 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
+from hidrojeoloji_raporu import hidrojeoloji_varsayilanlari
 
-PROJE_SEMA_SURUMU = 1
+
+PROJE_SEMA_SURUMU = 2
 
 
 class ProjeSemaHatasi(ValueError):
@@ -122,6 +124,20 @@ def _v0_v1_migrasyonu(veri):
     return notlar
 
 
+def _v1_v2_migrasyonu(veri):
+    arazi = veri.get("arazi")
+    if not isinstance(arazi, dict):
+        arazi = {}
+        veri["arazi"] = arazi
+    hidrojeoloji = arazi.get("hidrojeoloji")
+    if not isinstance(hidrojeoloji, dict):
+        hidrojeoloji = {}
+        arazi["hidrojeoloji"] = hidrojeoloji
+    _eksikleri_tamamla(hidrojeoloji, hidrojeoloji_varsayilanlari())
+    veri["schema_version"] = 2
+    return ["Hidrojeoloji rapor alanlari proje verisine eklendi."]
+
+
 def proje_verisini_migre_et(veri, varsayilan=None):
     """Proje verisini kopyalayarak guncel semaya getirir ve migrasyon bilgisini dondurur."""
     if not isinstance(veri, dict):
@@ -141,6 +157,9 @@ def proje_verisini_migre_et(veri, varsayilan=None):
     if surum == 0:
         notlar.extend(_v0_v1_migrasyonu(sonuc))
         surum = 1
+    if surum == 1:
+        notlar.extend(_v1_v2_migrasyonu(sonuc))
+        surum = 2
 
     if varsayilan is not None:
         if not isinstance(varsayilan, dict):
