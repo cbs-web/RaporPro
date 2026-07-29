@@ -3,13 +3,13 @@ import copy
 import os
 import tempfile
 import tkinter as tk
-from types import SimpleNamespace
 from tkinter import Toplevel, filedialog, messagebox, ttk
 
 import matplotlib.pyplot as plt
 
 from ai_motoru import AI_MOTOR_ADLARI, belediye_duzeltme_analiz_et, duzeltme_yonlendirmeleri_olustur
 from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
+from jeofizik_sheet_motoru import jeofizik_sheet_rapora_hazir_mi
 from rapor_metin_revizyon import metin_revizyon_analiz_et, metin_revizyonlari_uygula
 from rapor_revizyon import revizyonlu_rapor_olustur
 from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
@@ -35,9 +35,10 @@ from sabitler import (
 from performans import perf_tracked
 from kalite_kontrol import build_preflight_report
 from motor import GeoEngine
+from rapor_etiketleri import DUZELTME_ETIKET_GRUPLARI
 from raporlama import (
-    DUZELTME_ETIKET_GRUPLARI,
     duzeltme_etiket_ciktisi_olustur,
+    rapor_baglami_olustur,
     raporla as rapor_olustur,
 )
 from taahhutname import taahhutname_dosya_adi, taahhutname_olustur, tum_taahhutnameleri_olustur
@@ -68,6 +69,46 @@ from ui_rapor_onizleme import RaporOnizlemeMixin
 
 
 class RaporSekmesiMixin(RaporOnizlemeMixin):
+    def dis_ai_veri_aktarim_onayi(self, motor, veri_turu, parent=None):
+        """Dış AI kullanımında sağlayıcı ve gönderilecek veriyi bir kez açıkla."""
+        selected = str(motor or "otomatik").strip().lower()
+        if selected == "kural":
+            return True
+        provider = selected
+        if provider == "otomatik":
+            try:
+                from spt_okuma_motoru import spt_ayarlarini_yukle
+
+                provider = str(
+                    spt_ayarlarini_yukle().get("aktif_motor") or "openai"
+                ).strip().lower()
+            except Exception:
+                provider = "ayarlarınızda seçili dış sağlayıcı"
+        provider_labels = {
+            "openai": "OpenAI",
+            "gemini": "Google Gemini",
+            "gemini_pro": "Google Gemini",
+            "groq": "Groq",
+        }
+        provider_label = provider_labels.get(provider, provider)
+        approval_key = (provider, str(veri_turu))
+        approvals = getattr(self, "_dis_ai_veri_onaylari", set())
+        if approval_key in approvals:
+            return True
+        approved = messagebox.askyesno(
+            "Dış Yapay Zekâ Veri Aktarımı",
+            f"Bu işlem {veri_turu} verisini {provider_label} servisine gönderecek.\n\n"
+            "Proje/istemci gizliliği açısından gönderme yetkiniz olduğunu doğrulayın. "
+            "Veriyi dışarı göndermeden çalışmak için motor olarak 'kural' seçebilirsiniz.\n\n"
+            "Devam edilsin mi?",
+            parent=parent,
+        )
+        if approved:
+            approvals = set(approvals)
+            approvals.add(approval_key)
+            self._dis_ai_veri_onaylari = approvals
+        return bool(approved)
+
     @staticmethod
     def rapor_hazirlik_ozeti(template_ready, lab_ready, jeo_ready, visual_ready, visual_total=6):
         """Rapor kaynaklarının kısa durum metnini ve seviyesini döndür."""
@@ -94,7 +135,7 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
         lab_rows = self.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(self, "veri", None), dict) else []
         lab_sheet_ready = any(any(str(cell).strip() for cell in row) for row in lab_rows or [])
         lab_ready = lab_sheet_ready or file_ready(getattr(self, "lab_excel_path", None))
-        jeo_sheet_ready = bool(hasattr(self, "_jeofizik_sheet_ready") and self._jeofizik_sheet_ready())
+        jeo_sheet_ready = jeofizik_sheet_rapora_hazir_mi(getattr(self, "veri", {}))
         jeo_ready = jeo_sheet_ready or file_ready(getattr(self, "jeo_excel_path", None))
         visual_attrs = ("img_yer", "img_tkgm", "img_pga", "img_mjh", "word_img_sondaj", "word_img_jeofizik")
         visual_ready = sum(file_ready(getattr(self, attr, None)) for attr in visual_attrs)
@@ -1315,9 +1356,15 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
             if not text:
                 messagebox.showwarning("Düzeltme Asistanı", "Lütfen düzeltme metnini girin.", parent=win)
                 return
+            motor = motor_var.get()
+            if not self.dis_ai_veri_aktarim_onayi(
+                motor,
+                "belediye/kontrolör düzeltme notu",
+                parent=win,
+            ):
+                return
             set_result_text("Analiz yapılıyor...")
             status_var.set("Düzeltme metni analiz ediliyor.")
-            motor = motor_var.get()
             self.arka_plan_gorevi_baslat(
                 "Düzeltme asistanı",
                 self.duzeltme_asistani_worker,
@@ -1465,9 +1512,15 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
             if not text:
                 messagebox.showwarning("Rapor Revizyon Merkezi", "Lütfen düzeltme metnini girin.", parent=win)
                 return
+            motor = motor_var.get()
+            if not self.dis_ai_veri_aktarim_onayi(
+                motor,
+                "belediye/kontrolör düzeltme notu",
+                parent=win,
+            ):
+                return
             set_result_text("Analiz yapılıyor...")
             status_var.set("Düzeltme metni analiz ediliyor.")
-            motor = motor_var.get()
             self.arka_plan_gorevi_baslat(
                 "Revizyon düzeltme analizi",
                 self.duzeltme_asistani_worker,
@@ -1701,10 +1754,16 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
             if not note:
                 messagebox.showwarning("Rapor Metin Revizyonu", "Lütfen düzeltme notunu girin.", parent=win)
                 return
+            motor = motor_var.get()
+            if not self.dis_ai_veri_aktarim_onayi(
+                motor,
+                "düzeltme notu ve seçili Word raporunun ilgili metinleri",
+                parent=win,
+            ):
+                return
             temizle_sonuclar()
             set_preview("Rapor okunuyor ve düzeltme önerileri hazırlanıyor...")
             status_var.set("Hazır Word raporu okunuyor ve düzeltme notu analiz ediliyor.")
-            motor = motor_var.get()
             self.arka_plan_gorevi_baslat(
                 "Rapor metin revizyon analizi",
                 self.rapor_metin_revizyon_analiz_worker,
@@ -2464,12 +2523,18 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
             if not text:
                 messagebox.showwarning("Rapor Revizyon Merkezi", "Lütfen belediye düzeltme notunu girin.", parent=win)
                 return
+            motor = motor_var.get()
+            if not self.dis_ai_veri_aktarim_onayi(
+                motor,
+                "belediye düzeltme notu ve seçili Word raporunun ilgili metinleri",
+                parent=win,
+            ):
+                return
             set_summary("Analiz yapılıyor...")
             clear_text_results()
             set_guidance([])
             set_regulation_result({"items": [], "documents": yonetmelikleri_listele(), "warnings": ["Analiz yapılıyor..."]})
             status_var.set("Belediye düzeltmesi tek merkezde analiz ediliyor.")
-            motor = motor_var.get()
             self.arka_plan_gorevi_baslat(
                 "Birleşik rapor revizyon analizi",
                 self.rapor_revizyon_birlesik_analiz_worker,
@@ -2721,18 +2786,9 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
             messagebox.showerror("Düzeltme Etiketleri", msg)
 
     def rapor_arka_plan_context(self):
-        return SimpleNamespace(
+        return rapor_baglami_olustur(
+            self,
             word_path=etkin_rapor_sablonu_yolu(self.word_path),
-            veri=copy.deepcopy(self.veri),
-            jeo_excel_path=getattr(self, "jeo_excel_path", None),
-            lab_excel_path=getattr(self, "lab_excel_path", None),
-            img_yer=getattr(self, "img_yer", None),
-            img_tkgm=getattr(self, "img_tkgm", None),
-            img_pga=getattr(self, "img_pga", None),
-            img_mjh=getattr(self, "img_mjh", None),
-            word_img_jeofizik=getattr(self, "word_img_jeofizik", None),
-            word_img_sondaj=getattr(self, "word_img_sondaj", None),
-            set_status=self.set_status,
         )
 
     @perf_tracked("report.generate.engine")

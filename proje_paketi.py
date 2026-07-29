@@ -24,6 +24,25 @@ _CIKTI_KLASORU_AYARLARI = {
     "log_export_klasor",
     "cikti_merkezi_klasor",
 }
+_DOSYALAR_REFERANSLARI = {
+    "kml_path",
+    "word_path",
+    "lab_excel_path",
+    "jeo_excel_path",
+    "img_yer",
+    "img_tkgm",
+    "img_pga",
+    "img_mjh",
+    "word_img_sondaj",
+    "word_img_jeofizik",
+}
+_AYAR_REFERANSLARI = {
+    "varsayilan_word_path",
+    "ek_tutanak_path",
+    "ek_arazi_deneyli_path",
+    "tutanak_sablon_path",
+}
+_HARITA_REFERANSLARI = {"img_path"}
 
 
 def _metin(value):
@@ -36,8 +55,13 @@ def _guvenli_ad(value, fallback="Proje"):
     return text or fallback
 
 
+def _paylasilabilir_dosya_adi(value):
+    text = _metin(value).strip('"').replace("\\", "/").rstrip("/")
+    return text.rsplit("/", 1)[-1] if text else ""
+
+
 def _norm(path):
-    return os.path.normcase(os.path.abspath(os.fspath(path)))
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path))))
 
 
 def _altinda_mi(path, root):
@@ -45,6 +69,30 @@ def _altinda_mi(path, root):
         return os.path.commonpath([_norm(path), _norm(root)]) == _norm(root)
     except (TypeError, ValueError, OSError):
         return False
+
+
+def _guvenli_paket_goreli_yolu(value, root):
+    relative = _metin(value).replace("\\", os.sep).replace("/", os.sep)
+    if not relative or os.path.isabs(relative) or os.path.splitdrive(relative)[0]:
+        return ""
+    candidate = os.path.abspath(os.path.join(root, relative))
+    if not _altinda_mi(candidate, root):
+        return ""
+    return os.path.relpath(candidate, root).replace(os.sep, "/")
+
+
+def _mutlak_yollari_paylasima_hazirla(veri):
+    """Paket JSON'unda whitelist disinda kalan yerel mutlak yolları gizle."""
+
+    for data_path, current in list(_veri_yollarini_dolas(veri)):
+        if data_path and data_path[0] == PAKET_META_KEY:
+            continue
+        text = _metin(current).strip('"')
+        if not text:
+            continue
+        if os.path.isabs(text) or bool(os.path.splitdrive(text)[0]):
+            _veri_yoluna_yaz(veri, data_path, _paylasilabilir_dosya_adi(text))
+    return veri
 
 
 def _veri_yollarini_dolas(value, path=()):
@@ -89,18 +137,18 @@ def _kaynak_dosya_coz(value, project_dir):
 def _muhtemel_dosya_referansi(path, value):
     if not path or not _metin(value):
         return False
-    top = path[0]
+    top = str(path[0])
     last = str(path[-1]).lower()
     if top == "dosyalar":
-        return True
+        return len(path) == 2 and last in _DOSYALAR_REFERANSLARI
     if top == "ek_icerikleri":
-        return isinstance(path[-1], int)
+        return len(path) >= 4 and isinstance(path[-1], int)
     if top == "harita_cizimleri":
-        return any(token in last for token in ("path", "img", "image", "source", "altlik"))
+        return last in _HARITA_REFERANSLARI
     if top == "ayarlar":
         if last in _CIKTI_KLASORU_AYARLARI:
             return False
-        return last.endswith(("_path", "_file", "_dosya")) or "sablon" in last
+        return len(path) == 2 and last in _AYAR_REFERANSLARI
     return False
 
 
@@ -178,13 +226,15 @@ def proje_paketi_olustur(veri, source_project_path, parent_dir, task_context=Non
 
     candidates = []
     for data_path, raw_value in _veri_yollarini_dolas(packaged):
+        if not _muhtemel_dosya_referansi(data_path, raw_value):
+            continue
         source = _kaynak_dosya_coz(raw_value, source_dir)
         if source:
             candidates.append((data_path, raw_value, source))
-        elif _muhtemel_dosya_referansi(data_path, raw_value):
+        else:
             missing.append({
                 "data_path": list(data_path),
-                "value": raw_value,
+                "value": _paylasilabilir_dosya_adi(raw_value),
             })
 
     total = max(1, len(candidates) + 2)
@@ -210,12 +260,12 @@ def proje_paketi_olustur(veri, source_project_path, parent_dir, task_context=Non
                 "data_path": list(data_path),
                 "source_name": os.path.basename(source),
                 "relative_path": portable_value,
-                "original_value": raw_value,
             })
             if task_context:
                 task_context.report(index, total, f"Kopyalandi: {os.path.basename(source)}")
         if task_context:
             task_context.check_cancelled()
+        _mutlak_yollari_paylasima_hazirla(packaged)
     except Exception:
         _yarim_paketi_temizle(target_dir, parent_dir)
         raise
@@ -244,7 +294,7 @@ def proje_paketi_olustur(veri, source_project_path, parent_dir, task_context=Non
         "package_id": package_id,
         "created_at": packaged[PAKET_META_KEY]["created_at"],
         "project_file": project_filename,
-        "source_project": source_project_path,
+        "source_project": _paylasilabilir_dosya_adi(source_project_path),
         "copied_file_count": len(source_to_relative),
         "reference_count": len(references),
         "missing_count": len(missing),
@@ -304,9 +354,13 @@ def paket_proje_verisini_yukle(veri, project_path):
         if not isinstance(data_path, list) or not relative:
             continue
         try:
-            candidate = os.path.abspath(os.path.join(project_dir, relative))
-            if not _altinda_mi(candidate, project_dir):
+            current = _veri_yolundan_oku(result, tuple(data_path))
+            if not _muhtemel_dosya_referansi(tuple(data_path), current):
                 continue
+            relative = _guvenli_paket_goreli_yolu(relative, project_dir)
+            if not relative:
+                continue
+            candidate = os.path.abspath(os.path.join(project_dir, relative))
             _veri_yoluna_yaz(result, tuple(data_path), candidate)
         except (KeyError, IndexError, TypeError):
             continue
@@ -326,7 +380,33 @@ def paket_proje_verisini_kayda_hazirla(veri, project_path):
         result.pop(PAKET_META_KEY, None)
         return result
 
-    references = meta.get("references", []) or []
+    references = []
+    for reference in meta.get("references", []) or []:
+        if not isinstance(reference, dict):
+            continue
+        data_path = reference.get("data_path")
+        relative = _metin(reference.get("relative_path"))
+        if not isinstance(data_path, list) or not relative:
+            continue
+        try:
+            current = _veri_yolundan_oku(result, tuple(data_path))
+        except (KeyError, IndexError, TypeError):
+            continue
+        if not _muhtemel_dosya_referansi(tuple(data_path), current):
+            continue
+        safe_relative = _guvenli_paket_goreli_yolu(relative, target_root)
+        if not safe_relative and isinstance(current, str) and os.path.isabs(current) and _altinda_mi(current, target_root):
+            safe_relative = os.path.relpath(current, target_root).replace(os.sep, "/")
+        if not safe_relative:
+            continue
+        references.append({
+            "data_path": list(data_path),
+            "source_name": _paylasilabilir_dosya_adi(
+                reference.get("source_name") or safe_relative
+            ),
+            "relative_path": safe_relative,
+        })
+    meta["references"] = references
     referenced_paths = {
         tuple(reference.get("data_path") or [])
         for reference in references
@@ -341,12 +421,16 @@ def paket_proje_verisini_kayda_hazirla(veri, project_path):
             current = _veri_yolundan_oku(result, tuple(data_path))
         except (KeyError, IndexError, TypeError):
             continue
+        if not _muhtemel_dosya_referansi(tuple(data_path), current):
+            continue
         if isinstance(current, str) and os.path.isabs(current) and _altinda_mi(current, target_root):
             portable = os.path.relpath(current, target_root).replace(os.sep, "/")
             _veri_yoluna_yaz(result, tuple(data_path), portable)
             reference["relative_path"] = portable
     for data_path, current in list(_veri_yollarini_dolas(result)):
         if data_path and data_path[0] == PAKET_META_KEY:
+            continue
+        if not _muhtemel_dosya_referansi(data_path, current):
             continue
         if not os.path.isabs(current) or not os.path.isfile(current) or not _altinda_mi(current, target_root):
             continue
@@ -357,9 +441,9 @@ def paket_proje_verisini_kayda_hazirla(veri, project_path):
                 "data_path": list(data_path),
                 "source_name": os.path.basename(current),
                 "relative_path": portable,
-                "original_value": current,
             })
             referenced_paths.add(data_path)
+    _mutlak_yollari_paylasima_hazirla(result)
     return result
 
 

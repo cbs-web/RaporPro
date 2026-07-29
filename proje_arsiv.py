@@ -215,11 +215,12 @@ def arsiv_kaydi_sil(project_path, index_path=COMPLETED_PROJECTS_PATH):
 
 
 def _kml_description(record):
+    project_name = os.path.basename(str(record.get("path") or "").replace("\\", "/"))
     lines = [
         f"Adres: {_clean_text(record.get('address'))}",
         f"Ada/Parsel: {_clean_text(record.get('ada'))}/{_clean_text(record.get('parsel'))}",
         f"Tamamlanma: {_clean_text(record.get('completed_at'))}",
-        f"Dosya: {_clean_text(record.get('path'))}",
+        f"Dosya: {_clean_text(project_name)}",
     ]
     return "<br/>".join(escape(line) for line in lines)
 

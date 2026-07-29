@@ -25,6 +25,8 @@ autosave/
 _log_analiz/
 _smoke_test/
 harita_ciktilari/
+.qa/
+spt_ogrenme_verisi/
 
 *.zip
 ~$*
@@ -42,6 +44,3 @@ harita_ciktilari/
 recent_projects.json
 Zemin_Etud_Projesi.json
 zemin_proje_data.json
-
-# Gecici log uyumluluk koprusu icin gerekli sabit cache dosyasi.
-!motor_log_cache.cpython-311.pyc

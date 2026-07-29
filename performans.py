@@ -1,6 +1,7 @@
 import datetime
 import functools
 import os
+import re
 import sys
 import threading
 import time
@@ -15,6 +16,34 @@ PERF_LOG_PATH = str(kullanici_yolu("logs", "performance.log"))
 ERROR_LOG_PATH = str(kullanici_yolu("logs", "error.log"))
 _PERF_LOCK = threading.Lock()
 _ERROR_LOCK = threading.Lock()
+_GIZLI_BILGI_DESENLERI = (
+    re.compile(r"(?i)([?&](?:key|api[_-]?key|access_token)=)[^&\s\"'<>]+"),
+    re.compile(
+        r"(?i)((?:authorization|x-goog-api-key)\s*[:=]\s*(?:bearer\s+)?)[^\s,;\"'}]+"
+    ),
+    re.compile(
+        r"(?i)([\"']?(?:(?:openai|gemini|groq)[_-])?api[_-]?key[\"']?"
+        r"\s*[:=]\s*[\"']?)[^,\s\"'}]+"
+    ),
+    re.compile(r"\b(?:AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z_-]{8,}|gsk_[0-9A-Za-z_-]{8,})\b"),
+)
+
+
+def gizli_bilgileri_maskele(value, ek_gizli_degerler=()):
+    """Log ve hata metinlerindeki yaygın kimlik bilgilerini geri döndürülemez biçimde maskeler."""
+    text = str(value or "")
+    if isinstance(ek_gizli_degerler, str):
+        ek_gizli_degerler = (ek_gizli_degerler,)
+    secrets = sorted(
+        {str(item) for item in (ek_gizli_degerler or ()) if item and len(str(item)) >= 4},
+        key=len,
+        reverse=True,
+    )
+    for secret in secrets:
+        text = text.replace(secret, "***")
+    for pattern in _GIZLI_BILGI_DESENLERI:
+        text = pattern.sub(lambda match: f"{match.group(1)}***" if match.lastindex else "***", text)
+    return text
 
 
 def perf_log(name, seconds=None, detail=""):
@@ -22,7 +51,8 @@ def perf_log(name, seconds=None, detail=""):
         os.makedirs(os.path.dirname(PERF_LOG_PATH), exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         elapsed = "" if seconds is None else f"{seconds:.4f}s"
-        detail = str(detail or "").replace("\n", " ").replace("\r", " ")
+        name = gizli_bilgileri_maskele(name)
+        detail = gizli_bilgileri_maskele(detail).replace("\n", " ").replace("\r", " ")
         with _PERF_LOCK:
             with open(PERF_LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(f"{stamp}\t{name}\t{elapsed}\t{detail}\n")
@@ -61,7 +91,10 @@ def log_exception(name, exc_type=None, exc_value=None, exc_tb=None):
             exc_type, exc_value, exc_tb = sys.exc_info()
         os.makedirs(os.path.dirname(ERROR_LOG_PATH), exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        formatted = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        name = gizli_bilgileri_maskele(name)
+        formatted = gizli_bilgileri_maskele(
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        )
         with _ERROR_LOCK:
             with open(ERROR_LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(f"\n[{stamp}] {name}\n{formatted}\n")

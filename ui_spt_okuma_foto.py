@@ -68,6 +68,7 @@ def start_photo_reading(app, win, paths, target_var, status_var, project_spt_set
             progress_callback=progress_callback,
             stop_event=stop_event,
             auto_pro=settings["auto_pro"],
+            guven_esigi=settings["guven_esigi"],
         )
 
     app.arka_plan_gorevi_baslat(

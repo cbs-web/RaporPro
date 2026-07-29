@@ -3,13 +3,50 @@ import json
 import re
 import unicodedata
 
-from raporlama import DUZELTME_ETIKET_ADLARI
+from performans import gizli_bilgileri_maskele
+from rapor_etiketleri import DUZELTME_ETIKET_ADLARI
 from spt_okuma_motoru import openai_model_sec, spt_ayarlarini_yukle
 
 
 AI_MOTOR_ADLARI = ("otomatik", "openai", "gemini", "gemini_pro", "groq", "kural")
 
 DUZELTME_ETIKET_KURALLARI = [
+    {
+        "tag": "[BOLGESEL_JEOLOJI]",
+        "label": "Bölgesel jeoloji açıklaması",
+        "keywords": ["bölgesel jeoloji", "bolgesel jeoloji", "bölge jeolojisi", "stratigrafi"],
+        "action": "Bölgesel jeoloji açıklamasını kontrol et.",
+    },
+    {
+        "tag": "[BOLGESEL_JEOLOJI_BIRIMLERI]",
+        "label": "Bölgesel jeoloji birim açıklamaları",
+        "keywords": ["jeoloji birimleri", "jeolojik birimler", "formasyon açıklama", "birim açıklama"],
+        "action": "Seçilen bölgesel jeoloji birimlerinin açıklamalarını kontrol et.",
+    },
+    {
+        "tag": "[MUHENDISLIK_JEOLOJISI]",
+        "label": "Mühendislik jeolojisi açıklaması",
+        "keywords": ["mühendislik jeolojisi", "muhendislik jeolojisi", "inceleme alanı jeolojisi"],
+        "action": "İnceleme alanı mühendislik jeolojisi açıklamasını kontrol et.",
+    },
+    {
+        "tag": "[JEOLOJIK_KESIT_ACIKLAMA]",
+        "label": "Jeolojik kesit birim açıklaması",
+        "keywords": ["jeolojik kesit", "kesit açıklama", "kesit aciklama", "kesit birimleri"],
+        "action": "Jeolojik kesitte kullanılan birim açıklamalarını kontrol et.",
+    },
+    {
+        "tag": "[JEOLOJI_SONUC]",
+        "label": "Jeoloji sonuç cümlesi",
+        "keywords": ["jeoloji sonuç", "jeoloji sonuc", "jeolojik değerlendirme", "jeolojik degerlendirme"],
+        "action": "Jeoloji sonuç ve değerlendirme metnini kontrol et.",
+    },
+    {
+        "tag": "[MT_BIRIM_METNI]",
+        "label": "Mikrotremör birim açıklaması",
+        "keywords": ["mikrotremör birim", "mikrotremor birim", "mt birim", "mikrotremör formasyon"],
+        "action": "Mikrotremör sonuç metnindeki jeolojik birim açıklamasını kontrol et.",
+    },
     {
         "tag": "[BINA_BILGILERI]",
         "label": "Bina bilgileri",
@@ -156,7 +193,7 @@ DUZELTME_ETIKET_KURALLARI = [
     },
 ]
 
-ALLOWED_TAGS = tuple(item["tag"] for item in DUZELTME_ETIKET_KURALLARI)
+ALLOWED_TAGS = tuple(DUZELTME_ETIKET_ADLARI)
 
 
 def _yonlendirme_item(
@@ -581,22 +618,30 @@ def _ai_ile_analiz_et(text, ayarlar=None, motor=None, timeout=45):
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         if response.status_code != 200:
-            raise RuntimeError(f"{aktif.upper()} hata kodu {response.status_code}: {response.text[:500]}")
+            detail = gizli_bilgileri_maskele(response.text[:500], (api_key,))
+            raise RuntimeError(f"{aktif.upper()} hata kodu {response.status_code}: {detail}")
         raw = response.json()["choices"][0]["message"]["content"]
     else:
         model_id = "gemini-2.5-pro" if aktif == "gemini_pro" else "gemini-2.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={ayarlar['gemini_api_key']}"
+        api_key = ayarlar["gemini_api_key"]
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.1, "response_mime_type": "application/json"},
         }
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=timeout)
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            json=payload,
+            timeout=timeout,
+        )
         if response.status_code != 200:
             try:
                 msg = response.json().get("error", {}).get("message", response.text)
             except Exception:
                 msg = response.text
-            raise RuntimeError(f"GEMINI hata kodu {response.status_code}: {msg[:500]}")
+            detail = gizli_bilgileri_maskele(str(msg)[:500], (api_key,))
+            raise RuntimeError(f"GEMINI hata kodu {response.status_code}: {detail}")
         raw = response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
     parsed = _json_from_text(raw)

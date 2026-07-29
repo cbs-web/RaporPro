@@ -223,9 +223,6 @@ class KontrolPaneliMixin:
         rows = self.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(self, "veri", None), dict) else []
         return any(any(str(cell).strip() for cell in row) for row in rows or [])
 
-    def _jeofizik_sheet_ready(self):
-        return jeofizik_sheet_var_mi(getattr(self, "veri", {})) and jeofizik_sheet_ozeti(getattr(self, "veri", {})).get("ready", False)
-
     def _dosya_durumu(self, path):
         if path and os.path.exists(path):
             return f"Hazır: {os.path.basename(path)}", True

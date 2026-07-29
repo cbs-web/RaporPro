@@ -29,6 +29,32 @@ A4_WIDTH = 595.0
 A4_HEIGHT = 842.0
 
 
+def _com_guvenli_temizle(pythoncom, com_initialized=False, belge=None, uygulama=None):
+    """COM temizligini, bir adimdaki hata digerlerini engellemeden tamamla."""
+    if belge is not None:
+        try:
+            belge.Close(False)
+        except Exception:
+            pass
+    if uygulama is not None:
+        try:
+            uygulama.Quit()
+        except Exception:
+            pass
+    if com_initialized:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def _com_ozelligini_ayarla(nesne, ad, deger):
+    try:
+        setattr(nesne, ad, deger)
+    except Exception:
+        pass
+
+
 def _a4_size_for(width, height):
     if float(width or 0) > float(height or 0):
         return A4_HEIGHT, A4_WIDTH
@@ -385,19 +411,35 @@ def _office_to_pdf(path, tmp_dir):
 
         app = None
         doc = None
-        pythoncom.CoInitialize()
+        com_initialized = False
         try:
+            pythoncom.CoInitialize()
+            com_initialized = True
             app = win32com.client.DispatchEx("Word.Application")
             app.Visible = False
             app.DisplayAlerts = 0
-            doc = app.Documents.Open(os.path.abspath(path), ReadOnly=True)
+            _com_ozelligini_ayarla(app, "AutomationSecurity", 3)
+            try:
+                _com_ozelligini_ayarla(app.Options, "UpdateLinksAtOpen", False)
+            except Exception:
+                pass
+            doc = app.Documents.Open(
+                os.path.abspath(path),
+                ConfirmConversions=False,
+                ReadOnly=True,
+                AddToRecentFiles=False,
+                Visible=False,
+                OpenAndRepair=False,
+                NoEncodingDialog=True,
+            )
             doc.SaveAs(os.path.abspath(output_path), FileFormat=17)
         finally:
-            if doc is not None:
-                doc.Close(False)
-            if app is not None:
-                app.Quit()
-            pythoncom.CoUninitialize()
+            _com_guvenli_temizle(
+                pythoncom,
+                com_initialized=com_initialized,
+                belge=doc,
+                uygulama=app,
+            )
         return output_path
     if ext in (".xls", ".xlsx"):
         import pythoncom
@@ -405,19 +447,32 @@ def _office_to_pdf(path, tmp_dir):
 
         app = None
         workbook = None
-        pythoncom.CoInitialize()
+        com_initialized = False
         try:
+            pythoncom.CoInitialize()
+            com_initialized = True
             app = win32com.client.DispatchEx("Excel.Application")
             app.Visible = False
             app.DisplayAlerts = False
-            workbook = app.Workbooks.Open(os.path.abspath(path))
+            _com_ozelligini_ayarla(app, "AutomationSecurity", 3)
+            _com_ozelligini_ayarla(app, "AskToUpdateLinks", False)
+            _com_ozelligini_ayarla(app, "EnableEvents", False)
+            workbook = app.Workbooks.Open(
+                os.path.abspath(path),
+                UpdateLinks=0,
+                ReadOnly=True,
+                IgnoreReadOnlyRecommended=True,
+                AddToMru=False,
+                Notify=False,
+            )
             workbook.ExportAsFixedFormat(0, os.path.abspath(output_path))
         finally:
-            if workbook is not None:
-                workbook.Close(False)
-            if app is not None:
-                app.Quit()
-            pythoncom.CoUninitialize()
+            _com_guvenli_temizle(
+                pythoncom,
+                com_initialized=com_initialized,
+                belge=workbook,
+                uygulama=app,
+            )
         return output_path
     raise ValueError(f"Bu dosya türü PDF'e çevrilemiyor: {ext}")
 
@@ -437,34 +492,75 @@ def _append_attachment(pdf_doc, path, tmp_dir):
     raise ValueError(f"Desteklenmeyen ek dosyası türü: {ext}")
 
 
+def _pdf_ciktisini_dogrula(path):
+    if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+        raise RuntimeError("Ekler PDF çıktısı boş veya oluşturulamadı.")
+    kontrol = None
+    try:
+        kontrol = fitz.open(path)
+        if kontrol.page_count <= 0:
+            raise RuntimeError("Ekler PDF çıktısında sayfa bulunamadı.")
+    finally:
+        if kontrol is not None:
+            try:
+                kontrol.close()
+            except Exception:
+                pass
+
+
 def ekler_pdf_olustur(veri, output_path, set_key=None):
     set_key, label, _ = ek_set_sablonu(veri, set_key)
     basliklar = ek_basliklari(veri, set_key)
     icerikler = ek_icerik_haritasi(veri, set_key)
     warnings = []
     attached_count = 0
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    pdf_doc = fitz.open()
-    with tempfile.TemporaryDirectory(prefix="raporpro_ekler_") as tmp_dir:
-        for item in basliklar:
-            no = str(item["no"])
-            _append_cover_page(pdf_doc, no, item.get("titles", []))
-            for path in list(icerikler.get(no, []) or []):
-                if not path or not os.path.exists(path):
-                    warnings.append(f"EK-{no}: dosya bulunamadı: {path}")
-                    continue
-                try:
-                    _append_attachment(pdf_doc, path, tmp_dir)
-                    attached_count += 1
-                except Exception as exc:
-                    warnings.append(f"EK-{no}: {os.path.basename(path)} eklenemedi: {exc}")
-                    _append_message_page(pdf_doc, f"EK-{no} Dosya Eklenemedi", [os.path.basename(path), str(exc)])
-        if pdf_doc.page_count == 0:
-            _append_message_page(pdf_doc, "Ekler", ["Ek kapak sayfası bulunamadı."])
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        pdf_doc.save(output_path, garbage=4, deflate=True)
-    pdf_doc.close()
+    output_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    temp_fd, temp_output_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(output_path)}.",
+        suffix=".tmp.pdf",
+        dir=output_dir,
+    )
+    os.close(temp_fd)
+    try:
+        with tempfile.TemporaryDirectory(prefix="raporpro_ekler_") as tmp_dir:
+            pdf_doc = None
+            try:
+                pdf_doc = fitz.open()
+                for item in basliklar:
+                    no = str(item["no"])
+                    _append_cover_page(pdf_doc, no, item.get("titles", []))
+                    for path in list(icerikler.get(no, []) or []):
+                        if not path or not os.path.exists(path):
+                            warnings.append(f"EK-{no}: dosya bulunamadı: {path}")
+                            continue
+                        try:
+                            _append_attachment(pdf_doc, path, tmp_dir)
+                            attached_count += 1
+                        except Exception as exc:
+                            warnings.append(f"EK-{no}: {os.path.basename(path)} eklenemedi: {exc}")
+                            _append_message_page(
+                                pdf_doc,
+                                f"EK-{no} Dosya Eklenemedi",
+                                [os.path.basename(path), str(exc)],
+                            )
+                if pdf_doc.page_count == 0:
+                    _append_message_page(pdf_doc, "Ekler", ["Ek kapak sayfası bulunamadı."])
+                pdf_doc.save(temp_output_path, garbage=4, deflate=True)
+            finally:
+                if pdf_doc is not None:
+                    try:
+                        pdf_doc.close()
+                    except Exception:
+                        pass
+        _pdf_ciktisini_dogrula(temp_output_path)
+        os.replace(temp_output_path, output_path)
+    finally:
+        if os.path.exists(temp_output_path):
+            try:
+                os.remove(temp_output_path)
+            except OSError:
+                pass
     return {
         "path": output_path,
         "set_key": set_key,

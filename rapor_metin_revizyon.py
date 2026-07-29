@@ -7,6 +7,8 @@ import re
 from typing import Any
 
 from docx import Document
+from performans import gizli_bilgileri_maskele
+from yardimcilar import atomic_docx_save
 
 
 MAX_AI_UNIT_COUNT = 70
@@ -319,22 +321,30 @@ def _ai_metin_revizyonu(note, units, motor="otomatik", timeout=45):
         payload = {key: value for key, value in payload.items() if value is not None}
         response = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=timeout)
         if response.status_code != 200:
-            raise RuntimeError(f"{aktif.upper()} hata kodu {response.status_code}: {response.text[:500]}")
+            detail = gizli_bilgileri_maskele(response.text[:500], (api_key,))
+            raise RuntimeError(f"{aktif.upper()} hata kodu {response.status_code}: {detail}")
         raw = response.json()["choices"][0]["message"]["content"]
     elif aktif in ("gemini", "gemini_pro"):
         model_id = "gemini-2.5-pro" if aktif == "gemini_pro" else "gemini-2.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={ayarlar['gemini_api_key']}"
+        api_key = ayarlar["gemini_api_key"]
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.05, "response_mime_type": "application/json"},
         }
-        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=timeout)
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            json=payload,
+            timeout=timeout,
+        )
         if response.status_code != 200:
             try:
                 msg = response.json().get("error", {}).get("message", response.text)
             except Exception:
                 msg = response.text
-            raise RuntimeError(f"GEMINI hata kodu {response.status_code}: {msg[:500]}")
+            detail = gizli_bilgileri_maskele(str(msg)[:500], (api_key,))
+            raise RuntimeError(f"GEMINI hata kodu {response.status_code}: {detail}")
         raw = response.json()["candidates"][0]["content"]["parts"][0]["text"]
     else:
         raise RuntimeError(f"Desteklenmeyen AI motoru: {aktif}")
@@ -503,7 +513,7 @@ def metin_revizyonlari_uygula(word_path, revisions, output_path):
         }
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    doc.save(output_path)
+    atomic_docx_save(doc, output_path)
     message = f"Metin revizyonlu rapor oluşturuldu. Uygulanan düzeltme: {len(applied)}."
     if skipped:
         message += f" Atlanan düzeltme: {len(skipped)}."

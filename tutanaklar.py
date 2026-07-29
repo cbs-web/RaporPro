@@ -10,9 +10,42 @@ from docx.table import Table
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from yardimcilar import atomic_docx_save
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TEMPLATE_PATH = os.path.join(APP_DIR, "Tutanak Örnek.docx")
+
+
+def _com_guvenli_temizle(pythoncom, com_initialized=False, belge=None, uygulama=None):
+    if belge is not None:
+        try:
+            belge.Close(False)
+        except Exception:
+            pass
+    if uygulama is not None:
+        try:
+            uygulama.Quit()
+        except Exception:
+            pass
+    if com_initialized:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def _com_ozelligini_ayarla(nesne, ad, deger):
+    try:
+        setattr(nesne, ad, deger)
+    except Exception:
+        pass
+
+
+def _raporpro_docx_metadata(doc):
+    doc.core_properties.author = "RaporPro"
+    doc.core_properties.last_modified_by = "RaporPro"
+    return doc
 
 
 def _clean(value, fallback=""):
@@ -322,19 +355,35 @@ def _export_docx_to_pdf(docx_path, pdf_path):
         raise RuntimeError(f"Tutanak PDF aktarımı için pywin32 bulunamadı: {exc}") from exc
     app = None
     doc = None
-    pythoncom.CoInitialize()
+    com_initialized = False
     try:
+        pythoncom.CoInitialize()
+        com_initialized = True
         app = win32com.client.DispatchEx("Word.Application")
         app.Visible = False
         app.DisplayAlerts = 0
-        doc = app.Documents.Open(os.path.abspath(docx_path), ReadOnly=True)
+        _com_ozelligini_ayarla(app, "AutomationSecurity", 3)
+        try:
+            _com_ozelligini_ayarla(app.Options, "UpdateLinksAtOpen", False)
+        except Exception:
+            pass
+        doc = app.Documents.Open(
+            os.path.abspath(docx_path),
+            ConfirmConversions=False,
+            ReadOnly=True,
+            AddToRecentFiles=False,
+            Visible=False,
+            OpenAndRepair=False,
+            NoEncodingDialog=True,
+        )
         doc.SaveAs(os.path.abspath(pdf_path), FileFormat=17)
     finally:
-        if doc is not None:
-            doc.Close(False)
-        if app is not None:
-            app.Quit()
-        pythoncom.CoUninitialize()
+        _com_guvenli_temizle(
+            pythoncom,
+            com_initialized=com_initialized,
+            belge=doc,
+            uygulama=app,
+        )
 
 
 def tutanak_dosya_adi(veri, ext=".docx"):
@@ -357,6 +406,7 @@ def tutanaklari_olustur(veri, output_path, lokasyon_haritasi=None):
     out_doc = Document(template_path)
     _clear_body(out_doc)
     _compact_output_page_layout(out_doc)
+    _raporpro_docx_metadata(out_doc)
     sondajlar = list((veri or {}).get("sondaj", []) or [])
     ss_list = list(((veri or {}).get("jeofizik", {}) or {}).get("ss_list", []) or [])
 
@@ -389,11 +439,11 @@ def tutanaklari_olustur(veri, output_path, lokasyon_haritasi=None):
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     if ext == ".docx":
-        out_doc.save(output_path)
+        atomic_docx_save(out_doc, output_path)
         return {"path": output_path, "sondaj_count": len(sondajlar), "jeofizik_count": len(ss_list)}
 
     with tempfile.TemporaryDirectory(prefix="raporpro_tutanak_") as tmp_dir:
         docx_path = os.path.join(tmp_dir, tutanak_dosya_adi(veri, ".docx"))
-        out_doc.save(docx_path)
+        atomic_docx_save(out_doc, docx_path)
         _export_docx_to_pdf(docx_path, output_path)
     return {"path": output_path, "sondaj_count": len(sondajlar), "jeofizik_count": len(ss_list)}

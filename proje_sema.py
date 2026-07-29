@@ -4,12 +4,20 @@
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import dataclass
 
 from hidrojeoloji_raporu import hidrojeoloji_varsayilanlari
+from jeoloji_raporu import (
+    JEOLOJI_BIRIM_KATALOGU,
+    jeoloji_kodu_normalize,
+    jeoloji_varsayilanlari,
+)
+from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT
+from proje_surumleri import VARSAYILAN_SURUM_SINIRI
 
 
-PROJE_SEMA_SURUMU = 2
+PROJE_SEMA_SURUMU = 3
 
 
 class ProjeSemaHatasi(ValueError):
@@ -38,6 +46,95 @@ _DOSYA_ALANLARI = {
 }
 
 
+def varsayilan_proje_verisi():
+    """Yeni proje ve sema onarimi icin tek kanonik veri yapisini dondurur."""
+    return {
+        "schema_version": PROJE_SEMA_SURUMU,
+        "kunye": {"sahibi":"", "il":"", "ilce":"", "mah":"", "mev":"", "paf":"", "ada":"", "par":""},
+        "bina": {"kul":"", "sinif":"", "onem":"", "malz":"", "bod":"", "kat":"", "plan":"", "yukseklik":"", "yukseklik_sinif":"", "temel_alan":"", "ins":"", "der":"", "gqe_min":"", "gqe_max":"", "gqe_ort":"", "comb_min":"", "comb_max":"", "comb_ort":"", "ysinif":"", "tem":"", "coklu_blok": False, "bloklar": []},
+        "arazi": {
+            "kot": "", "yon": "", "egim": "", "min": "", "max": "", "ort": "",
+            "imar_alani": "", "imar_durumu": "", "zemin": "", "kategori": "",
+            "pga": "", "alan_y": "", "alan_x": "",
+            "hidrojeoloji": hidrojeoloji_varsayilanlari(),
+        },
+        "sondaj": [],
+        "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
+        "jeoloji": jeoloji_varsayilanlari(),
+        "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
+        "lab_sheet": {"rows": []},
+        "jeofizik_sheet": {"rows": []},
+        "kesit_ayarlari": {
+            "section_engine": KESIT_ENGINE_DEFAULT,
+            "show_detailed_lithology_labels": False,
+        },
+        "ek_icerikleri": {"normal": {}, "arazi_deneyli": {}},
+        "proje_durumu": {"tamamlandi": False, "kilitli": False, "tamamlanma_tarihi": "", "arsiv_notu": ""},
+        "ayarlar": {
+            "firma_adi": "UB ZEMIN MUHENDISLIK",
+            "log_baslik": "SONDAJ LOGU",
+            "sorumlu_muhendis_unvan": "Sorumlu Jeoloji Muhendisi",
+            "sorumlu_muhendis": "Gökalp DOĞAN",
+            "sondor_belge_baslik": "Sondor Belge No",
+            "sondor_belge": "Murat ERÇELİK 3629",
+            "makine_metodu": "Rotary / Burgusuz",
+            "spt_sahmerdan": "Otomatik",
+            "sondaj_turu": "Zemin",
+            "delgi_capi": "76mm",
+            "varsayilan_word_path": "",
+            "varsayilan_cikti_klasor": "",
+            "log_export_klasor": "",
+            "log_export_format": "JPG",
+            "log_export_dpi": "300",
+            "log_export_prefix": "Log",
+            "cikti_merkezi_klasor": "",
+            "cikti_merkezi_format": "JPG",
+            "cikti_merkezi_dpi": "300",
+            "cikti_merkezi_secimler": {
+                "report": True,
+                "logs": True,
+                "section": True,
+                "maps": True,
+                "report_images": True,
+                "taahhutnameler": True,
+                "ekler": True,
+            },
+            "harita_altlik": "Google Uydu",
+            "rapor_buyuk_baslik_yeni_sayfa": "1",
+            "taahhut_ilgili_idare": "",
+            "taahhut_tarih": "",
+            "ek_tutanak_path": "",
+            "ek_arazi_deneyli_path": "",
+            "tutanak_sablon_path": "",
+            "tutanak_sondaj_firma": "Kale Detay Sondaj",
+            "tutanak_uygulama_sekli": "Burgusuz/Sulu",
+            "tutanak_sondaj_makinesi": "SMK-500",
+            "tutanak_jeofizik_cihaz": "GEODE",
+            "tutanak_jeofon": "3,0m - 4,5 Hz",
+            "tutanak_offset": "3,0m",
+            "tutanak_kanal_sayisi": "12",
+            "tutanak_kaynak": "Balyoz",
+            "taahhut_jeoloji_ad": "Gökalp DOĞAN",
+            "taahhut_jeoloji_sicil": "7400",
+            "taahhut_jeoloji_unvan": "JEOLOJİ MÜHENDİSİ",
+            "taahhut_jeoloji_imza_unvan": "Jeoloji Mühendisi",
+            "taahhut_jeoloji_adres": "İsmetpaşa Mh. Hasan Mevsuf Sk. No :4 Da:5",
+            "taahhut_jeoloji_telefon": "0 545 639 90 62",
+            "taahhut_jeofizik_ad": "Suat ERGİN",
+            "taahhut_jeofizik_sicil": "1982",
+            "taahhut_jeofizik_unvan": "JEOFİZİK MÜHENDİSİ",
+            "taahhut_jeofizik_imza_unvan": "Jeofizik Mühendisi",
+            "taahhut_jeofizik_adres": "İsmetpaşa Mh. Hasan Mevsuf Sk. No :4 Da:5",
+            "taahhut_jeofizik_telefon": "0 532 281 12 95",
+            "yedek_sayisi": "10",
+            "surum_gecmisi_sayisi": str(VARSAYILAN_SURUM_SINIRI),
+            "spt_guven_esigi": "90",
+            "spt_auto_pro": "1",
+        },
+        "dosyalar": {"kml_path": None, "word_path": None, "lab_excel_path": None, "jeo_excel_path": None, "img_yer": None, "img_tkgm": None, "img_pga": None, "img_mjh": None, "word_img_sondaj": None, "word_img_jeofizik": None},
+    }
+
+
 def _surum_degeri(value):
     if value in (None, ""):
         return 0
@@ -56,6 +153,50 @@ def _eksikleri_tamamla(hedef, varsayilan):
             hedef[key] = copy.deepcopy(value)
         elif isinstance(value, dict) and isinstance(hedef.get(key), dict):
             _eksikleri_tamamla(hedef[key], value)
+
+
+def _sonlu_sayilari_dogrula(value, yol="$"):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ProjeSemaHatasi(f"{yol} alaninda sonlu olmayan sayi kullanilamaz.")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _sonlu_sayilari_dogrula(child, f"{yol}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _sonlu_sayilari_dogrula(child, f"{yol}[{index}]")
+
+
+def _cekirdek_tipleri_onar(hedef, varsayilan, yol="$"):
+    onarilanlar = []
+    for key, beklenen in varsayilan.items():
+        if key not in hedef:
+            continue
+        mevcut = hedef[key]
+        alan_yolu = f"{yol}.{key}"
+        if isinstance(beklenen, dict):
+            if not isinstance(mevcut, dict):
+                hedef[key] = copy.deepcopy(beklenen)
+                onarilanlar.append(alan_yolu)
+            else:
+                onarilanlar.extend(_cekirdek_tipleri_onar(mevcut, beklenen, alan_yolu))
+        elif isinstance(beklenen, list) and not isinstance(mevcut, list):
+            hedef[key] = copy.deepcopy(beklenen)
+            onarilanlar.append(alan_yolu)
+    return onarilanlar
+
+
+def _sondaj_tiplerini_dogrula_ve_onar(veri):
+    onarilanlar = []
+    for index, sondaj in enumerate(veri.get("sondaj", [])):
+        if not isinstance(sondaj, dict):
+            raise ProjeSemaHatasi(
+                f"$.sondaj[{index}] bir JSON nesnesi olmalidir."
+            )
+        for key in ("litoloji", "spt", "pmt", "kaya", "numuneler"):
+            if not isinstance(sondaj.get(key), list):
+                sondaj[key] = []
+                onarilanlar.append(f"$.sondaj[{index}].{key}")
+    return onarilanlar
 
 
 def _ilk_deger(*kaynaklar):
@@ -138,10 +279,40 @@ def _v1_v2_migrasyonu(veri):
     return ["Hidrojeoloji rapor alanlari proje verisine eklendi."]
 
 
+def _v2_v3_migrasyonu(veri):
+    jeoloji = veri.get("jeoloji")
+    if not isinstance(jeoloji, dict):
+        jeoloji = {}
+        veri["jeoloji"] = jeoloji
+    _eksikleri_tamamla(jeoloji, jeoloji_varsayilanlari())
+
+    # Eski mühendislik jeolojisi haritasındaki formasyon yalnız öneri olarak
+    # taşınır. Kullanıcı onaylamadan rapor birimi kabul edilmez.
+    if not jeoloji.get("birimler") and not jeoloji.get("harita_formasyon_onerisi"):
+        haritalar = veri.get("harita_cizimleri", {})
+        harita_jeoloji = (
+            haritalar.get("jeoloji", {})
+            if isinstance(haritalar, dict)
+            else {}
+        )
+        eski_kod = (
+            harita_jeoloji.get("formasyon")
+            if isinstance(harita_jeoloji, dict)
+            else ""
+        )
+        eski_kod = jeoloji_kodu_normalize(eski_kod)
+        if eski_kod in JEOLOJI_BIRIM_KATALOGU:
+            jeoloji["harita_formasyon_onerisi"] = eski_kod
+
+    veri["schema_version"] = 3
+    return ["Jeolojik birim ve dinamik rapor alanlari proje verisine eklendi."]
+
+
 def proje_verisini_migre_et(veri, varsayilan=None):
     """Proje verisini kopyalayarak guncel semaya getirir ve migrasyon bilgisini dondurur."""
     if not isinstance(veri, dict):
         raise ProjeSemaHatasi("Proje dosyasinin kok degeri bir JSON nesnesi olmalidir.")
+    _sonlu_sayilari_dogrula(veri)
 
     original = copy.deepcopy(veri)
     sonuc = copy.deepcopy(veri)
@@ -160,16 +331,30 @@ def proje_verisini_migre_et(veri, varsayilan=None):
     if surum == 1:
         notlar.extend(_v1_v2_migrasyonu(sonuc))
         surum = 2
+    if surum == 2:
+        notlar.extend(_v2_v3_migrasyonu(sonuc))
+        surum = 3
 
+    if varsayilan is not None and not isinstance(varsayilan, dict):
+        raise TypeError("Varsayilan proje verisi bir sozluk olmalidir.")
+
+    kanonik_varsayilan = varsayilan_proje_verisi()
+    onarilanlar = _cekirdek_tipleri_onar(sonuc, kanonik_varsayilan)
+    onarilanlar.extend(_sondaj_tiplerini_dogrula_ve_onar(sonuc))
+    if onarilanlar:
+        notlar.append(
+            f"{len(onarilanlar)} cekirdek proje alani gecersiz tipten varsayilana onarildi."
+        )
+
+    onceki = copy.deepcopy(sonuc)
     if varsayilan is not None:
-        if not isinstance(varsayilan, dict):
-            raise TypeError("Varsayilan proje verisi bir sozluk olmalidir.")
-        onceki = copy.deepcopy(sonuc)
         _eksikleri_tamamla(sonuc, varsayilan)
-        if sonuc != onceki:
-            notlar.append("Yeni surumdeki eksik proje alanlari varsayilan degerlerle tamamlandi.")
+    _eksikleri_tamamla(sonuc, kanonik_varsayilan)
+    if sonuc != onceki:
+        notlar.append("Yeni surumdeki eksik proje alanlari varsayilan degerlerle tamamlandi.")
 
     sonuc["schema_version"] = PROJE_SEMA_SURUMU
+    _sonlu_sayilari_dogrula(sonuc)
     bilgi = ProjeMigrasyonBilgisi(
         onceki_surum=onceki_surum,
         yeni_surum=PROJE_SEMA_SURUMU,
@@ -184,4 +369,5 @@ __all__ = [
     "ProjeMigrasyonBilgisi",
     "ProjeSemaHatasi",
     "proje_verisini_migre_et",
+    "varsayilan_proje_verisi",
 ]

@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from motor import GeoEngine
+from jeofizik_sheet_motoru import jeofizik_sheet_rapora_hazir_mi
 from performans import perf_tracked
 from sabitler import (
     COLOR_BG,
@@ -490,7 +491,7 @@ class JeofizikMixin:
             self.mt_sayac_var.set(f"{len(mt_list)} kayıt")
 
         if hasattr(self, "jeofizik_kaynak_var"):
-            if hasattr(self, "_jeofizik_sheet_ready") and self._jeofizik_sheet_ready():
+            if jeofizik_sheet_rapora_hazir_mi(getattr(self, "veri", {})):
                 source_text = "Jeofizik Sheet etkin"
             elif getattr(self, "jeo_excel_path", None):
                 source_text = os.path.basename(self.jeo_excel_path)

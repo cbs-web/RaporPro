@@ -3,6 +3,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from excel_guvenligi import excel_satiri_guvenli_yap
 from jeofizik_sheet_motoru import (
     JEOFIZIK_SHEET_DEFAULT_COLS,
     jeofizik_excel_dosyasi_oku,
@@ -18,9 +19,6 @@ from sabitler import COLOR_ACCENT, COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, F
 
 
 class JeofizikSheetMixin:
-    def _jeofizik_sheet_ready(self):
-        return jeofizik_sheet_var_mi(getattr(self, "veri", {}))
-
     def _jeofizik_sheet_ozet_text(self):
         summary = jeofizik_sheet_ozeti(getattr(self, "veri", {}))
         if summary.get("ready"):
@@ -192,7 +190,7 @@ class JeofizikSheetMixin:
                 ws = wb.active
                 ws.title = "Jeofizik"
                 for row in rows_from_sheet():
-                    ws.append(row)
+                    ws.append(excel_satiri_guvenli_yap(row))
                 wb.save(path)
             except Exception as exc:
                 messagebox.showerror("Jeofizik Sheet", f"Excel kaydedilemedi:\n{exc}")

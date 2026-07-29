@@ -1,4 +1,3 @@
-import datetime
 import os
 import tkinter as tk
 from tkinter import Toplevel, filedialog, messagebox, ttk
@@ -12,11 +11,16 @@ from workbook_motoru import (
     calc_n30 as wb_calc_n30,
     excel_workbook_yaz as wb_excel_workbook_yaz,
     header_map as wb_header_map,
+    normalize_data_rows as wb_normalize_data_rows,
+    row_has_data as wb_row_has_data,
+    row_values_to_list as wb_row_values_to_list,
     rows_to_dicts as wb_rows_to_dicts,
     validate_rows as wb_validate_rows,
+    xlsx_workbook_satirlarini_oku as _xlsx_workbook_satirlarini_oku,
+    yeni_sondaj_sablonu as wb_yeni_sondaj_sablonu,
 )
 from karot_motoru import derinlik_baslangic
-from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
+from yardimcilar import litoloji_yazim_uyarilari, safe_float
 from widgets import UndoRedoEntry
 from ui_workbook_eski import WorkbookEskiMixin
 
@@ -66,43 +70,19 @@ class WorkbookMixin(WorkbookEskiMixin):
         nb.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         def yeni_sondaj_sablonu(idx):
-            bugun = datetime.datetime.now()
-            bugun_str = bugun.strftime("%d.%m.%Y")
-            t2_str = (bugun + datetime.timedelta(days=10)).strftime("%d.%m.%Y")
-            return {
-                "no": f"SK-{idx + 1}", "der": "15.0", "y": "", "x": "", "k": "",
-                "bas_tar": bugun_str, "bit_tar": bugun_str,
-                "yass_d1": "", "yass_t1": bugun_str, "yass_d2": "", "yass_t2": t2_str,
-                "litoloji": [], "spt": [], "pmt": [], "kaya": [], "numuneler": []
-            }
-
-        def normalize_header(cell):
-            import unicodedata
-            text = str(cell).strip().lower()
-            text = text.replace("\u0131", "i").replace("\u0130", "i")
-            text = unicodedata.normalize("NFKD", text)
-            text = "".join(ch for ch in text if not unicodedata.combining(ch))
-            return temizle_baslik(text)
+            return wb_yeni_sondaj_sablonu(idx)
 
         def get_active_key():
             return frame_to_key.get(nb.select(), "sondajlar")
 
         def row_has_data(values, ignored=None):
-            ignored = ignored or set()
-            return any(str(value).strip() for key, value in values.items() if key not in ignored)
+            return wb_row_has_data(values, ignored)
 
         def row_values_to_list(sheet_key, values):
-            return [values.get(col_key, "") for _, col_key in sheet_defs[sheet_key]["columns"]]
+            return wb_row_values_to_list(sheet_key, values, sheet_defs)
 
         def normalize_data_rows(sheet_key, data):
-            ncols = len(sheet_defs[sheet_key]["columns"])
-            normalized = []
-            for row in data:
-                values = ["" if cell is None else str(cell) for cell in list(row)[:ncols]]
-                if len(values) < ncols:
-                    values.extend([""] * (ncols - len(values)))
-                normalized.append(values)
-            return normalized
+            return wb_normalize_data_rows(sheet_key, data, sheet_defs)
 
         def sync_source_nos(sheet_key):
             if sheet_key not in sheets:
@@ -605,35 +585,7 @@ class WorkbookMixin(WorkbookEskiMixin):
                 sheet.refresh()
 
         def header_map(sheet_key, cells):
-            aliases = {
-                "sondajno": "sondaj_no", "sondaj": "sondaj_no", "sk": "sondaj_no", "kuyuno": "sondaj_no",
-                "no": "no", "sondajadi": "no", "derinlik": "der", "der": "der", "derinlikm": "der",
-                "enlem": "y", "lat": "y", "latitude": "y", "y": "y", "boylam": "x", "lon": "x", "longitude": "x", "x": "x",
-                "tur": "sondaj_turu", "turu": "sondaj_turu", "sondajturu": "sondaj_turu", "zeminkaya": "sondaj_turu",
-                "delgicapi": "delgi_capi", "delgicap": "delgi_capi", "cap": "delgi_capi", "capi": "delgi_capi",
-                "kot": "k", "bastarih": "bas_tar", "bastarihi": "bas_tar", "baslangictarihi": "bas_tar",
-                "bittarih": "bit_tar", "bittarihi": "bit_tar", "bitistarihi": "bit_tar",
-                "yassilk": "yass_d1", "yassd1": "yass_d1", "yass1": "yass_d1", "yasst1": "yass_t1", "yassilktarih": "yass_t1",
-                "yassson": "yass_d2", "yassd2": "yass_d2", "yass2": "yass_d2", "yasst2": "yass_t2", "yasssontarih": "yass_t2",
-                "baslangic": "top", "bas": "top", "ust": "top", "top": "top", "bitis": "bot", "bit": "bot", "alt": "bot", "bot": "bot",
-                "tanim": "tanim", "litoloji": "tanim", "birim": "tanim",
-                "15": "v15", "n15": "v15", "30": "v30", "n30vurus": "v30", "45": "v45", "n45": "v45", "n30": "n30",
-                "em": "em", "pl": "pl", "tcr": "tcr", "scr": "scr", "rqd": "rqd",
-                "aralik": "aralik", "derinlikaralik": "aralik", "tur": "tur", "turu": "tur", "turuno": "tur", "numune": "tur",
-            }
-            allowed = {key for _, key in sheet_defs[sheet_key]["columns"]}
-            mapped = []
-            for cell in cells:
-                normalized = normalize_header(cell)
-                key = aliases.get(normalized)
-                if sheet_key == "sondajlar" and normalized in ("tur", "turu", "sondajturu", "zeminkaya"):
-                    key = "sondaj_turu"
-                if sheet_key == "sondajlar" and key == "sondaj_no":
-                    key = "no"
-                elif sheet_key != "sondajlar" and key == "no":
-                    key = "sondaj_no"
-                mapped.append(key if key in allowed else None)
-            return mapped if sum(1 for item in mapped if item) >= 2 else None
+            return wb_header_map(sheet_key, cells, sheet_defs)
 
         @perf_tracked("workbook.tksheet_validate")
         def validate_workbook(show_status=True):
@@ -786,48 +738,39 @@ class WorkbookMixin(WorkbookEskiMixin):
 
         @perf_tracked("workbook.tksheet_import_excel")
         def import_workbook():
-            try:
-                from openpyxl import load_workbook
-            except Exception as exc:
-                messagebox.showerror("Excel", f"openpyxl yüklenemedi:\n{exc}"); return
             path = filedialog.askopenfilename(title="Workbook Excel'den Al", filetypes=[("Excel", "*.xlsx")])
-            if not path: return
-            try:
-                wb = load_workbook(path, data_only=True)
-            except Exception as exc:
-                messagebox.showerror("Excel", f"Excel okunamadı:\n{exc}"); return
-            imported = 0
-            for sheet_key, spec in sheet_defs.items():
-                if spec["title"] not in wb.sheetnames:
-                    continue
-                raw_rows = []
-                for row in wb[spec["title"]].iter_rows(values_only=True):
-                    cells = ["" if cell is None else str(cell) for cell in row]
-                    if any(cell.strip() for cell in cells):
-                        raw_rows.append(cells)
-                if not raw_rows:
-                    continue
-                mapping = wb_header_map(sheet_key, raw_rows[0], sheet_defs)
-                data_rows = raw_rows[1:] if mapping else raw_rows
-                new_rows = []
-                for raw in data_rows:
-                    values = {}
-                    if mapping:
-                        for idx, value in enumerate(raw):
-                            if idx < len(mapping) and mapping[idx]:
-                                values[mapping[idx]] = value.strip()
-                    else:
-                        for idx, value in enumerate(raw):
-                            if idx < len(spec["columns"]):
-                                values[spec["columns"][idx][1]] = value.strip()
-                    if row_has_data(values, {"sondaj_no"}):
-                        new_rows.append(row_values_to_list(sheet_key, values))
-                if new_rows:
-                    set_sheet_rows(sheet_key, new_rows, [row[0] if row else "" for row in new_rows] if sheet_key == "sondajlar" else [""] * len(new_rows))
-                    imported += len(new_rows)
-            validate_workbook(show_status=True)
-            refresh_filter_values()
-            self.set_status(f"Excel'den workbook'a {imported} satır aktarıldı.", level="success")
+            if not path:
+                return
+
+            def apply_imported(payload):
+                rows_by_sheet = payload.get("rows_by_sheet", {})
+                for sheet_key, new_rows in rows_by_sheet.items():
+                    source_nos = (
+                        [row[0] if row else "" for row in new_rows]
+                        if sheet_key == "sondajlar"
+                        else [""] * len(new_rows)
+                    )
+                    set_sheet_rows(sheet_key, new_rows, source_nos)
+                validate_workbook(show_status=True)
+                refresh_filter_values()
+                self.set_status(
+                    f"Excel'den workbook'a {payload.get('imported', 0)} satır aktarıldı.",
+                    level="success",
+                )
+
+            self.arka_plan_gorevi_baslat(
+                "Workbook Excel içe aktarımı",
+                _xlsx_workbook_satirlarini_oku,
+                path,
+                sheet_defs,
+                status_start="Workbook Excel dosyası salt-okunur kipte taranıyor...",
+                status_error="Workbook Excel içe aktarımı başarısız: {error}",
+                on_success=apply_imported,
+                on_error=lambda exc: messagebox.showerror(
+                    "Excel",
+                    f"Excel okunamadı:\n{exc}",
+                ),
+            )
 
         @perf_tracked("workbook.tksheet_apply")
         def apply_workbook(close=False):

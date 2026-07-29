@@ -4,6 +4,7 @@ from tkinter import messagebox, ttk
 import datetime
 import json
 import os
+import uuid
 
 from sabitler import *
 from yardimcilar import *
@@ -12,6 +13,7 @@ from task_engine import TkTaskEngine
 from widgets import UndoRedoEntry
 
 from ui_cikti import CiktiMerkeziMixin
+from ui_evrak_okuma import EvrakOkumaMixin
 from ui_gorev_merkezi import GorevMerkeziMixin
 from ui_haritalar import HaritalarSekmesiMixin
 from ui_hidrojeoloji import HidrojeolojiUIMixin
@@ -45,7 +47,7 @@ AUTOSAVE_PATH = str(
 AUTOSAVE_DIR = os.path.dirname(AUTOSAVE_PATH)
 # ============================================================================
 # ÖZEL SPT VERİ GİRİŞ PENCERESİ (OTOMATİK HESAPLAMA VE DERİNLİK ARTIŞI)
-class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, HidrojeolojiUIMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin):
+class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, ProjeSurumleriMixin, ArayuzOzetMixin, ArayuzAraclarMixin, SondajDerinlikHesabiMixin, RaporSekmesiMixin, HaritalarSekmesiMixin, HidrojeolojiUIMixin, CiktiMerkeziMixin, KontrolPaneliMixin, LabSheetMixin, JeofizikSheetMixin, KesitCizimMixin, WorkbookMixin, SPTOkumaMixin, KarotTCRMixin, SondajMixin, JeofizikMixin, EvrakOkumaMixin):
     @perf_tracked("ui.__init__")
     def __init__(self, root):
         self.root = root
@@ -72,6 +74,10 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.last_preflight_report = None
         self.last_preflight_fingerprint = None
         self.autosave_after_id = None
+        self._autosave_session_id = uuid.uuid4().hex
+        self._autosave_project_token = uuid.uuid4().hex
+        self._autosave_recovery_pending = False
+        self._autosave_recovered = False
         self._closing = False
         self._kilitli_kayda_izin_ver = False
         self.last_save_time = None
@@ -187,6 +193,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             return
         self._closing = True
         self.autosave_zamanlayici_iptal()
+        self.otomatik_kayit_temizle()
         try:
             if hasattr(self, "task_engine"):
                 self.task_engine.shutdown(wait=False)
@@ -209,35 +216,152 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
 
     def otomatik_kaydet(self):
         if getattr(self, "_closing", False):
-            return
+            return False
         try:
+            if getattr(self, "_autosave_recovery_pending", False):
+                self.set_save_indicator("Kurtarma kararı bekleniyor: üzerine yazılmadı", "warning")
+                return False
             if self.proje_kilitli_mi():
                 self.set_save_indicator("Proje kilitli: otomatik kayıt yok", "warning")
-                return
+                return False
+            if os.path.exists(AUTOSAVE_PATH):
+                try:
+                    with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
+                        onceki_payload = json.load(f)
+                except Exception:
+                    self._autosave_recovery_pending = True
+                    self.set_save_indicator("Kurtarma dosyası okunamadı: üzerine yazılmadı", "warning")
+                    return False
+                onceki_oturum = (
+                    onceki_payload.get("session_id")
+                    if isinstance(onceki_payload, dict)
+                    else None
+                )
+                bu_oturum = getattr(self, "_autosave_session_id", "")
+                onceki_proje = (
+                    onceki_payload.get("project_key")
+                    if isinstance(onceki_payload, dict)
+                    else None
+                )
+                bu_proje = self._otomatik_kayit_proje_anahtari()
+                if (
+                    onceki_oturum != bu_oturum
+                    and not getattr(self, "_autosave_recovered", False)
+                ):
+                    self._autosave_recovery_pending = True
+                    self.set_save_indicator("Başka oturuma ait kurtarma kaydı korundu", "warning")
+                    return False
+                if (
+                    onceki_oturum == bu_oturum
+                    and onceki_proje not in (None, bu_proje)
+                    and not getattr(self, "_autosave_recovered", False)
+                ):
+                    self._autosave_recovery_pending = True
+                    self.set_save_indicator("Başka projeye ait kurtarma kaydı korundu", "warning")
+                    return False
             if hasattr(self, "e_kunye"):
                 self.guncelle_veri_objesi(silent=True)
             os.makedirs(AUTOSAVE_DIR, exist_ok=True)
             payload = {
+                "autosave_version": 1,
+                "session_id": getattr(self, "_autosave_session_id", ""),
+                "project_key": self._otomatik_kayit_proje_anahtari(),
+                "project_signature": self.proje_kayit_imzasi(self.veri),
                 "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
                 "active_path": self.aktif_dosya_yolu,
                 "veri": self.veri,
             }
             atomic_json_dump(payload, AUTOSAVE_PATH, indent=2, ensure_ascii=False)
+            self._autosave_recovered = False
             self.set_save_indicator(f"Otomatik kayıt: {datetime.datetime.now().strftime('%H:%M')}", "info")
+            return True
         except Exception as exc:
             log_exception("autosave.write", exc_value=exc)
             self.set_save_indicator("Otomatik kayıt hatası", "error")
+            return False
+
+    def _otomatik_kayit_proje_anahtari(self, path=None):
+        project_path = self.aktif_dosya_yolu if path is None else path
+        if project_path:
+            return os.path.normcase(os.path.abspath(os.fspath(project_path)))
+        return f"unsaved:{getattr(self, '_autosave_project_token', '')}"
+
+    def otomatik_kayit_projesini_degistir(self):
+        """Onceki projenin sahipli kaydini kapatip yeni proje kimligi olustur."""
+        self.otomatik_kayit_temizle()
+        self._autosave_project_token = uuid.uuid4().hex
+
+    def otomatik_kayit_temizle(self, *, force=False):
+        """Yalniz bu oturumun sahiplendigi veya acikca reddedilen kaydi sil."""
+        if not os.path.exists(AUTOSAVE_PATH):
+            self._autosave_recovery_pending = False
+            self._autosave_recovered = False
+            return True
+        try:
+            silinebilir = bool(force or getattr(self, "_autosave_recovered", False))
+            if not silinebilir:
+                with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                silinebilir = (
+                    isinstance(payload, dict)
+                    and payload.get("session_id") == getattr(self, "_autosave_session_id", "")
+                )
+            if not silinebilir:
+                return False
+            os.remove(AUTOSAVE_PATH)
+            self._autosave_recovery_pending = False
+            self._autosave_recovered = False
+            return True
+        except FileNotFoundError:
+            self._autosave_recovery_pending = False
+            self._autosave_recovered = False
+            return True
+        except Exception as exc:
+            log_exception("autosave.cleanup", exc_value=exc)
+            return False
 
     def kurtarma_durumu_bildir(self):
+        if not os.path.exists(AUTOSAVE_PATH):
+            self._autosave_recovery_pending = False
+            return False
+        self._autosave_recovery_pending = True
         try:
-            if not os.path.exists(AUTOSAVE_PATH):
-                return
-            autosave_time = os.path.getmtime(AUTOSAVE_PATH)
-            project_time = os.path.getmtime(self.aktif_dosya_yolu) if self.aktif_dosya_yolu and os.path.exists(self.aktif_dosya_yolu) else 0
-            if autosave_time > project_time:
-                self.set_status("Kurtarma dosyasi bulundu. Ust menuden 'Kurtar' ile yukleyebilirsiniz.", level="warning")
+            with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            if not isinstance(payload, dict) or not isinstance(payload.get("veri"), dict):
+                raise ValueError("Kurtarma kaydında proje verisi bulunamadı.")
+            saved_at = payload.get("saved_at", "-")
+            active_path = payload.get("active_path")
+            project_name = os.path.basename(active_path) if active_path else "kaydedilmemiş proje"
+            secim = messagebox.askyesnocancel(
+                "Kurtarma Kaydı",
+                f"{project_name} için {saved_at} tarihli bir kurtarma kaydı bulundu.\n\n"
+                "Evet: Kurtarma kaydını aç\n"
+                "Hayır: Kurtarma kaydını sil\n"
+                "İptal: Kararı ertele ve kaydı koru",
+            )
+            if secim is True:
+                return self.otomatik_kayit_yukle()
+            if secim is False:
+                if self.otomatik_kayit_temizle(force=True):
+                    self.set_status("Kurtarma kaydı kullanıcı kararıyla silindi.", level="info")
+                    return False
+                self.set_status("Kurtarma kaydı silinemedi; otomatik kayıt durduruldu.", level="warning")
+                return False
+            self.set_status("Kurtarma kararı ertelendi; kayıt korunuyor.", level="warning")
+            return False
         except Exception as exc:
             log_exception("autosave.check", exc_value=exc)
+            silinsin = messagebox.askyesno(
+                "Kurtarma Kaydı",
+                f"Kurtarma dosyası okunamadı:\n{exc}\n\n"
+                "Bozuk kurtarma kaydı silinsin mi?",
+            )
+            if silinsin:
+                self.otomatik_kayit_temizle(force=True)
+            else:
+                self.set_status("Bozuk kurtarma kaydı korundu; otomatik kayıt durduruldu.", level="warning")
+            return False
 
     @perf_tracked("project.restore_autosave")
     def otomatik_kayit_yukle(self):
@@ -246,15 +370,21 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
                 payload = json.load(f)
             veri = payload.get("veri", {})
             veri, _migrasyon = self.proje_verisini_hazirla(veri)
-            self.veri = veri
-            self.aktif_dosya_yolu = payload.get("active_path")
-            self.doldur_arayuz()
-            self._son_kayit_imzasi = None
+            self._proje_durumunu_uygula(
+                veri,
+                payload.get("active_path"),
+                kaydedilmemis=True,
+            )
+            self._autosave_recovery_pending = False
+            self._autosave_recovered = True
+            self.proje_kilit_durumunu_goster()
             self.set_status(f"Otomatik kayıt yüklendi: {payload.get('saved_at', '-')}", level="success")
             self.set_save_indicator("Kurtarma yüklendi: kaydedilmedi", "warning")
+            return True
         except Exception as exc:
             log_exception("autosave.restore", exc_value=exc)
             messagebox.showerror("Kurtarma", f"Otomatik kayıt yüklenemedi:\n{exc}")
+            return False
 
     @perf_tracked("ui.build")
     def kur_arayuz(self):
@@ -429,6 +559,19 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.kunye_durum_var = tk.StringVar(value="Proje bilgileri bekleniyor")
         self.kunye_durum_label = ttk.Label(title_area, textvariable=self.kunye_durum_var, style="Muted.TLabel")
         self.kunye_durum_label.pack(anchor="w", pady=(2, 0))
+        self.kunye_evrak_button = self.modern_button(
+            header,
+            "Evraklardan Oku",
+            command=self.evraklardan_veri_oku,
+            role="primary",
+            padx=10,
+            pady=5,
+        )
+        self.kunye_evrak_button.grid(row=0, column=1, sticky="e", padx=(0, SPACE_XS))
+        self.tooltip_ekle(
+            self.kunye_evrak_button,
+            "İmar Durumu ve Zemin Durum Belgesi PDF'lerinden eşleşen alanları okur.",
+        )
         apply_button = self.modern_button(
             header,
             "Uygula",
@@ -437,7 +580,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             padx=10,
             pady=5,
         )
-        apply_button.grid(row=0, column=1, sticky="e")
+        apply_button.grid(row=0, column=2, sticky="e")
 
         ttk.Separator(page).grid(row=1, column=0, sticky="ew", pady=(0, SPACE_MD))
         body = ttk.Frame(page)
@@ -1157,10 +1300,3 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             
         self.sondaj_tablosunu_ciz(); self.jeo_yenile(); self.mt_yenile()
         self.ozet_yenile(collect=False)
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = RaporRobotuArayuz(root)
-    root.mainloop()
-
-

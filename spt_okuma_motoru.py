@@ -1,7 +1,5 @@
-import base64
 import datetime
 import json
-import mimetypes
 import os
 from pathlib import Path
 import re
@@ -10,8 +8,14 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
+from excel_guvenligi import excel_satiri_guvenli_yap
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
-from performans import log_exception
+from performans import log_exception, perf_log
+from spt_gorsel import dosya_parmak_izi, gorsel_api_payload_hazirla
+from spt_saglayicilar import (
+    http_post_with_retry as _http_post_with_retry,
+    spt_ai_metin_iste,
+)
 from yardimcilar import atomic_json_dump, safe_float, temizle_baslik
 from uygulama_yollari import SOURCE_DIR, kullanici_veri_dizini, kullanici_yolu
 
@@ -78,6 +82,7 @@ class SPTKaydi:
             "kaynak": self.kaynak,
             "kaynak_yolu": self.kaynak_yolu,
             "uyari": self.uyari,
+            "raw": dict(self.raw or {}),
         }
 
 
@@ -99,6 +104,11 @@ def temiz_metin(value):
     return "" if value is None else str(value).strip()
 
 
+def _paylasilabilir_dosya_adi(value):
+    text = str(value or "").strip().replace("\\", "/").rstrip("/")
+    return text.rsplit("/", 1)[-1] if text else ""
+
+
 def normalize_derinlik(value):
     text = temiz_metin(value).replace(",", ".")
     text = re.sub(r"^[^\d\-]+", "", text)
@@ -113,7 +123,7 @@ def normalize_derinlik(value):
     return f"{val:.2f}"
 
 
-def hedef_derinlige_yuvarla(value, maksimum_sapma=1.51):
+def hedef_derinlige_yuvarla(value, maksimum_sapma=0.76):
     der = safe_float(normalize_derinlik(value))
     if der <= 0:
         return ""
@@ -205,6 +215,15 @@ def normalize_sondaj_no(value, default=""):
 
 def kayit_normalize_et(values, default_sondaj_no=""):
     raw = dict(values or {})
+    if raw.get("_motor") and not raw.get("motor"):
+        raw["motor"] = raw.get("_motor")
+    if raw.get("_model") and not raw.get("model"):
+        raw["model"] = raw.get("_model")
+    if raw.get("_okuma_suresi") is not None and raw.get("okuma_suresi") is None:
+        raw["okuma_suresi"] = raw.get("_okuma_suresi")
+    if isinstance(raw.get("_gorsel"), dict):
+        raw.setdefault("gorsel", dict(raw["_gorsel"]))
+        raw.setdefault("kaynak_hash", raw["_gorsel"].get("kaynak_hash", ""))
     sondaj_no = normalize_sondaj_no(
         raw.get("sondaj_no") or raw.get("sondaj") or raw.get("sondaj_adi") or raw.get("kuyu_no"),
         default_sondaj_no,
@@ -215,6 +234,8 @@ def kayit_normalize_et(values, default_sondaj_no=""):
     if okunan_derinlik and derinlik:
         raw["okunan_derinlik"] = okunan_derinlik
         raw["hedef_derinlik"] = derinlik
+        fark = abs(safe_float(okunan_derinlik) - safe_float(derinlik))
+        raw["derinlik_duzeltme_m"] = round(fark, 3)
     v15 = sayi_token(raw.get("v15") or raw.get("15") or raw.get("n15"))
     v30 = sayi_token(raw.get("v30") or raw.get("30") or raw.get("n30_vurus"))
     v45 = sayi_token(raw.get("v45") or raw.get("45") or raw.get("n45"))
@@ -235,7 +256,13 @@ def kayit_normalize_et(values, default_sondaj_no=""):
     if not (v15 or v30 or v45 or n30):
         uyari.append("SPT değeri okunamadı")
     if n30 == "R":
-        uyari.append("Refü")
+        raw["bilgi"] = ", ".join(filter(None, [temiz_metin(raw.get("bilgi")), "Refü"]))
+    if (
+        okunan_derinlik
+        and derinlik
+        and safe_float(raw.get("derinlik_duzeltme_m")) > 0.35
+    ):
+        uyari.append(f"Derinlik {okunan_derinlik} -> {derinlik} olarak düzeltildi")
 
     return SPTKaydi(
         sondaj_no=sondaj_no,
@@ -459,10 +486,12 @@ Bulamazsan [] döndür."""
 
 
 def _image_payload(path):
-    with open(path, "rb") as f:
-        raw = f.read()
-    mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-    return base64.b64encode(raw).decode("utf-8"), mime_type
+    image_b64, mime_type, _metadata = gorsel_api_payload_hazirla(path)
+    return image_b64, mime_type
+
+
+def _image_payload_with_meta(path):
+    return gorsel_api_payload_hazirla(path)
 
 
 def _json_liste_ayikla(text):
@@ -526,6 +555,45 @@ def _spt_record_score(kayit):
     if getattr(kayit, "uyari", ""):
         score -= 0.25
     return score
+
+
+def spt_kayit_puani(kayit):
+    """Arayuz ve motorun ayni aday karsilastirma puanini kullanmasini sagla."""
+    return _spt_record_score(kayit)
+
+
+def _candidate_snapshot(kayit):
+    return {
+        "sondaj_no": kayit.sondaj_no,
+        "derinlik": kayit.derinlik,
+        "v15": kayit.v15,
+        "v30": kayit.v30,
+        "v45": kayit.v45,
+        "n30": kayit.n30,
+        "guven": kayit.guven,
+        "kaynak": kayit.kaynak,
+        "kaynak_yolu": kayit.kaynak_yolu,
+        "uyari": kayit.uyari,
+        "raw": dict(kayit.raw or {}),
+    }
+
+
+def _single_photo_candidate(records, expected_depth=None):
+    if len(records) <= 1:
+        return records[0] if records else None
+    if expected_depth is not None:
+        chosen = _select_best_for_expected_depth(records, expected_depth)
+        reason = f"beklenen derinlik {expected_depth:.2f} m"
+    else:
+        chosen = max(records, key=_spt_record_score)
+        reason = "veri butunlugu ve guven puani"
+    alternatives = [_candidate_snapshot(item) for item in records if item is not chosen]
+    chosen.raw["alternatif_okumalar"] = alternatives
+    chosen.raw["aday_secim_nedeni"] = reason
+    chosen.raw["aday_sayisi"] = len(records)
+    warning = f"Fotoğrafta {len(records)} SPT adayı bulundu; bir sonuç seçildi"
+    chosen.uyari = ", ".join(filter(None, [chosen.uyari, warning]))
+    return chosen
 
 
 def _infer_expected_depth_offset(records_by_path, path_order):
@@ -593,17 +661,19 @@ def _select_spt_records_for_batch(records_by_path, paths):
     for key, records in records_by_path:
         if not records:
             continue
-        keep_records = records
+        chosen = None
         if use_sequence and len(records) > 1:
             try:
                 expected_idx = offset + path_order.index(key)
             except ValueError:
                 expected_idx = -1
             if 0 <= expected_idx < len(HEDEF_DERINLIKLER):
-                chosen = _select_best_for_expected_depth(records, HEDEF_DERINLIKLER[expected_idx])
-                keep_records = [chosen]
-                removed_by_sequence += max(0, len(records) - 1)
-        selected.extend(keep_records)
+                chosen = _single_photo_candidate(records, HEDEF_DERINLIKLER[expected_idx])
+        if chosen is None:
+            chosen = _single_photo_candidate(records)
+        if chosen is not None:
+            selected.append(chosen)
+            removed_by_sequence += max(0, len(records) - 1)
 
     deduped = []
     locations = {}
@@ -633,62 +703,70 @@ def _api_key_kontrol(aktif, ayarlar):
         raise RuntimeError("Groq API anahtarı bulunamadı. RaporPro ayarları veya GROQ_API_KEY kontrol edilmeli.")
 
 
-def yapay_zeka_ile_spt_oku(resim_yolu, ayarlar=None, motor_zorla=None, timeout=45):
-    try:
-        import requests
-    except Exception as exc:
-        raise RuntimeError(f"requests yüklenemedi: {exc}") from exc
-
+def yapay_zeka_ile_spt_oku(
+    resim_yolu,
+    ayarlar=None,
+    motor_zorla=None,
+    timeout=45,
+    stop_event=None,
+):
     ayarlar = ayarlar or spt_ayarlarini_yukle()
     aktif = (motor_zorla or ayarlar.get("aktif_motor") or "openai").strip().lower()
     if aktif not in ("openai", "gemini", "gemini_pro", "groq"):
         raise RuntimeError(f"Desteklenmeyen SPT okuma motoru: {aktif}")
     _api_key_kontrol(aktif, ayarlar)
 
-    image_b64, mime_type = _image_payload(resim_yolu)
+    started_at = time.perf_counter()
+    image_b64, mime_type, image_meta = _image_payload_with_meta(resim_yolu)
     prompt = _spt_prompt()
+    text_response, model_name = spt_ai_metin_iste(
+        aktif=aktif,
+        ayarlar=ayarlar,
+        prompt=prompt,
+        image_b64=image_b64,
+        mime_type=mime_type,
+        timeout=timeout,
+        stop_event=stop_event,
+        openai_model=openai_model_sec(ayarlar, "spt"),
+    )
+    raw_items = _json_liste_ayikla(text_response)
 
-    if aktif in ("openai", "groq"):
-        is_openai = aktif == "openai"
-        url = "https://api.openai.com/v1/chat/completions" if is_openai else "https://api.groq.com/openai/v1/chat/completions"
-        api_key = ayarlar["openai_api_key"] if is_openai else ayarlar["groq_api_key"]
-        model_name = openai_model_sec(ayarlar, "spt") if is_openai else "meta-llama/llama-4-scout-17b-16e-instruct"
-        payload = {
-            "model": model_name,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
-                ],
-            }],
-            "temperature": 0.1,
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        if response.status_code != 200:
-            raise RuntimeError(f"{aktif.upper()} hata kodu {response.status_code}: {response.text[:500]}")
-        text_response = response.json()["choices"][0]["message"]["content"]
-        return _json_liste_ayikla(text_response)
-
-    model_id = "gemini-2.5-pro" if aktif == "gemini_pro" else "gemini-2.5-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={ayarlar['gemini_api_key']}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": image_b64}}]}],
-        "generationConfig": {"temperature": 0.1},
-    }
-    response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=timeout)
-    if response.status_code != 200:
-        try:
-            msg = response.json().get("error", {}).get("message", response.text)
-        except Exception:
-            msg = response.text
-        raise RuntimeError(f"GEMINI hata kodu {response.status_code}: {msg[:500]}")
-    text_response = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    return _json_liste_ayikla(text_response)
+    elapsed = time.perf_counter() - started_at
+    perf_log(
+        "spt.ai_read",
+        elapsed,
+        f"motor={aktif};model={model_name};bytes={image_meta.get('islenmis_bayt', 0)};rows={len(raw_items)}",
+    )
+    for item in raw_items:
+        item.setdefault("_motor", aktif)
+        item.setdefault("_model", model_name)
+        item.setdefault("_okuma_suresi", round(elapsed, 3))
+        item.setdefault("_gorsel", dict(image_meta))
+        item.setdefault("kaynak_hash", image_meta.get("kaynak_hash", ""))
+    return raw_items
 
 
-def fotograflardan_spt_oku(paths, default_sondaj_no="", ayarlar=None, progress_callback=None, stop_event=None, auto_pro=True):
+def _raw_items_score(raw_items, default_sondaj_no=""):
+    records = [kayit_normalize_et(item, default_sondaj_no) for item in (raw_items or [])]
+    valid = [
+        item for item in records
+        if item.derinlik and (item.v15 or item.v30 or item.v45 or item.n30)
+    ]
+    if not valid:
+        return float("-inf")
+    best = max(_spt_record_score(item) for item in valid)
+    return best - max(0, len(valid) - 1) * 0.15
+
+
+def fotograflardan_spt_oku(
+    paths,
+    default_sondaj_no="",
+    ayarlar=None,
+    progress_callback=None,
+    stop_event=None,
+    auto_pro=True,
+    guven_esigi=90,
+):
     ayarlar = ayarlar or spt_ayarlarini_yukle()
     sonuc = SPTImportSonucu()
     unique_paths = []
@@ -715,12 +793,64 @@ def fotograflardan_spt_oku(paths, default_sondaj_no="", ayarlar=None, progress_c
             progress_callback(idx - 1, total, name, "okunuyor")
         try:
             source_sondaj_no = _sondaj_no_from_path(path)
-            raw_items = yapay_zeka_ile_spt_oku(path, ayarlar=ayarlar)
-            if auto_pro and raw_items and ayarlar.get("gemini_api_key") and ayarlar.get("aktif_motor") != "gemini_pro":
-                guvenler = [safe_float(item.get("guven", 100)) for item in raw_items if item.get("guven") is not None]
-                if guvenler and min(guvenler) < 90:
-                    time.sleep(0.3)
-                    raw_items = yapay_zeka_ile_spt_oku(path, ayarlar=ayarlar, motor_zorla="gemini_pro", timeout=60)
+            learned = spt_ogrenme_eslesmesi_bul(path)
+            if learned:
+                raw_items = [dict(learned)]
+                raw_items[0].update({
+                    "_motor": "yerel_ogrenme",
+                    "_model": "duzeltilmis_kayit",
+                    "guven": raw_items[0].get("guven") or "100",
+                    "kaynak_hash": dosya_parmak_izi(path),
+                })
+            else:
+                raw_items = yapay_zeka_ile_spt_oku(
+                    path,
+                    ayarlar=ayarlar,
+                    stop_event=stop_event,
+                )
+
+            active_motor = str(ayarlar.get("aktif_motor") or "openai").strip().lower()
+            confidences = [
+                safe_float(item.get("guven"))
+                for item in raw_items
+                if str(item.get("guven", "")).strip()
+            ]
+            pro_reason = ""
+            if not raw_items:
+                pro_reason = "ilk motor sonuc bulamadi"
+            elif not confidences:
+                pro_reason = "guven degeri yok"
+            elif min(confidences) < (safe_float(guven_esigi) or 90):
+                pro_reason = f"guven %{min(confidences):g} esigin altinda"
+
+            if (
+                not learned
+                and auto_pro
+                and pro_reason
+                and ayarlar.get("gemini_api_key")
+                and active_motor != "gemini_pro"
+            ):
+                time.sleep(0.3)
+                pro_items = yapay_zeka_ile_spt_oku(
+                    path,
+                    ayarlar=ayarlar,
+                    motor_zorla="gemini_pro",
+                    timeout=60,
+                    stop_event=stop_event,
+                )
+                default_no = source_sondaj_no or default_sondaj_no
+                initial_score = _raw_items_score(raw_items, default_no)
+                pro_score = _raw_items_score(pro_items, default_no)
+                if pro_score > initial_score:
+                    for item in pro_items:
+                        item["_auto_pro_nedeni"] = pro_reason
+                        item["_onceki_motor_skoru"] = initial_score
+                    raw_items = pro_items
+                else:
+                    for item in raw_items:
+                        item["_auto_pro_nedeni"] = pro_reason
+                        item["_pro_skoru"] = pro_score
+                        item["_pro_sonucu_kullanilmadi"] = True
             if not raw_items:
                 sonuc.uyarilar.append(f"{name}: SPT verisi bulunamadı")
             file_records = []
@@ -731,6 +861,13 @@ def fotograflardan_spt_oku(paths, default_sondaj_no="", ayarlar=None, progress_c
                 item["kaynak_yolu"] = str(path)
                 kayit = kayit_normalize_et(item, source_sondaj_no or default_sondaj_no)
                 if source_sondaj_no:
+                    ai_sondaj_no = normalize_sondaj_no(
+                        item.get("sondaj_no") or item.get("sondaj") or item.get("kuyu_no")
+                    )
+                    if ai_sondaj_no and ai_sondaj_no != source_sondaj_no:
+                        conflict = f"Fotoğraf {ai_sondaj_no}, dosya yolu {source_sondaj_no} gösteriyor"
+                        kayit.raw["sondaj_celiskisi"] = conflict
+                        kayit.uyari = ", ".join(filter(None, [kayit.uyari, conflict]))
                     kayit.sondaj_no = source_sondaj_no
                 if kayit.uyari:
                     sonuc.uyarilar.append(f"{name}: {kayit.uyari}")
@@ -766,15 +903,19 @@ def fotograflardan_spt_oku(paths, default_sondaj_no="", ayarlar=None, progress_c
 
 
 def spt_gecmis_kaydet(islem, kayit=None, detay=None):
-    SPT_LOG_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "tarih": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "islem": islem,
         "kayit": kayit.to_dict() if hasattr(kayit, "to_dict") else (kayit or {}),
         "detay": detay or {},
     }
-    with SPT_GECMIS_PATH.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    try:
+        SPT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with SPT_GECMIS_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        log_exception("spt.history.write", exc_value=exc)
+        payload["log_hatasi"] = str(exc)
     return payload
 
 
@@ -805,6 +946,7 @@ def spt_ogrenme_kaydet(kayit, duzeltilmis=None, not_metni=""):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     copied_path = ""
     source_path = getattr(kayit, "kaynak_yolu", "")
+    source_hash = dosya_parmak_izi(source_path) if source_path and os.path.exists(source_path) else ""
     if source_path and os.path.exists(source_path):
         suffix = Path(source_path).suffix or ".jpg"
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{timestamp}_{Path(source_path).stem}") + suffix
@@ -820,12 +962,45 @@ def spt_ogrenme_kaydet(kayit, duzeltilmis=None, not_metni=""):
         "duzeltilmis": duzeltilmis,
         "not": not_metni,
         "kopyalanan_resim": copied_path,
+        "kaynak_hash": source_hash,
     }
     labels_path = SPT_OGRENME_DIR / "etiketler.jsonl"
     with labels_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(label, ensure_ascii=False) + "\n")
     spt_gecmis_kaydet("dogrusunu_ogret", kayit, {"duzeltilmis": duzeltilmis, "kopyalanan_resim": copied_path})
     return label
+
+
+def spt_ogrenme_eslesmesi_bul(source_path):
+    """Daha once duzeltilmis ayni fotograf icin yerel dogruyu dondur."""
+    if not source_path or not os.path.exists(source_path):
+        return None
+    source_hash = dosya_parmak_izi(source_path)
+    if not source_hash:
+        return None
+    labels_path = SPT_OGRENME_DIR / "etiketler.jsonl"
+    if not labels_path.exists():
+        return None
+    try:
+        lines = labels_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return None
+    for line in reversed(lines[-5000:]):
+        try:
+            item = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        item_hash = item.get("kaynak_hash", "")
+        if not item_hash and item.get("kopyalanan_resim"):
+            item_hash = dosya_parmak_izi(item.get("kopyalanan_resim"))
+        if item_hash != source_hash:
+            continue
+        corrected = item.get("duzeltilmis")
+        if isinstance(corrected, dict) and corrected:
+            result = dict(corrected)
+            result["_ogrenme_tarihi"] = item.get("tarih", "")
+            return result
+    return None
 
 
 def spt_kirp_kaydet(source_path, crop_box):
@@ -869,18 +1044,30 @@ def spt_kaynak_raporu_kaydet(kayitlar, path):
     ws.title = "SPT Kaynak Raporu"
     headers = [
         "Sondaj", "Derinlik", "15", "30", "45", "N30",
-        "Güven", "Uyarı", "Kaynak", "Kaynak Yolu",
+        "Güven", "Uyarı", "Okunan Derinlik", "Kullanılan Derinlik",
+        "Motor", "Model", "Okuma Süresi (sn)", "Kaynak Hash",
+        "Kaynak", "Kaynak Yolu",
     ]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="D9EAF7")
     for kayit in kayitlar:
-        ws.append([
-            kayit.sondaj_no, kayit.derinlik, kayit.v15, kayit.v30, kayit.v45,
-            kayit.n30, kayit.guven, kayit.uyari, kayit.kaynak, kayit.kaynak_yolu,
-        ])
-    widths = [14, 10, 8, 8, 8, 8, 10, 32, 28, 60]
+        raw = getattr(kayit, "raw", {}) or {}
+        ws.append(excel_satiri_guvenli_yap([
+            kayit.sondaj_no,
+            kayit.derinlik, kayit.v15, kayit.v30, kayit.v45,
+            kayit.n30, kayit.guven, kayit.uyari,
+            raw.get("okunan_derinlik", ""),
+            raw.get("hedef_derinlik", kayit.derinlik),
+            raw.get("motor", ""),
+            raw.get("model", ""),
+            raw.get("okuma_suresi", ""),
+            raw.get("kaynak_hash", ""),
+            kayit.kaynak,
+            _paylasilabilir_dosya_adi(kayit.kaynak_yolu),
+        ]))
+    widths = [14, 10, 8, 8, 8, 8, 10, 32, 16, 18, 16, 28, 16, 30, 28, 60]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
     wb.save(path)

@@ -20,7 +20,7 @@ from kesit_topografya_editor import TopografyaProfilEditor
 from motor import GeoEngine
 from performans import perf_tracked
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
-from ui_kesit_yardimci import kesit_kayit_dosya_adi
+from ui_kesit_yardimci import benzersiz_kesit_cikti_yolu, kesit_kayit_dosya_adi
 from yardimcilar import safe_float
 
 
@@ -1306,7 +1306,7 @@ class KesitOnizlemeMixin:
             dialog.wait_window()
             return result["config"]
 
-        def save_kesit():
+        def save_kesit(proje_klasorune=False):
             if topography_editor is not None and topography_editor.dirty:
                 messagebox.showwarning(
                     "Topoğrafya",
@@ -1316,17 +1316,46 @@ class KesitOnizlemeMixin:
                 return
             if topography_editor is not None and topography_editor.active:
                 topography_editor.set_active(False)
+            if proje_klasorune and not self.aktif_dosya_yolu:
+                if not messagebox.askyesno(
+                    "Kesiti Proje Klasörüne Kaydet",
+                    "Kesitin proje klasörüne kaydedilebilmesi için proje önce "
+                    "kaydedilmelidir.\n\nProje şimdi kaydedilsin mi?",
+                    parent=win,
+                ):
+                    return
+                if not self.proje_farkli_kaydet():
+                    return
             export_config = export_settings_dialog()
             if not export_config:
                 return
             fmt = export_config["format"].lower()
             ext = ".jpg" if fmt == "jpg" else f".{fmt}"
             default_name = kesit_kayit_dosya_adi(options.get("selected_sondajlar") or sondajlar)
-            path = filedialog.asksaveasfilename(
-                defaultextension=ext,
-                initialfile=f"{default_name}{ext}",
-                filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
-            )
+            if proje_klasorune:
+                folder_info = self.proje_alt_klasorlerini_hazirla(self.aktif_dosya_yolu)
+                if not folder_info:
+                    return
+                section_folder = folder_info.get("yollar", {}).get("02_Kesitler")
+                try:
+                    path = benzersiz_kesit_cikti_yolu(
+                        section_folder,
+                        default_name,
+                        ext,
+                    )
+                except Exception as exc:
+                    messagebox.showerror(
+                        "Kesiti Proje Klasörüne Kaydet",
+                        f"02_Kesitler klasörü hazırlanamadı:\n{exc}",
+                        parent=win,
+                    )
+                    return
+            else:
+                path = filedialog.asksaveasfilename(
+                    defaultextension=ext,
+                    initialfile=f"{default_name}{ext}",
+                    filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
+                )
             if not path:
                 return
             page_plan = getattr(fig, "_geo_page_plan", None)
@@ -1380,7 +1409,13 @@ class KesitOnizlemeMixin:
                     saved_message = f"Kesit {page_count} sayfalı PDF olarak kaydedildi."
                 else:
                     saved_message = f"Kesit {page_count} ayrı {fmt.upper()} sayfası olarak kaydedildi."
-                messagebox.showinfo("Başarılı", saved_message)
+                if proje_klasorune:
+                    saved_message += f"\n\nKlasör: {section_folder}"
+                    self.set_status(
+                        f"Kesit 02_Kesitler klasörüne kaydedildi: {default_name}",
+                        level="success",
+                    )
+                messagebox.showinfo("Başarılı", saved_message, parent=win)
                 return
             ax = fig.axes[0] if fig.axes else None
             old_title = ax.get_title() if ax else ""
@@ -1428,7 +1463,13 @@ class KesitOnizlemeMixin:
                     dpi=export_config["dpi"],
                     bbox_inches=None if print_layout else "tight",
                 )
-                messagebox.showinfo("Başarılı", "Kesit kaydedildi.")
+                saved_message = f"Kesit kaydedildi.\n\n{path}"
+                if proje_klasorune:
+                    self.set_status(
+                        f"Kesit 02_Kesitler klasörüne kaydedildi: {default_name}",
+                        level="success",
+                    )
+                messagebox.showinfo("Başarılı", saved_message, parent=win)
             finally:
                 if ax:
                     ax.set_title(old_title, fontsize=12, fontweight='bold')
@@ -1452,6 +1493,14 @@ class KesitOnizlemeMixin:
         update_edit_status(tool)
 
         tk.Button(primary_bar, text="Kesiti Kaydet", bg=COLOR_WARNING, fg="white", font=FONT_BOLD, command=save_kesit).pack(side="left", padx=3, pady=4)
+        tk.Button(
+            primary_bar,
+            text="Klasöre Kaydet",
+            bg="#2471A3",
+            fg="white",
+            font=FONT_BOLD,
+            command=lambda: save_kesit(proje_klasorune=True),
+        ).pack(side="left", padx=3, pady=4)
         tk.Button(primary_bar, text="Düzenlemeyi Kaydet", bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD, command=save_section_edits).pack(side="left", padx=3, pady=4)
         tk.Button(primary_bar, text="Geri Al", bg="#D6EAF8", fg="#111", font=FONT_BOLD, command=undo_section_edit).pack(side="left", padx=3, pady=4)
         tk.Button(primary_bar, text="İleri Al", bg="#D5F5E3", fg="#111", font=FONT_BOLD, command=redo_section_edit).pack(side="left", padx=3, pady=4)

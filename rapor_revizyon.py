@@ -9,6 +9,8 @@ from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from yardimcilar import atomic_docx_save
+
 
 REVIZYON_BOOKMARK_PREFIX = "RPRO_"
 
@@ -184,7 +186,7 @@ def revizyonlu_rapor_olustur(app_instance, hazir_rapor_path, tags, output_path):
             return {"success": False, "message": message, "updated": [], "missing": missing or selected}
 
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        target_doc.save(output_path)
+        atomic_docx_save(target_doc, output_path)
         warning = f" Eksik/güncellenemeyen etiket: {', '.join(missing)}." if missing else ""
         message = f"Revizyonlu rapor oluşturuldu. Güncellenen etiket: {len(updated)}.{warning}"
         return {"success": True, "message": message, "updated": updated, "missing": missing, "output_path": output_path}

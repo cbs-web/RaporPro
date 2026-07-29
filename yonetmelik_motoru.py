@@ -12,11 +12,11 @@ import unicodedata
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from uygulama_yollari import kullanici_yolu
 from yardimcilar import atomic_json_dump, temizle_baslik
 
 
-RAPORPRO_CONFIG_DIR = Path(os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "RaporPro"
-YONETMELIK_DIR = RAPORPRO_CONFIG_DIR / "yonetmelikler"
+YONETMELIK_DIR = Path(kullanici_yolu("yonetmelikler"))
 YONETMELIK_INDEX_PATH = YONETMELIK_DIR / "index.json"
 SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md", ".html", ".htm")
 OFFICIAL_USER_AGENT = "RaporPro/1.0 (+https://yapiisleri.csb.gov.tr)"

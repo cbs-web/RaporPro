@@ -14,6 +14,7 @@ from performans import perf_timer, perf_tracked
 from sabitler import *
 from task_engine import TaskCancelledError
 from karot_motoru import derinlik_baslangic
+from tutarlilik_ortak import sayi_veya_none
 from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
 from widgets import UndoRedoEntry
 
@@ -115,7 +116,7 @@ class SondajMixin:
             ("Workbook", self.veri_giris_workbook_tksheet_ac, "Excel benzeri toplu veri girişini açar"),
             ("SPT Merkezi", self.spt_okuma_merkezi_ac, "Excel ve fotoğraf SPT okuma merkezini açar"),
             ("PMT Excel", self.pmt_excel_aktar, "Presiyometre Excel dosyalarından veri aktarır"),
-            ("Karot TCR", self.karot_tcr_merkezi_ac, "Karot fotoğrafından TCR hesabı yapar"),
+            ("Karot Merkezi", self.karot_tcr_merkezi_ac, "Karot fotoğrafından TCR, SCR ve RQD hesaplar"),
             ("Akıllı Tamamla", self.sondaj_akilli_tamamla, "Eksik temel sondaj alanlarını hazırlar"),
             ("Toplu Log", self.toplu_log_kaydet, "Tüm sondaj loglarını toplu kaydeder"),
             ("Kesit Çiz", self.kesit_secim_penceresi, "Sondajlardan jeolojik kesit hazırlar"),
@@ -311,6 +312,23 @@ class SondajMixin:
             selected_before = None
         self.sondaj_secili_index_var.set(-1 if selected_before is None else selected_before)
 
+        field_first_column = 3
+        status_column = field_first_column + len(self.sondaj_headers)
+        table_column_widths = [5, 32, 35]
+        table_column_widths.extend(
+            self.sondaj_column_widths.get(key, 11) * 8 + 14
+            for _label, key in self.sondaj_headers
+        )
+        table_column_widths.append(190)
+
+        def configure_table_columns(frame):
+            for column, minsize in enumerate(table_column_widths):
+                frame.grid_columnconfigure(
+                    column,
+                    minsize=minsize,
+                    weight=1 if column == status_column else 0,
+                )
+
         header_bg = "#E9EEF3"
         header_frame = tk.Frame(
             self.sondaj_scroll_frame,
@@ -320,27 +338,38 @@ class SondajMixin:
             bd=0,
         )
         header_frame.pack(fill="x", pady=(1, 4), padx=2)
-        tk.Frame(header_frame, width=5, bg=COLOR_BORDER_STRONG).pack(side="left", fill="y")
-        tk.Label(header_frame, text="", width=2, bg=header_bg, font=FONT_BOLD).pack(side="left", padx=1)
-        tk.Label(header_frame, text="#", width=3, bg=header_bg, fg=COLOR_PRIMARY, font=FONT_BOLD).pack(side="left", padx=1)
-        for lbl, key in self.sondaj_headers:
-            tk.Label(
-                header_frame,
-                text=lbl,
-                width=self.sondaj_column_widths.get(key, 11),
-                bg=header_bg,
-                fg=COLOR_PRIMARY,
-                font=FONT_BOLD,
-            ).pack(side="left", padx=1, pady=5)
+        configure_table_columns(header_frame)
+        tk.Frame(header_frame, width=5, bg=COLOR_BORDER_STRONG).grid(
+            row=0, column=0, sticky="ns"
+        )
         tk.Label(
             header_frame,
-            text="Durum",
-            width=18,
+            text="#",
+            width=1,
             bg=header_bg,
             fg=COLOR_PRIMARY,
             font=FONT_BOLD,
-            anchor="w",
-        ).pack(side="left", padx=(8, 4))
+        ).grid(row=0, column=2, sticky="nsew", padx=1, pady=5)
+        for column, (lbl, key) in enumerate(
+            self.sondaj_headers,
+            start=field_first_column,
+        ):
+            tk.Label(
+                header_frame,
+                text=lbl,
+                width=1,
+                bg=header_bg,
+                fg=COLOR_PRIMARY,
+                font=FONT_BOLD,
+            ).grid(row=0, column=column, sticky="nsew", padx=1, pady=5)
+        tk.Label(
+            header_frame,
+            text="Durum",
+            width=1,
+            bg=header_bg,
+            fg=COLOR_PRIMARY,
+            font=FONT_BOLD,
+        ).grid(row=0, column=status_column, sticky="nsew", padx=(8, 4), pady=5)
 
         for idx, s_data in enumerate(sondajlar):
             parity = "odd" if idx % 2 else "even"
@@ -357,9 +386,10 @@ class SondajMixin:
             row_frame._normal_border = COLOR_BORDER
             row_frame._selected = idx == selected_before
             row_frame.pack(fill="x", pady=(0, 2), padx=2)
+            configure_table_columns(row_frame)
 
             status_strip = tk.Frame(row_frame, width=5, bg=status_color)
-            status_strip.pack(side="left", fill="y")
+            status_strip.grid(row=0, column=0, sticky="ns")
             selector = tk.Radiobutton(
                 row_frame,
                 variable=self.sondaj_secili_index_var,
@@ -373,21 +403,24 @@ class SondajMixin:
                 padx=0,
                 pady=0,
             )
-            selector.pack(side="left", padx=(2, 0))
+            selector.grid(row=0, column=1)
             row_number = tk.Label(
                 row_frame,
                 text=str(idx + 1),
-                width=3,
+                width=1,
                 bg=row_bg,
                 fg=COLOR_PRIMARY,
                 font=FONT_BOLD,
                 cursor="hand2",
             )
-            row_number.pack(side="left", padx=1)
+            row_number.grid(row=0, column=2, sticky="nsew", padx=1)
             row_number.bind("<Button-1>", lambda _event, i=idx: self.sondaj_secili_satir_ayarla(i))
 
             row_entries = {}
-            for lbl, key in self.sondaj_headers:
+            for column, (_lbl, key) in enumerate(
+                self.sondaj_headers,
+                start=field_first_column,
+            ):
                 if key == "sondaj_turu":
                     e = ttk.Combobox(row_frame, values=("Zemin", "Kaya"), state="readonly", width=10)
                     e.set(self.sondaj_turu_degeri(s_data))
@@ -398,8 +431,8 @@ class SondajMixin:
                     e = UndoRedoEntry(row_frame, width=12)
                     e.insert(0, s_data.get(key, ""))
                 e._sondaj_parity = parity
-                e.configure(width=self.sondaj_column_widths.get(key, 11))
-                e.pack(side="left", padx=1, pady=3)
+                e.configure(width=1)
+                e.grid(row=0, column=column, sticky="ew", padx=1, pady=3)
                 e.bind(
                     "<FocusIn>",
                     lambda event, rf=row_frame, i=idx: self.sondaj_satir_odaklandi(rf, i),
@@ -437,7 +470,13 @@ class SondajMixin:
                 )
 
             status_area = tk.Frame(row_frame, bg=row_bg)
-            status_area.pack(side="left", padx=(8, 4), pady=3)
+            status_area.grid(
+                row=0,
+                column=status_column,
+                sticky="ew",
+                padx=(8, 4),
+                pady=3,
+            )
             status_dot = tk.Frame(status_area, width=8, height=8, bg=status_color)
             status_dot.pack(side="left", padx=(0, 6))
             status_dot.pack_propagate(False)
@@ -789,7 +828,8 @@ class SondajMixin:
         if key == "der":
             if not text:
                 return "warning", "Derinlik eksik"
-            return ("ok", "") if safe_float(text) > 0 else ("error", "Derinlik pozitif olmalı")
+            number = sayi_veya_none(text)
+            return ("ok", "") if number is not None and number > 0 else ("error", "Derinlik pozitif sayı olmalı")
         if key == "sondaj_turu":
             return ("ok", "") if text in ("Zemin", "Kaya") else ("warning", "Zemin/Kaya seçilmeli")
         if key == "delgi_capi":
@@ -797,7 +837,9 @@ class SondajMixin:
         if key in ("y", "x"):
             if not text:
                 return "ok", ""
-            value_num = safe_float(text)
+            value_num = sayi_veya_none(text)
+            if value_num is None:
+                return "error", "Koordinat sayısal olmalı"
             if key == "y" and -90 <= value_num <= 90 and value_num != 0:
                 return "ok", ""
             if key == "x" and -180 <= value_num <= 180 and value_num != 0:
@@ -806,7 +848,8 @@ class SondajMixin:
         if key in ("k", "yass_d1", "yass_d2"):
             if not text:
                 return "ok", ""
-            return ("ok", "") if safe_float(text) >= 0 else ("error", "Sayısal değer beklenir")
+            value_num = sayi_veya_none(text)
+            return ("ok", "") if value_num is not None and value_num >= 0 else ("error", "Sıfır veya pozitif sayı beklenir")
         if key in ("bas_tar", "bit_tar", "yass_t1", "yass_t2"):
             if not text:
                 return "ok", ""

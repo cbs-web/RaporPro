@@ -86,6 +86,48 @@ class HidrojeolojiRaporTestleri(unittest.TestCase):
         self.assertIn("kesin olarak değerlendirilmesi için yeterli olmadığından", text)
         self.assertIn("yeraltı suyu seviyesi kesin olarak belirlenememiştir", text)
 
+    def test_otomatik_analizde_yok_sonucu_kaynakla_sinirli_yazilir(self):
+        text = hidrojeoloji_durum_metni(
+            _arazi(
+                akar_dere="Yok",
+                kuru_dere="Yok",
+                cevre_analizi={
+                    "inceleme_yaricapi_m": 1000,
+                    "uygulanan_degerler": {
+                        "akar_dere": "Yok",
+                        "kuru_dere": "Yok",
+                    },
+                },
+            ),
+            [],
+        )
+
+        self.assertIn(
+            "sayısal hidrografya verisine göre parselin 1.000 m yakın çevrede",
+            text,
+        )
+        self.assertIn("kayıtlı akar veya kuru dere saptanmamıştır", text)
+        self.assertNotIn("bulunmamaktadır", text)
+
+    def test_kml_degistiginde_eski_otomatik_sonuc_rapora_kesin_yazilmaz(self):
+        text = hidrojeoloji_durum_metni(
+            _arazi(
+                akar_dere="Yok",
+                kuru_dere="Yok",
+                cevre_analizi={
+                    "gecersiz": True,
+                    "uygulanan_degerler": {
+                        "akar_dere": "Yok",
+                        "kuru_dere": "Yok",
+                    },
+                },
+            ),
+            [],
+        )
+
+        self.assertIn("yeniden doğrulanmalıdır", text)
+        self.assertNotIn("bulunmamaktadır", text)
+
     def test_rastlandi_seciminde_seviye_yoksa_deger_uydurulmaz(self):
         text = hidrojeoloji_durum_metni(
             _arazi(yass_durumu="Rastlandı"),

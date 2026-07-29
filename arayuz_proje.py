@@ -7,9 +7,8 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, Listbox, Toplevel
 
+from excel_guvenligi import excel_satiri_guvenli_yap
 from harita_cikti import eski_paylasimli_temp_harita_yolu_mu
-from hidrojeoloji_raporu import hidrojeoloji_varsayilanlari
-from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT
 from sabitler import *
 from yardimcilar import *
 from performans import ERROR_LOG_PATH, PERF_LOG_PATH, log_exception, perf_timer, perf_tracked
@@ -26,13 +25,14 @@ from proje_surumleri import (
     surum_deposunu_kopyala,
     surum_kaydi_olustur,
 )
-from proje_sema import PROJE_SEMA_SURUMU, proje_verisini_migre_et
+from proje_sema import proje_verisini_migre_et, varsayilan_proje_verisi
 from proje_paketi import (
     paket_proje_mi,
     paket_proje_verisini_kayda_hazirla,
     paket_proje_verisini_yukle,
     proje_paketi_olustur,
 )
+from proje_klasorleri import proje_alt_klasorlerini_olustur
 from rapor_sablonu import etkin_rapor_sablonu_yolu
 from kalite_kontrol import backup_project_file
 from workbook_motoru import (
@@ -50,6 +50,34 @@ RECENT_PROJECTS_PATH = str(
 
 
 class ArayuzProjeMixin:
+    def proje_alt_klasorlerini_hazirla(self, proje_dosyasi_yolu):
+        """Eksik proje klasörlerini oluşturur; kayıt işlemini klasör hatasında bozmaz."""
+
+        try:
+            info = proje_alt_klasorlerini_olustur(proje_dosyasi_yolu)
+        except Exception as exc:
+            log_exception("project.folders.create", exc_value=exc)
+            self.set_status(
+                f"Proje kaydedildi ancak alt klasörler hazırlanamadı: {exc}",
+                level="warning",
+            )
+            return None
+
+        errors = info.get("hatalar", [])
+        created = info.get("olusturulan", [])
+        if errors:
+            detail = ", ".join(item.get("klasor", "") for item in errors)
+            self.set_status(
+                f"Proje kaydedildi; bazı alt klasörler oluşturulamadı: {detail}",
+                level="warning",
+            )
+        elif created:
+            self.set_status(
+                f"Proje kaydedildi; {len(created)} standart alt klasör hazırlandı.",
+                level="success",
+            )
+        return info
+
     def proje_kayit_imzasi(self, veri=None):
         payload = veri if veri is not None else self.veri
         try:
@@ -168,21 +196,52 @@ class ArayuzProjeMixin:
         self.last_preflight_fingerprint = None
         self.last_output_quality_report = None
 
+    def _proje_durumunu_uygula(self, yeni_veri, yeni_dosya_yolu, *, kaydedilmemis=False):
+        """Model ve arayuz birlikte uygulanamazsa onceki proje durumuna don."""
+        eski_veri = self.veri
+        eski_dosya_yolu = self.aktif_dosya_yolu
+        eski_imza = getattr(self, "_son_kayit_imzasi", None)
+        eski_kontrol = {
+            "last_preflight_report": getattr(self, "last_preflight_report", None),
+            "last_preflight_fingerprint": getattr(self, "last_preflight_fingerprint", None),
+            "last_output_quality_report": getattr(self, "last_output_quality_report", None),
+        }
+        try:
+            self.veri = yeni_veri
+            self.aktif_dosya_yolu = yeni_dosya_yolu
+            self._proje_kontrol_hafizasini_sifirla()
+            self.doldur_arayuz()
+            self.proje_baslik_guncelle()
+            if kaydedilmemis:
+                self._son_kayit_imzasi = None
+            else:
+                self.kayit_imzasi_guncelle(collect=True)
+        except Exception:
+            self.veri = eski_veri
+            self.aktif_dosya_yolu = eski_dosya_yolu
+            self._son_kayit_imzasi = eski_imza
+            for key, value in eski_kontrol.items():
+                setattr(self, key, value)
+            try:
+                self.doldur_arayuz()
+                self.proje_baslik_guncelle()
+            except Exception as rollback_exc:
+                log_exception("project.apply.rollback_ui", exc_value=rollback_exc)
+            raise
+
     def proje_dosyasi_yukle(self, dosya_yolu):
         with perf_timer("project.open_read_apply"):
             with open(dosya_yolu, 'r', encoding='utf-8') as f:
                 yuklenen_veri = json.load(f)
             yuklenen_veri = paket_proje_verisini_yukle(yuklenen_veri, dosya_yolu)
             yuklenen_veri, migrasyon = self.proje_verisini_hazirla(yuklenen_veri)
-            self.veri = yuklenen_veri
-            self.aktif_dosya_yolu = dosya_yolu
-            self._proje_kontrol_hafizasini_sifirla()
-            self.doldur_arayuz()
-            if migrasyon.degisti:
-                self._son_kayit_imzasi = None
-            else:
-                self.kayit_imzasi_guncelle(collect=True)
-        self.proje_baslik_guncelle()
+            self._proje_durumunu_uygula(
+                yuklenen_veri,
+                dosya_yolu,
+                kaydedilmemis=migrasyon.degisti,
+            )
+        if hasattr(self, "otomatik_kayit_projesini_degistir"):
+            self.otomatik_kayit_projesini_degistir()
         self.recent_project_ekle(dosya_yolu)
         if migrasyon.degisti:
             self.set_status(
@@ -357,91 +416,7 @@ class ArayuzProjeMixin:
                 log_exception("shortcut.bind", exc_value=exc)
 
     def varsayilan_veri_olustur(self):
-        default = {
-            "schema_version": PROJE_SEMA_SURUMU,
-            "kunye": {"sahibi":"", "il":"", "ilce":"", "mah":"", "mev":"", "paf":"", "ada":"", "par":""},
-            "bina": {"kul":"", "sinif":"", "onem":"", "malz":"", "bod":"", "kat":"", "plan":"", "yukseklik":"", "yukseklik_sinif":"", "temel_alan":"", "ins":"", "der":"", "gqe_min":"", "gqe_max":"", "gqe_ort":"", "comb_min":"", "comb_max":"", "comb_ort":"", "ysinif":"", "tem":"", "coklu_blok": False, "bloklar": []},
-            "arazi": {
-                "kot": "", "yon": "", "egim": "", "min": "", "max": "", "ort": "",
-                "imar_alani": "", "imar_durumu": "", "zemin": "", "kategori": "",
-                "pga": "", "alan_y": "", "alan_x": "",
-                "hidrojeoloji": hidrojeoloji_varsayilanlari(),
-            },
-            "sondaj": [],
-            "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
-            "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
-            "lab_sheet": {"rows": []},
-            "jeofizik_sheet": {"rows": []},
-            "kesit_ayarlari": {
-                "section_engine": KESIT_ENGINE_DEFAULT,
-                "show_detailed_lithology_labels": False,
-            },
-            "ek_icerikleri": {"normal": {}, "arazi_deneyli": {}},
-            "proje_durumu": {"tamamlandi": False, "kilitli": False, "tamamlanma_tarihi": "", "arsiv_notu": ""},
-            "ayarlar": {
-                "firma_adi": "UB ZEMIN MUHENDISLIK",
-                "log_baslik": "SONDAJ LOGU",
-                "sorumlu_muhendis_unvan": "Sorumlu Jeoloji Muhendisi",
-                "sorumlu_muhendis": "Gökalp DOĞAN",
-                "sondor_belge_baslik": "Sondor Belge No",
-                "sondor_belge": "Murat ERÇELİK 3629",
-                "makine_metodu": "Rotary / Burgusuz",
-                "spt_sahmerdan": "Otomatik",
-                "sondaj_turu": "Zemin",
-                "delgi_capi": "76mm",
-                "varsayilan_word_path": "",
-                "varsayilan_cikti_klasor": "",
-                "log_export_klasor": "",
-                "log_export_format": "JPG",
-                "log_export_dpi": "300",
-                "log_export_prefix": "Log",
-                "cikti_merkezi_klasor": "",
-                "cikti_merkezi_format": "JPG",
-                "cikti_merkezi_dpi": "300",
-                "cikti_merkezi_secimler": {
-                    "report": True,
-                    "logs": True,
-                    "section": True,
-                    "maps": True,
-                    "report_images": True,
-                    "taahhutnameler": True,
-                    "ekler": True,
-                },
-                "harita_altlik": "Google Uydu",
-                "rapor_buyuk_baslik_yeni_sayfa": "1",
-                "taahhut_ilgili_idare": "",
-                "taahhut_tarih": "",
-                "ek_tutanak_path": "",
-                "ek_arazi_deneyli_path": "",
-                "tutanak_sablon_path": "",
-                "tutanak_sondaj_firma": "Kale Detay Sondaj",
-                "tutanak_uygulama_sekli": "Burgusuz/Sulu",
-                "tutanak_sondaj_makinesi": "SMK-500",
-                "tutanak_jeofizik_cihaz": "GEODE",
-                "tutanak_jeofon": "3,0m - 4,5 Hz",
-                "tutanak_offset": "3,0m",
-                "tutanak_kanal_sayisi": "12",
-                "tutanak_kaynak": "Balyoz",
-                "taahhut_jeoloji_ad": "Gökalp DOĞAN",
-                "taahhut_jeoloji_sicil": "7400",
-                "taahhut_jeoloji_unvan": "JEOLOJİ MÜHENDİSİ",
-                "taahhut_jeoloji_imza_unvan": "Jeoloji Mühendisi",
-                "taahhut_jeoloji_adres": "İsmetpaşa Mh. Hasan Mevsuf Sk. No :4 Da:5",
-                "taahhut_jeoloji_telefon": "0 545 639 90 62",
-                "taahhut_jeofizik_ad": "Suat ERGİN",
-                "taahhut_jeofizik_sicil": "1982",
-                "taahhut_jeofizik_unvan": "JEOFİZİK MÜHENDİSİ",
-                "taahhut_jeofizik_imza_unvan": "Jeofizik Mühendisi",
-                "taahhut_jeofizik_adres": "İsmetpaşa Mh. Hasan Mevsuf Sk. No :4 Da:5",
-                "taahhut_jeofizik_telefon": "0 532 281 12 95",
-                "yedek_sayisi": "10",
-                "surum_gecmisi_sayisi": str(VARSAYILAN_SURUM_SINIRI),
-                "spt_guven_esigi": "90",
-                "spt_auto_pro": "1"
-            },
-            "dosyalar": {"kml_path": None, "word_path": None, "lab_excel_path": None, "jeo_excel_path": None, "img_yer": None, "img_tkgm": None, "img_pga": None, "img_mjh": None, "word_img_sondaj": None, "word_img_jeofizik": None}
-        }
-        return default
+        return varsayilan_proje_verisi()
 
     def proje_verisini_hazirla(self, veri):
         return proje_verisini_migre_et(veri, self.varsayilan_veri_olustur())
@@ -512,6 +487,8 @@ class ArayuzProjeMixin:
             self.lbl_kml_top.config(text=text, fg=color)
         if hasattr(self, "harita_durum_yenile"):
             self.harita_durum_yenile()
+        if hasattr(self, "hidrojeoloji_cevre_analizi_durumunu_guncelle"):
+            self.hidrojeoloji_cevre_analizi_durumunu_guncelle()
 
     @perf_tracked("project.load_default")
     def veri_yukle(self):
@@ -582,55 +559,106 @@ class ArayuzProjeMixin:
         self.guncelle_veri_objesi()
         if not self.aktif_dosya_yolu:
             if not messagebox.askyesno("Proje Kilitle", "Projeyi kilitlemeden önce kaydetmek gerekir. Şimdi kaydedilsin mi?"):
-                return
-            self.proje_farkli_kaydet()
-            if not self.aktif_dosya_yolu:
-                return
+                return False
+            if not self.proje_farkli_kaydet():
+                return False
         if self.proje_kilitli_mi():
             messagebox.showinfo("Proje Kilitli", "Bu proje zaten tamamlandı olarak kilitli.")
-            return
+            return False
         lat, lon = proje_merkez_koordinati(self.veri)
         tarih = datetime.datetime.now().isoformat(timespec="seconds")
-        self.proje_durumu().update({
+        durum = self.proje_durumu()
+        onceki_durum = copy.deepcopy(durum)
+        durum.update({
             "tamamlandi": True,
             "kilitli": True,
             "tamamlanma_tarihi": tarih,
         })
+        onceki_izin = getattr(self, "_kilitli_kayda_izin_ver", False)
+        try:
+            self._kilitli_kayda_izin_ver = True
+            kaydedildi = bool(self.veri_kaydet())
+        except Exception as exc:
+            log_exception("project.lock.save", exc_value=exc)
+            kaydedildi = False
+        finally:
+            self._kilitli_kayda_izin_ver = onceki_izin
+        if not kaydedildi:
+            durum.clear()
+            durum.update(onceki_durum)
+            self.proje_baslik_guncelle()
+            self.set_save_indicator("Kilit kaydedilemedi", "error")
+            messagebox.showerror(
+                "Proje Kilitle",
+                "Proje diske kaydedilemediği için kilit işlemi geri alındı.",
+            )
+            return False
+
+        arsive_eklendi = True
         try:
             arsiv_kaydi_ekle(self.veri, self.aktif_dosya_yolu, kml_path=getattr(self, "kml_path", None))
         except Exception as exc:
+            arsive_eklendi = False
             log_exception("project.archive.add", exc_value=exc)
-            self.set_status(f"Arşiv kaydı oluşturulamadı: {exc}", level="warning")
-        try:
-            self._kilitli_kayda_izin_ver = True
-            self.veri_kaydet()
-        finally:
-            self._kilitli_kayda_izin_ver = False
+            self.set_status(f"Proje kilitlendi ancak arşiv kaydı oluşturulamadı: {exc}", level="warning")
         self.proje_baslik_guncelle()
-        msg = "Proje tamamlandı olarak kilitlendi ve arşiv listesine eklendi."
+        msg = (
+            "Proje tamamlandı olarak kilitlendi ve arşiv listesine eklendi."
+            if arsive_eklendi
+            else "Proje tamamlandı olarak kilitlendi; arşiv kaydı oluşturulamadı."
+        )
         if not lat or not lon:
             msg += "\n\nNot: KML haritasında görünmesi için Arazi sekmesinde proje merkezi veya sondaj koordinatı gerekir."
         messagebox.showinfo("Proje Kilitlendi", msg)
+        return True
 
     def proje_kilidini_kaldir(self):
         if not self.proje_kilitli_mi():
             messagebox.showinfo("Proje Kilidi", "Bu proje kilitli değil.")
-            return
+            return False
         if not messagebox.askyesno("Kilidi Kaldır", "Proje kilidi kaldırılsın mı? Bundan sonra proje tekrar düzenlenip kaydedilebilir."):
-            return
-        self.proje_durumu().update({"tamamlandi": False, "kilitli": False})
+            return False
+        durum = self.proje_durumu()
+        onceki_durum = copy.deepcopy(durum)
+        durum.update({"tamamlandi": False, "kilitli": False})
+        onceki_izin = getattr(self, "_kilitli_kayda_izin_ver", False)
+        try:
+            self._kilitli_kayda_izin_ver = True
+            kaydedildi = bool(self.veri_kaydet())
+        except Exception as exc:
+            log_exception("project.unlock.save", exc_value=exc)
+            kaydedildi = False
+        finally:
+            self._kilitli_kayda_izin_ver = onceki_izin
+        if not kaydedildi:
+            durum.clear()
+            durum.update(onceki_durum)
+            self.proje_baslik_guncelle()
+            self.set_save_indicator("Kilit kaldırma kaydedilemedi", "error")
+            messagebox.showerror(
+                "Kilidi Kaldır",
+                "Değişiklik diske kaydedilemediği için proje kilidi geri yüklendi.",
+            )
+            return False
+
+        arsivden_silindi = True
         try:
             arsiv_kaydi_sil(self.aktif_dosya_yolu)
         except Exception as exc:
+            arsivden_silindi = False
             log_exception("project.archive.remove", exc_value=exc)
-        try:
-            self._kilitli_kayda_izin_ver = True
-            self.veri_kaydet()
-        finally:
-            self._kilitli_kayda_izin_ver = False
+            self.set_status(f"Kilit kaldırıldı ancak arşiv kaydı silinemedi: {exc}", level="warning")
         self.proje_baslik_guncelle()
-        self.set_save_indicator("Kilit kaldırıldı", "info")
-        messagebox.showinfo("Kilidi Kaldır", "Proje kilidi kaldırıldı.")
+        if arsivden_silindi:
+            self.set_save_indicator("Kilit kaldırıldı", "info")
+            messagebox.showinfo("Kilidi Kaldır", "Proje kilidi kaldırıldı.")
+        else:
+            self.set_save_indicator("Kilit kaldırıldı: arşiv uyarısı", "warning")
+            messagebox.showwarning(
+                "Kilidi Kaldır",
+                "Proje kilidi kaldırıldı; arşiv kaydı silinemedi.",
+            )
+        return True
 
     def biten_isler_kml_olustur(self):
         records = arsiv_kayitlari_yukle()
@@ -676,8 +704,11 @@ class ArayuzProjeMixin:
                 self.last_save_time = datetime.datetime.now()
                 self.set_save_indicator(f"Son kayıt: {self.last_save_time.strftime('%H:%M')}", "success")
                 self.recent_project_ekle(self.aktif_dosya_yolu)
+                if hasattr(self, "otomatik_kayit_temizle"):
+                    self.otomatik_kayit_temizle()
                 if backup_path:
                     self.set_status(f"Yedek oluşturuldu: {os.path.basename(backup_path)}", level="info")
+                self.proje_alt_klasorlerini_hazirla(self.aktif_dosya_yolu)
                 return True
             except Exception as e:
                 self.set_status(f"Kayıt Hatası: {str(e)}", level="error")
@@ -724,8 +755,11 @@ class ArayuzProjeMixin:
                 self.last_save_time = datetime.datetime.now()
                 self.set_save_indicator(f"Son kayıt: {self.last_save_time.strftime('%H:%M')}", "success")
                 self.recent_project_ekle(dosya_yolu)
+                if hasattr(self, "otomatik_kayit_temizle"):
+                    self.otomatik_kayit_temizle()
                 if backup_path:
                     self.set_status(f"Yedek oluşturuldu: {os.path.basename(backup_path)}", level="info")
+                self.proje_alt_klasorlerini_hazirla(dosya_yolu)
                 return True
             except Exception as e:
                 messagebox.showerror("Hata", f"Dosya kaydedilemedi:\n{str(e)}")
@@ -754,6 +788,8 @@ class ArayuzProjeMixin:
         self.yeni_proje_sihirbazi()
 
     def reset_dosya_baglantilari(self):
+        if hasattr(self, "otomatik_kayit_projesini_degistir"):
+            self.otomatik_kayit_projesini_degistir()
         self.aktif_dosya_yolu = None
         self.kml_path = None
         self.word_path = None
@@ -903,6 +939,8 @@ class ArayuzProjeMixin:
     def proje_sablonu_uygula(self, template):
         label, count, depth, desc = template
         mevcut_ayarlar = self.veri.get("ayarlar", {}).copy()
+        if hasattr(self, "otomatik_kayit_projesini_degistir"):
+            self.otomatik_kayit_projesini_degistir()
         self.veri = self.varsayilan_veri_olustur()
         self.veri["ayarlar"].update(mevcut_ayarlar)
         self.veri["sondaj"] = []
@@ -950,23 +988,29 @@ class ArayuzProjeMixin:
             rows, _ = wb_build_initial_rows(self.veri, WORKBOOK_SHEET_DEFS)
             for sheet_key, spec in WORKBOOK_SHEET_DEFS.items():
                 ws = wb.create_sheet(spec["title"])
-                ws.append([label for label, _ in spec["columns"]])
+                ws.append(excel_satiri_guvenli_yap(
+                    [label for label, _ in spec["columns"]]
+                ))
                 for cell in ws[1]:
                     cell.font = Font(bold=True)
                     cell.fill = PatternFill("solid", fgColor="D9EAF7")
                 for row in rows.get(sheet_key, []):
-                    ws.append(row)
+                    ws.append(excel_satiri_guvenli_yap(row))
                 for idx, width in enumerate(spec["widths"], start=1):
                     ws.column_dimensions[get_column_letter(idx)].width = max(10, width / 7)
             health = proje_saglik_ozeti(self.veri, self._dosya_map())
             ws = wb.create_sheet("Saglik")
-            ws.append(["Durum", health["state"], health["score"]])
+            ws.append(excel_satiri_guvenli_yap(
+                ["Durum", health["state"], health["score"]]
+            ))
             ws.append(["Başlık", "Sonuç", "Detay"])
             for item in health["items"]:
-                ws.append([item["label"], "OK" if item["ok"] else "EKSIK", item["detail"]])
+                ws.append(excel_satiri_guvenli_yap(
+                    [item["label"], "OK" if item["ok"] else "EKSIK", item["detail"]]
+                ))
             ws = wb.create_sheet("Hesap Ozeti")
             for line in format_hesap_ozeti(hesap_ozeti(self.veri)).splitlines():
-                ws.append([line])
+                ws.append(excel_satiri_guvenli_yap([line]))
             wb.save(path)
             self.set_status(f"Proje verisi aktarıldı: {os.path.basename(path)}", level="success")
         except Exception as exc:

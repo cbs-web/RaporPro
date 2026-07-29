@@ -19,26 +19,9 @@ from matplotlib.font_manager import FontProperties
 import matplotlib.patches as mpatches
 from matplotlib.textpath import TextPath
 
-try:
-    from sabitler import LEJANTLAR
-    from yardimcilar import safe_float, litoloji_cozumle
-    from cizim import GeoEngineDraw
-except ImportError:
-    LEJANTLAR = []
-
-    def safe_float(value):
-        try:
-            return float(str(value).replace(",", "."))
-        except Exception:
-            return 0.0
-
-    def litoloji_cozumle(text):
-        return "tanimsiz"
-
-    class GeoEngineDraw:
-        @staticmethod
-        def draw_pattern(ax, p, s, c, bbox=None, density_scale=1):
-            return None
+from sabitler import LEJANTLAR
+from yardimcilar import safe_float, litoloji_cozumle
+from cizim import GeoEngineDraw
 
 
 @lru_cache(maxsize=4096)

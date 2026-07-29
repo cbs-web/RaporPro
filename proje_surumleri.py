@@ -163,6 +163,17 @@ def _index_yolu(project_path):
     return os.path.join(surum_deposu_yolu(project_path), "index.json")
 
 
+def _bozuk_indeksi_koru(path):
+    """Okunamayan indeksi kaybetmeden temiz bir indeks için yer açar."""
+    candidate = f"{path}.corrupt"
+    counter = 2
+    while os.path.exists(candidate):
+        candidate = f"{path}.corrupt.{counter}"
+        counter += 1
+    os.replace(path, candidate)
+    return candidate
+
+
 def _bos_index(project_path):
     return {
         "schema_version": SURUM_SEMA,
@@ -183,11 +194,17 @@ def _index_yukle(project_path):
         if not isinstance(payload, dict):
             raise ValueError("Sürüm indeksi sözlük değil")
         versions = payload.get("versions")
-        payload["versions"] = versions if isinstance(versions, list) else []
+        if not isinstance(versions, list) or not all(isinstance(item, dict) for item in versions):
+            raise ValueError("Sürüm indeksi kayıt listesi geçersiz")
+        payload["versions"] = versions
         payload["schema_version"] = SURUM_SEMA
         payload["project_path"] = os.path.abspath(project_path)
         imports = payload.get("legacy_imports")
-        payload["legacy_imports"] = imports if isinstance(imports, list) else []
+        if imports is not None and not isinstance(imports, list):
+            raise ValueError("Sürüm indeksi eski yedek listesi geçersiz")
+        payload["legacy_imports"] = imports or []
+        if any(_surum_dosya_yolu(project_path, record) is None for record in payload["versions"]):
+            raise ValueError("Sürüm indeksinde güvensiz dosya yolu var")
         try:
             next_sequence = max(1, int(payload.get("next_sequence", 1)))
         except Exception:
@@ -205,6 +222,11 @@ def _index_yukle(project_path):
         payload["next_sequence"] = max(next_sequence, max(used_sequences, default=0) + 1)
         return payload
     except Exception:
+        try:
+            if os.path.exists(path):
+                _bozuk_indeksi_koru(path)
+        except OSError as preserve_exc:
+            raise RuntimeError("Bozuk sürüm indeksi korunamadı; dosya değiştirilmedi") from preserve_exc
         return _bos_index(project_path)
 
 
@@ -215,9 +237,19 @@ def _index_kaydet(project_path, index):
 
 def _surum_dosya_yolu(project_path, record):
     relative = _metin(record.get("file")) if isinstance(record, dict) else ""
-    if not relative:
+    if not relative or os.path.isabs(relative) or os.path.splitdrive(relative)[0]:
         return None
-    return os.path.abspath(os.path.join(surum_deposu_yolu(project_path), relative))
+    relative = os.path.normpath(relative.replace("/", os.sep))
+    versions_root = os.path.realpath(os.path.join(surum_deposu_yolu(project_path), "versions"))
+    candidate = os.path.realpath(os.path.join(surum_deposu_yolu(project_path), relative))
+    try:
+        if os.path.commonpath([candidate, versions_root]) != versions_root:
+            return None
+    except (OSError, TypeError, ValueError):
+        return None
+    if os.path.splitext(candidate)[1].casefold() != ".json":
+        return None
+    return candidate
 
 
 def _surum_verisi_oku(project_path, record):

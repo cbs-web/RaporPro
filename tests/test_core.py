@@ -1,4 +1,3 @@
-import json
 import copy
 import json
 import os
@@ -9,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
 from openpyxl import load_workbook
 
 import spt_okuma_motoru as spt_motoru
@@ -3135,6 +3135,7 @@ class KesitCizimTestleri(unittest.TestCase):
             self.assertIn("<path", svg_text)
         fig.clear()
 
+    @pytest.mark.slow
     def test_topografyali_uzun_kesit_cok_sayfali_pdf_olarak_kaydedilir(self):
         import fitz
 

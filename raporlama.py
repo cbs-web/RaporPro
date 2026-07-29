@@ -5,6 +5,7 @@ import re
 import time
 import tempfile
 import unicodedata
+import copy
 from types import SimpleNamespace
 from tkinter import filedialog
 import pandas as pd
@@ -17,14 +18,25 @@ from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
-from yardimcilar import atomic_docx_save, temizle_baslik, zemin_sinifi_cevir, safe_float
+from yardimcilar import (
+    atomic_docx_save,
+    docx_metadata_nortrle,
+    temizle_baslik,
+    zemin_sinifi_cevir,
+    safe_float,
+)
 from motor import GeoEngine
 from hidrojeoloji_raporu import (
     hidrojeoloji_durum_metni,
     hidrojeoloji_word_paragrafini_uygula,
 )
+from jeoloji_raporu import (
+    jeoloji_kisa_formasyon_metni,
+    jeoloji_rapor_bloklari,
+)
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_ss_koordinatlarini_koru
 from performans import log_exception, perf_log, perf_timer
+from rapor_etiketleri import DUZELTME_ETIKET_ADLARI, DUZELTME_ETIKET_GRUPLARI
 from rapor_sablonu import rapor_sablonu_durumu
 from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
@@ -56,6 +68,30 @@ from raporlama_tablo import (
     style_cell_text,
     style_report_table_row,
 )
+
+
+def rapor_baglami_olustur(kaynak, *, word_path=None, veri=None, durum_bildir=False):
+    """Rapor motoruna yalniz ihtiyac duydugu alanlarin anlik goruntusunu ver."""
+
+    kaynak_veri = getattr(kaynak, "veri", {}) if veri is None else veri
+    status_callback = getattr(kaynak, "set_status", None) if durum_bildir else None
+    if not callable(status_callback):
+        status_callback = lambda *_args, **_kwargs: None
+    return SimpleNamespace(
+        word_path=word_path if word_path is not None else getattr(kaynak, "word_path", None),
+        veri=copy.deepcopy(kaynak_veri),
+        jeo_excel_path=getattr(kaynak, "jeo_excel_path", None),
+        lab_excel_path=getattr(kaynak, "lab_excel_path", None),
+        img_yer=getattr(kaynak, "img_yer", None),
+        img_tkgm=getattr(kaynak, "img_tkgm", None),
+        img_pga=getattr(kaynak, "img_pga", None),
+        img_mjh=getattr(kaynak, "img_mjh", None),
+        word_img_jeofizik=getattr(kaynak, "word_img_jeofizik", None),
+        word_img_sondaj=getattr(kaynak, "word_img_sondaj", None),
+        set_status=status_callback,
+    )
+
+
 def _log_silent(name, exc):
     log_exception(f"raporlama.{name}", exc_value=exc)
 
@@ -76,59 +112,6 @@ def lab_sheet_satirlari(app_instance):
 
 def lab_sheet_verisi_var_mi(app_instance):
     return any(any(str(cell).strip() for cell in row) for row in lab_sheet_satirlari(app_instance))
-
-DUZELTME_ETIKET_GRUPLARI = [
-    (
-        "Proje ve arazi",
-        [
-            ("[BINA_BILGILERI]", "Bina bilgileri"),
-            ("[Sondaj]", "Sondaj / litoloji tablosu"),
-            ("[YASS_TABLO]", "Yeraltı suyu tablosu"),
-            ("[YASS_ONERI]", "Yeraltı suyu önerisi"),
-            ("[HIDROJEOLOJI_DURUM]", "Hidrojeoloji durum açıklaması"),
-        ],
-    ),
-    (
-        "Laboratuvar ve arazi deneyleri",
-        [
-            ("[LAB_FIZIK]", "Laboratuvar fiziksel deneyler"),
-            ("[LAB_MEKANIK]", "Laboratuvar mekanik deneyler"),
-            ("[ZEMIN_OZET]", "Zemin parametre özeti"),
-            ("[LITOLOJI_DAGILIM]", "Litoloji dağılımı"),
-            ("[SPT]", "SPT tablosu"),
-            ("[PMT]", "Presiyometre tablosu"),
-            ("[KAYA_TABLO]", "Kaya / karot tablosu"),
-        ],
-    ),
-    (
-        "Jeofizik",
-        [
-            ("[JEO_PARAMETRE]", "Jeofizik parametre tablosu"),
-            ("[MASW]", "MASW tablosu"),
-            ("[VP]", "VP tablosu"),
-            ("[JEO_KOOR]", "Jeofizik koordinatlar"),
-            ("[MT_TABLO]", "Mikrotremör tablosu"),
-            ("[JEO_SONUC]", "Jeofizik sonuç"),
-        ],
-    ),
-    (
-        "Görseller",
-        [
-            ("[RESIM_YERBULDURUR]", "Yerbuldurur haritası"),
-            ("RESIM:TKGM", "TKGM görseli"),
-            ("RESIM:PGA", "PGA görseli"),
-            ("[RESIM_JEOFIZIK]", "Jeofizik lokasyon haritası"),
-            ("RESIM:MJH", "Mühendislik jeolojisi haritası"),
-            ("[RESIM_SONDAJ]", "Sondaj lokasyon haritası"),
-        ],
-    ),
-]
-
-DUZELTME_ETIKET_ADLARI = {
-    tag: label
-    for _group_title, items in DUZELTME_ETIKET_GRUPLARI
-    for tag, label in items
-}
 
 def duzeltme_etiketleri_temizle(tags):
     selected = []
@@ -186,10 +169,7 @@ def duzeltme_etiket_ciktisi_olustur(app_instance, tags, final_path):
     with tempfile.TemporaryDirectory(prefix="raporpro_duzeltme_") as tmp:
         tmp_template = os.path.join(tmp, "duzeltme_etiket_sablonu.docx")
         duzeltme_etiket_sablonu_olustur(selected, tmp_template)
-        attrs = dict(getattr(app_instance, "__dict__", {}))
-        attrs["word_path"] = tmp_template
-        attrs.setdefault("set_status", lambda *_args, **_kwargs: None)
-        context = SimpleNamespace(**attrs)
+        context = rapor_baglami_olustur(app_instance, word_path=tmp_template)
         success, msg = raporla(context, final_path=final_path, autosave=False)
         if success:
             return True, f"Düzeltme etiket çıktısı oluşturuldu: {len(selected)} etiket."
@@ -556,6 +536,83 @@ def replace_tag_with_paragraphs(doc, tag, text_list, paragraphs=None, paragraph_
                 new_p = OxmlElement("w:p"); new_r = OxmlElement("w:r"); new_t = OxmlElement("w:t"); new_t.text = text; new_r.append(new_t); new_p.append(new_r); p._p.addnext(new_p)
             return
 
+
+def replace_tag_with_report_blocks(
+    doc,
+    tag,
+    blocks,
+    paragraphs=None,
+    paragraph_index=None,
+):
+    """Etiketi, yer tutucunun biçimini koruyan rapor paragraflarıyla değiştir."""
+    candidates = (
+        [paragraph_index.get(tag)]
+        if paragraph_index is not None
+        else _paragraph_source(doc, paragraphs)
+    )
+    for paragraph in candidates:
+        if paragraph is None or tag not in paragraph.text:
+            continue
+
+        paragraph_properties = (
+            copy.deepcopy(paragraph._p.pPr)
+            if paragraph._p.pPr is not None
+            else None
+        )
+        run_properties = None
+        if paragraph.runs and paragraph.runs[0]._r.rPr is not None:
+            run_properties = copy.deepcopy(paragraph.runs[0]._r.rPr)
+        paragraph.text = paragraph.text.replace(tag, "")
+        placeholder_empty = not paragraph.text.strip()
+        inserted = False
+
+        for block in reversed(blocks or []):
+            text = str(block.get("metin", "") if isinstance(block, dict) else block)
+            if not text.strip():
+                continue
+            block_type = (
+                str(block.get("tur", "metin"))
+                if isinstance(block, dict)
+                else "metin"
+            )
+            new_paragraph = OxmlElement("w:p")
+            if paragraph_properties is not None:
+                new_paragraph.append(copy.deepcopy(paragraph_properties))
+            p_pr = new_paragraph.get_or_add_pPr()
+            if p_pr.find(qn("w:keepLines")) is None:
+                p_pr.append(OxmlElement("w:keepLines"))
+            if block_type == "birim_basligi":
+                if p_pr.find(qn("w:keepNext")) is None:
+                    p_pr.append(OxmlElement("w:keepNext"))
+
+            new_run = OxmlElement("w:r")
+            if run_properties is not None:
+                new_run.append(copy.deepcopy(run_properties))
+            r_pr = new_run.get_or_add_rPr()
+            for bold_tag in ("w:b", "w:bCs"):
+                bold_node = r_pr.find(qn(bold_tag))
+                if bold_node is None:
+                    bold_node = OxmlElement(bold_tag)
+                    r_pr.append(bold_node)
+                bold_node.set(
+                    qn("w:val"),
+                    "1" if block_type == "birim_basligi" else "0",
+                )
+
+            new_text = OxmlElement("w:t")
+            new_text.text = text
+            new_run.append(new_text)
+            new_paragraph.append(new_run)
+            paragraph._p.addnext(new_paragraph)
+            inserted = True
+        if placeholder_empty and inserted:
+            parent = paragraph._p.getparent()
+            if parent is not None:
+                parent.remove(paragraph._p)
+        return True
+    return False
+
+
 def doc_replace_img(doc, keyword, img_path, paragraphs=None, paragraph_index=None):
     label = _safe_perf_label(keyword)
     if not img_path or not os.path.exists(img_path):
@@ -646,6 +703,9 @@ def raporla(app_instance, final_path=None, autosave=True):
             clean_word_tags(doc)
         report_paragraphs = list(iter_all_paragraphs(doc))
         structural_tags = [
+            "[BOLGESEL_JEOLOJI]", "[BOLGESEL_JEOLOJI_BIRIMLERI]",
+            "[MUHENDISLIK_JEOLOJISI]",
+            "[JEOLOJIK_KESIT_ACIKLAMA]", "[JEOLOJI_SONUC]", "[MT_BIRIM_METNI]",
             "[BINA_BILGILERI]", "[Sondaj]", "[YASS_TABLO]", "[LAB_FIZIK]", "[LAB_MEKANIK]",
             "[ZEMIN_OZET]", "[LITOLOJI_DAGILIM]", "[SPT]", "[PMT]", "[KAYA_TABLO]",
             "[JEO_PARAMETRE]", "[MASW]", "[VP]", "[JEO_KOOR]", "[MT_TABLO]",
@@ -810,6 +870,32 @@ def raporla(app_instance, final_path=None, autosave=True):
         basic_tag_detail = _report_detail(tags=len(basic_replacements), replaced=replaced_basic_tags, sondaj=len(sondajlar))
         perf_log("report.basic_tags.replace", time.perf_counter() - basic_tag_start, basic_tag_detail)
         report_step("basic_tags", basic_tag_detail)
+
+        jeoloji_blocks = jeoloji_rapor_bloklari(app_instance.veri)
+        jeoloji_tag_map = {
+            "[BOLGESEL_JEOLOJI]": "bolgesel_giris",
+            "[BOLGESEL_JEOLOJI_BIRIMLERI]": "bolgesel_birimler",
+            "[MUHENDISLIK_JEOLOJISI]": "muhendislik",
+            "[JEOLOJIK_KESIT_ACIKLAMA]": "kesit",
+            "[JEOLOJI_SONUC]": "sonuc",
+            "[MT_BIRIM_METNI]": "mt",
+        }
+        jeoloji_replaced = 0
+        for tag, block_key in jeoloji_tag_map.items():
+            if replace_tag_with_report_blocks(
+                doc,
+                tag,
+                jeoloji_blocks[block_key],
+                paragraph_index=report_tag_index,
+            ):
+                jeoloji_replaced += 1
+        report_step(
+            "geology_texts",
+            _report_detail(
+                tags=jeoloji_replaced,
+                units=len(app_instance.veri.get("jeoloji", {}).get("birimler", [])),
+            ),
+        )
 
         bina = app_instance.veri["bina"]
         bina_table_start = time.perf_counter()
@@ -1354,8 +1440,9 @@ def raporla(app_instance, final_path=None, autosave=True):
                 p._p.addnext(table._tbl)
 
         mt_table_data = []; mt_headers = ["Ölçü No", "Baskın Frekans (Hz)", "Baskın Periyot (To) (sn)", "Ta (sn)", "Tb (sn)", "H/V Oranı", "Kayıt Süresi (dk)", "Formasyon"]
+        mt_formasyon = jeoloji_kisa_formasyon_metni(app_instance.veri) or "-"
         for mt in mt_list:
-            row = [mt.get("no", "-"), clean_val(mt.get("freq", "-")), clean_val(mt.get("to", "-")), clean_val(mt.get("ta", "-")), clean_val(mt.get("tb", "-")), clean_val(mt.get("hv", "-")), clean_val(mt.get("sure", "-")), "-"]
+            row = [mt.get("no", "-"), clean_val(mt.get("freq", "-")), clean_val(mt.get("to", "-")), clean_val(mt.get("ta", "-")), clean_val(mt.get("tb", "-")), clean_val(mt.get("hv", "-")), clean_val(mt.get("sure", "-")), mt_formasyon]
             mt_table_data.append(row)
         islem_tablo_yerlestir(doc, "[MT_TABLO]", mt_headers, mt_table_data, paragraph_index=report_tag_index)
         report_step("jeofizik_coord_mt_tables", _report_detail(ss=len(ss_list), mt=len(mt_list)))
@@ -1449,6 +1536,7 @@ def raporla(app_instance, final_path=None, autosave=True):
                 with perf_timer("report.major_headings_page_break"):
                     heading_count = buyuk_basliklari_yeni_sayfaya_al(doc)
                 report_step("major_headings_page_break", _report_detail(headings=heading_count))
+            docx_metadata_nortrle(doc)
             with perf_timer("report.save_docx", final):
                 atomic_docx_save(doc, final)
             report_step("save_docx", _file_perf_detail(final))

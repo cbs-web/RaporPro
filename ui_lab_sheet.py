@@ -3,6 +3,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from excel_guvenligi import excel_satiri_guvenli_yap
 from performans import perf_tracked
 from sabitler import COLOR_ACCENT, COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, FONT_BOLD
 
@@ -174,7 +175,7 @@ class LabSheetMixin:
                 ws = wb.active
                 ws.title = "LAB"
                 for row in rows:
-                    ws.append(row)
+                    ws.append(excel_satiri_guvenli_yap(row))
                 wb.save(path)
             except Exception as exc:
                 messagebox.showerror("LAB Sheet", f"Excel kaydedilemedi:\n{exc}")

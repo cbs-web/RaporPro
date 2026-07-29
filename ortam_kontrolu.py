@@ -11,16 +11,18 @@ REQUIRED_DEPENDENCIES = [
     ("docx", "python-docx", "Word raporu üretimi"),
     ("PIL", "Pillow", "Görsel işleme"),
     ("fitz", "PyMuPDF", "Ekler PDF üretimi"),
-    ("win32com", "pywin32", "Word raporu PDF önizlemesi"),
+    ("openpyxl", "openpyxl", "XLSX okuma, yazma ve taahhütname üretimi"),
     ("tkintermapview", "tkintermapview", "Harita ekranları"),
 ]
 
 OPTIONAL_DEPENDENCIES = [
     ("tksheet", "tksheet", "Excel benzeri workbook ekranı"),
-    ("openpyxl", "openpyxl", "XLSX içe/dışa aktarım"),
     ("xlrd", "xlrd", "Eski XLS dosyalarını okuma"),
     ("scipy", "scipy", "Gelişmiş hesap modülleri"),
     ("tkinterdnd2", "tkinterdnd2", "SPT fotoğraf kuyruğuna sürükle-bırak dosya ekleme"),
+    ("win32com", "pywin32", "Word ve Excel tabanlı PDF önizleme/aktarım"),
+    ("requests", "requests", "TKGM ve dış yapay zekâ servisleri"),
+    ("easyocr", "easyocr", "İmar ve zemin durum belgesi OCR ile veri aktarımı"),
 ]
 
 

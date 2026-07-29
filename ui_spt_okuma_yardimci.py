@@ -1,6 +1,7 @@
 # Dosya: RaporPro/ui_spt_okuma_yardimci.py
 import os
 
+from spt_gorsel import dogal_siralama_anahtari, dosya_parmak_izi
 from spt_okuma_motoru import normalize_sondaj_no
 from yardimcilar import safe_float
 
@@ -18,6 +19,13 @@ def source_unique_key(value):
     except Exception:
         pass
     return os.path.normcase(raw)
+
+
+def source_content_key(value):
+    raw = str(value or "").strip()
+    if not raw or not os.path.isfile(raw):
+        return ""
+    return dosya_parmak_izi(raw)
 
 
 def collect_image_paths(sources, recursive=True, image_exts=IMAGE_EXTS):
@@ -45,7 +53,7 @@ def collect_image_paths(sources, recursive=True, image_exts=IMAGE_EXTS):
                         found_paths.append(path)
         elif os.path.isfile(source) and os.path.splitext(source)[1].lower() in allowed_exts:
             found_paths.append(source)
-    return sorted(found_paths, key=lambda item: item.lower())
+    return sorted(found_paths, key=dogal_siralama_anahtari)
 
 
 def n30_numeric(kayit):
@@ -74,14 +82,6 @@ def context_issues(records):
         by_no.setdefault(kayit.sondaj_no, []).append((order, record))
 
     for _no, items in by_no.items():
-        last_depth = None
-        for _order, record in items:
-            depth = safe_float(record["kayit"].derinlik)
-            if last_depth is not None and depth > 0 and depth < last_depth - 0.01:
-                issues.setdefault(id(record), []).append("derinlik sırası bozuk")
-            if depth > 0:
-                last_depth = depth
-
         sorted_items = sorted(items, key=lambda item: safe_float(item[1]["kayit"].derinlik))
         prev_n30 = None
         refu_seen = False
@@ -91,14 +91,14 @@ def context_issues(records):
             if is_refu(kayit):
                 refu_seen = True
             elif refu_seen and n30_val is not None and n30_val < 50:
-                issues.setdefault(id(record), []).append("refü sonrası düşük N30")
+                issues.setdefault(id(record), []).append("mühendislik kontrolü: refü sonrası düşük N30")
             if n30_val is not None:
                 if n30_val > 80:
-                    issues.setdefault(id(record), []).append("N30 çok yüksek")
+                    issues.setdefault(id(record), []).append("mühendislik kontrolü: N30 çok yüksek")
                 elif n30_val < 2:
-                    issues.setdefault(id(record), []).append("N30 çok düşük")
+                    issues.setdefault(id(record), []).append("mühendislik kontrolü: N30 çok düşük")
                 if prev_n30 is not None and abs(n30_val - prev_n30) >= 25:
-                    issues.setdefault(id(record), []).append("N30 ani sıçrama yapıyor")
+                    issues.setdefault(id(record), []).append("mühendislik kontrolü: N30 ani sıçrama yapıyor")
                 prev_n30 = n30_val
     return issues
 
@@ -120,59 +120,93 @@ def record_quality(record, duplicate=False, context_messages=None, current_sonda
         status = record.get("queue_status", "ready")
         message = record.get("queue_message") or "Okumaya hazır"
         if status == "reading":
-            return {"level": "reading", "message": message or "Okunuyor"}
+            return {"level": "reading", "message": message or "Okunuyor", "fields": []}
         if status == "error":
-            return {"level": "error", "message": message or "Okunamadı"}
+            return {"level": "error", "message": message or "Okunamadı", "fields": ["kaynak"]}
         if status == "skipped":
-            return {"level": "warning", "message": message or "Tekrar olduğu için atlandı"}
-        return {"level": "queued", "message": message}
+            return {"level": "warning", "message": message or "Tekrar olduğu için atlandı", "fields": ["kaynak"]}
+        return {"level": "queued", "message": message, "fields": []}
 
     kayit = record["kayit"]
     settings = settings or {}
     valid_sondaj_nolari = valid_sondaj_nolari or set()
     current_sondaj_depth = current_sondaj_depth or (lambda _no: 0)
     guven = safe_float(kayit.guven)
+    guven_text = str(kayit.guven or "").strip()
+    raw = getattr(kayit, "raw", {}) or {}
     messages = list(context_messages or [])
+    fields = set()
     level = "warning" if messages else "ok"
+    info_messages = []
     if not record.get("include", True):
-        return {"level": "disabled", "message": "Aktarım dışı"}
+        return {"level": "disabled", "message": "Aktarım dışı", "fields": []}
     if not kayit.sondaj_no:
         messages.append("sondaj no eksik")
+        fields.add("sondaj_no")
         level = "error"
     elif valid_sondaj_nolari and normalize_sondaj_no(kayit.sondaj_no) not in valid_sondaj_nolari:
         messages.append("sondaj no projede yok")
-        if level != "error":
-            level = "warning"
+        fields.add("sondaj_no")
+        level = "error"
     if not kayit.derinlik:
         messages.append("derinlik eksik")
+        fields.add("derinlik")
         level = "error"
     if not (kayit.v15 or kayit.v30 or kayit.v45 or kayit.n30):
         messages.append("SPT değeri eksik")
+        fields.update(("v15", "v30", "v45", "n30"))
         level = "error"
     if duplicate:
         messages.append("aynı derinlik tekrar ediyor")
+        fields.add("derinlik")
         if level != "error":
             level = "warning"
     max_depth = current_sondaj_depth(kayit.sondaj_no)
     if max_depth and safe_float(kayit.derinlik) > max_depth + 0.01:
         messages.append("sondaj derinliğini geçiyor")
+        fields.add("derinlik")
         if level != "error":
             level = "warning"
-    if guven and guven < (safe_float(settings.get("guven_esigi", 90)) or 90):
+    if guven_text and guven < (safe_float(settings.get("guven_esigi", 90)) or 90):
         messages.append(f"düşük güven %{int(guven)}")
+        if level != "error":
+            level = "warning"
+    elif raw.get("motor") and not guven_text:
+        messages.append("güven değeri yok")
         if level != "error":
             level = "warning"
     if not kayit.n30:
         messages.append("N30 boş")
+        fields.add("n30")
         if level != "error":
             level = "warning"
     if kayit.uyari:
         messages.append(kayit.uyari)
+        uyari_lower = str(kayit.uyari).lower()
+        if "sondaj" in uyari_lower:
+            fields.add("sondaj_no")
+        if "derinlik" in uyari_lower:
+            fields.add("derinlik")
+        if any(token in uyari_lower for token in ("darbe", "spt", "n30")):
+            fields.update(("v15", "v30", "v45", "n30"))
         if "okunamadı" in kayit.uyari or "eksik" in kayit.uyari:
             level = "error"
         elif level != "error":
             level = "warning"
-    return {"level": level, "message": ", ".join(dict.fromkeys(messages)) or "Hazır"}
+    if raw.get("bilgi"):
+        info_messages.append(str(raw["bilgi"]))
+    okunan = str(raw.get("okunan_derinlik", "") or "")
+    hedef = str(raw.get("hedef_derinlik", "") or "")
+    if okunan and hedef and okunan != hedef and safe_float(raw.get("derinlik_duzeltme_m")) <= 0.35:
+        info_messages.append(f"derinlik {okunan} → {hedef} normalize edildi")
+    if level == "ok" and info_messages:
+        level = "info"
+    all_messages = list(dict.fromkeys(messages + info_messages))
+    return {
+        "level": level,
+        "message": ", ".join(all_messages) or "Hazır",
+        "fields": sorted(fields),
+    }
 
 
 def spt_unique_key(kayit, fallback_source="", default_sondaj_no=""):

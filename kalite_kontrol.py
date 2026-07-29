@@ -15,6 +15,7 @@ from tutarlilik_motoru import (
 from docx import Document
 from ekler import uygun_ek_sablonu
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_sheet_var_mi
+from rapor_etiketleri import DUZELTME_ETIKET_ADLARI
 from rapor_sablonu import etkin_rapor_sablonu_yolu
 
 
@@ -22,6 +23,9 @@ KNOWN_TAGS = {
     "[ADA]", "[ALAN_BOYLAM]", "[ALAN_ENLEM]", "[BINA_BILGILERI]",
     "[EGIM_YONU]", "[EGIM_YUZDE]", "[IL]", "[ILCE]", "[IMAR_ALANI]",
     "[IMAR_DURUMU]", "[JEO_KOOR]", "[JEO_PARAMETRE]", "[JEO_SONUC]",
+    "[BOLGESEL_JEOLOJI]", "[BOLGESEL_JEOLOJI_BIRIMLERI]",
+    "[MUHENDISLIK_JEOLOJISI]", "[JEOLOJIK_KESIT_ACIKLAMA]",
+    "[JEOLOJI_SONUC]", "[MT_BIRIM_METNI]",
     "[JEO_TARIH]", "[KATEGORI]", "[KATEGORI_ZEMIN]", "[KAYA_TABLO]",
     "[KOT_MAX]", "[KOT_MIN]", "[KOT_ORT]", "[LAB_FIZIK]",
     "[LAB_MEKANIK]", "[LITOLOJI_DAGILIM]", "[MAHALLE]", "[MASW]",
@@ -33,6 +37,7 @@ KNOWN_TAGS = {
     "[ZEMIN_OZET]", "RESIM:MJH", "RESIM:PGA", "RESIM:TKGM",
     "RESIM:Yerbuldurur",
 }
+KNOWN_TAGS.update(DUZELTME_ETIKET_ADLARI)
 
 PREFIXED_TAG_RE = re.compile(
     r"^\[S[1-5]_(PROJE_ADI|IL|ILCE|MAHALLE|MEVKI|PAFTA|ADA|PARSEL)\]$"
@@ -63,6 +68,12 @@ TAG_DESCRIPTIONS = {
     "[ADA]": "Ada bilgisini yazar.",
     "[PARSEL]": "Parsel bilgisini yazar.",
     "[BINA_BILGILERI]": "Bina bilgileri ve temel yükleri tablosunu ekler.",
+    "[BOLGESEL_JEOLOJI]": "Seçilen birimlere göre bölgesel jeoloji girişini yazar.",
+    "[BOLGESEL_JEOLOJI_BIRIMLERI]": "Seçilen birimlerin katalog açıklamalarını yazar.",
+    "[MUHENDISLIK_JEOLOJISI]": "İnceleme alanı mühendislik jeolojisi açıklamasını yazar.",
+    "[JEOLOJIK_KESIT_ACIKLAMA]": "Kesitte kullanılan jeolojik birimlerin açıklamalarını yazar.",
+    "[JEOLOJI_SONUC]": "Seçilen çalışma alanı birimlerine göre jeoloji sonuç cümlesini yazar.",
+    "[MT_BIRIM_METNI]": "Mikrotremör sonuç metninde çalışma alanı birimlerini yazar.",
     "[KATEGORI]": "Arazi kategori bilgisini yazar.",
     "[KATEGORI_ZEMIN]": "Kategori zemin/aciklama bilgisini yazar.",
     "[PGA]": "PGA degerini yazar.",
@@ -113,6 +124,8 @@ TAG_DESCRIPTIONS = {
 
 RECOMMENDED_TAGS = [
     "[PROJE_ADI]", "[IL]", "[ILCE]", "[MAHALLE]", "[SONDAJ_BILGISI]",
+    "[BOLGESEL_JEOLOJI]", "[MUHENDISLIK_JEOLOJISI]",
+    "[JEOLOJIK_KESIT_ACIKLAMA]", "[JEOLOJI_SONUC]",
     "[Sondaj]", "[SPT]", "[YASS_TABLO]", "[HIDROJEOLOJI_DURUM]", "[LAB_FIZIK]", "[JEO_PARAMETRE]",
     "[JEO_KOOR]", "[RESIM_SONDAJ]", "[RESIM_JEOFIZIK]",
 ]

@@ -6,6 +6,12 @@ from tkinter import filedialog, messagebox, ttk
 from harita_motoru import DEFAULT_TILE_SERVER, TILE_SERVERS
 from harita_referans import kml_koordinatlari_oku, ss_harita_etiketi
 from harita_resim_cache import display_image_read
+from jeoloji_raporu import (
+    JEOLOJI_BIRIM_KATALOGU,
+    KONUM_HER_IKISI,
+    KONUM_INCELEME_ALANI,
+    jeoloji_birimleri,
+)
 from performans import perf_timer, perf_tracked
 from resim_isaretleyici import ResimIsaretleyici
 from sabitler import (
@@ -19,7 +25,6 @@ from sabitler import (
     FONT_BOLD,
     FONT_UI_BODY,
     FONT_UI_BODY_BOLD,
-    PROJE_KLASORU,
     SPACE_MD,
     SPACE_SM,
     SPACE_XS,
@@ -27,6 +32,8 @@ from sabitler import (
 from tkgm_ada import tkgm_ada_gorseli_olustur
 from tkgm_kml import tkgm_parsel_kml_olustur
 from tutarlilik_ortak import koordinat_durumu
+from ui_jeoloji_birimleri import JeolojiBirimleriPenceresi
+from uygulama_yollari import kullanici_yolu
 from yerbuldurur_motoru import YerbuldururMotoru
 
 
@@ -174,17 +181,51 @@ class HaritalarSekmesiMixin:
         self.cmb_formasyon = ttk.Combobox(
             option_row,
             values=[
-                "Qal (Alüvyon)",
-                "Tmal (Alçıtepe Üyesi)",
-                "Tmçd (Çamrakdere Üyesi)",
-                "Tmki (Kirazlı Üyesi)",
-                "Tmçk (Çanakkale Formasyonu)",
+                f"{code} ({info['ad']})"
+                for code, info in JEOLOJI_BIRIM_KATALOGU.items()
             ],
             width=30,
             state="readonly",
         )
         self.cmb_formasyon.grid(row=0, column=3, sticky="ew")
-        self.cmb_formasyon.current(0)
+        self.cmb_formasyon.bind(
+            "<<ComboboxSelected>>",
+            self.harita_formasyon_secildi,
+        )
+        self._harita_formasyon_secimini_yenile()
+
+        ttk.Label(
+            option_row,
+            text="Rapor birimleri",
+            font=FONT_UI_BODY_BOLD,
+        ).grid(
+            row=1,
+            column=0,
+            sticky="w",
+            padx=(0, SPACE_SM),
+            pady=(SPACE_SM, 0),
+        )
+        self.lbl_jeoloji_birim_ozet = ttk.Label(
+            option_row,
+            text="-",
+            style="Muted.TLabel",
+        )
+        self.lbl_jeoloji_birim_ozet.grid(
+            row=1,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            pady=(SPACE_SM, 0),
+        )
+        self.modern_button(
+            option_row,
+            "Jeolojik Birimleri Yönet",
+            command=self.jeolojik_birimler_penceresi_ac,
+            role="secondary",
+            outline=True,
+            padx=7,
+            pady=4,
+        ).grid(row=1, column=3, sticky="e", pady=(SPACE_SM, 0))
 
         coordinates = ttk.LabelFrame(page, text="Çalışma Noktaları", padding=(12, 10))
         coordinates.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_SM))
@@ -329,6 +370,75 @@ class HaritalarSekmesiMixin:
 
         self.harita_durum_yenile()
 
+    def _harita_formasyon_secimini_yenile(self):
+        if not hasattr(self, "cmb_formasyon"):
+            return
+        ayarlar = self.veri.setdefault("ayarlar", {})
+        selected_code = str(ayarlar.get("harita_formasyon", "")).strip()
+        if selected_code not in JEOLOJI_BIRIM_KATALOGU:
+            selected_code = ""
+        if not selected_code:
+            for record in jeoloji_birimleri(self.veri):
+                if (
+                    record.get("konum")
+                    in {KONUM_INCELEME_ALANI, KONUM_HER_IKISI}
+                    and record.get("kod") in JEOLOJI_BIRIM_KATALOGU
+                ):
+                    selected_code = record["kod"]
+                    break
+        if not selected_code:
+            suggestion = self.veri.get("jeoloji", {}).get(
+                "harita_formasyon_onerisi",
+                "",
+            )
+            if suggestion in JEOLOJI_BIRIM_KATALOGU:
+                selected_code = suggestion
+        if not selected_code:
+            selected_code = next(iter(JEOLOJI_BIRIM_KATALOGU))
+
+        info = JEOLOJI_BIRIM_KATALOGU[selected_code]
+        self.cmb_formasyon.set(f"{selected_code} ({info['ad']})")
+
+    def harita_formasyon_secildi(self, _event=None):
+        if not hasattr(self, "cmb_formasyon"):
+            return
+        code = self.cmb_formasyon.get().split(" ", 1)[0].strip()
+        if code not in JEOLOJI_BIRIM_KATALOGU:
+            return
+        self.veri.setdefault("ayarlar", {})["harita_formasyon"] = code
+        if hasattr(self, "set_status"):
+            self.set_status(
+                f"Mühendislik jeolojisi harita etiketi {code} olarak seçildi.",
+                level="success",
+            )
+
+    def jeolojik_birimler_penceresi_ac(self):
+        JeolojiBirimleriPenceresi(
+            self,
+            on_saved=self.jeolojik_birimler_kaydedildi,
+        )
+
+    def jeolojik_birimler_kaydedildi(self):
+        records = jeoloji_birimleri(self.veri)
+        first_known = next(
+            (
+                record.get("kod")
+                for record in records
+                if record.get("konum")
+                in {KONUM_INCELEME_ALANI, KONUM_HER_IKISI}
+                and record.get("kod") in JEOLOJI_BIRIM_KATALOGU
+            ),
+            "",
+        )
+        if first_known:
+            self.veri.setdefault("ayarlar", {})[
+                "harita_formasyon"
+            ] = first_known
+        self._harita_formasyon_secimini_yenile()
+        self.harita_durum_yenile()
+        if hasattr(self, "ozet_yenile"):
+            self.ozet_yenile()
+
     def harita_durum_yenile(self):
         kml_path = getattr(self, "kml_path", None)
         kml_state, kml_text = self.harita_dosya_durumu(kml_path, "KML seçilmedi")
@@ -344,6 +454,36 @@ class HaritalarSekmesiMixin:
             self.harita_altlik_var.set(tile_name)
         if hasattr(self, "lbl_harita_altlik"):
             self.lbl_harita_altlik.config(text=f"Seçili: {tile_name}", foreground=COLOR_SUCCESS)
+
+        records = jeoloji_birimleri(getattr(self, "veri", {}))
+        if hasattr(self, "lbl_jeoloji_birim_ozet"):
+            if records:
+                labels = [
+                    f"{record.get('kod') or record.get('ad')}"
+                    for record in records
+                ]
+                self.lbl_jeoloji_birim_ozet.config(
+                    text=f"{len(records)} birim: {', '.join(labels)}",
+                    foreground=COLOR_SUCCESS,
+                )
+            else:
+                suggestion = (
+                    self.veri.get("jeoloji", {}).get(
+                        "harita_formasyon_onerisi",
+                        "",
+                    )
+                    if isinstance(self.veri.get("jeoloji"), dict)
+                    else ""
+                )
+                text = (
+                    f"Henüz seçilmedi · haritadan öneri: {suggestion}"
+                    if suggestion
+                    else "Henüz seçilmedi"
+                )
+                self.lbl_jeoloji_birim_ozet.config(
+                    text=text,
+                    foreground=COLOR_WARNING,
+                )
 
         coord_summary = self.harita_koordinat_ozeti(getattr(self, "veri", {}))
         coord_ready = coord_summary["ready"]
@@ -495,7 +635,7 @@ class HaritalarSekmesiMixin:
         active_path = getattr(self, "aktif_dosya_yolu", None)
         if active_path:
             return os.path.join(os.path.dirname(active_path), "03_Haritalar")
-        return os.path.join(PROJE_KLASORU, "TKGM_KML")
+        return str(kullanici_yolu("TKGM_KML"))
 
     def _tkgm_kml_sonuc_isle(self, result):
         path = result.get("path")

@@ -13,3 +13,4 @@ xlrd==2.0.2
 requests==2.33.1
 tkinterdnd2==0.4.3
 ttkbootstrap==1.20.2
+easyocr==1.7.2

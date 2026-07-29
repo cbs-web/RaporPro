@@ -1,6 +1,7 @@
 # Dosya: RaporPro/ui_kesit_yardimci.py
 import math
 import re
+from pathlib import Path
 
 from yardimcilar import safe_float
 
@@ -44,6 +45,35 @@ def kesit_kayit_dosya_adi(sondajlar):
     return _temiz_dosya_adi("Kesit " + "-".join(token for token, _, _ in parsed))
 
 
+def benzersiz_kesit_cikti_yolu(folder, base_name, extension):
+    """Kesit çıktısı ve çok sayfalı parçalarıyla çakışmayan dosya yolu üret."""
+
+    output_dir = Path(folder)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = str(extension or ".jpg").strip()
+    if not suffix.startswith("."):
+        suffix = f".{suffix}"
+    safe_name = _temiz_dosya_adi(base_name)
+
+    def occupied(candidate):
+        if candidate.exists():
+            return True
+        page_prefix = f"{candidate.stem}_Sayfa"
+        return any(
+            child.is_file()
+            and child.suffix.casefold() == candidate.suffix.casefold()
+            and child.stem.startswith(page_prefix)
+            for child in output_dir.iterdir()
+        )
+
+    candidate = output_dir / f"{safe_name}{suffix}"
+    counter = 2
+    while occupied(candidate):
+        candidate = output_dir / f"{safe_name} ({counter}){suffix}"
+        counter += 1
+    return str(candidate)
+
+
 def kesit_hatti_sondaj_sirasi(sondajlar, start, end, max_offset=10.0):
     start_y, start_x = safe_float(start[0]), safe_float(start[1])
     end_y, end_x = safe_float(end[0]), safe_float(end[1])
@@ -84,5 +114,4 @@ def kesit_hatti_sondaj_sirasi(sondajlar, start, end, max_offset=10.0):
             "offset": offset,
         })
     return sorted(results, key=lambda item: (item["station"], item["no"]))
-
 

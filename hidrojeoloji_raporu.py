@@ -40,6 +40,8 @@ HIDROJEOLOJI_DEFAULT = {
     "taskin_riski": TASKIN_DURUM_SECENEKLERI[0],
     "deniz_mesafe": "",
     "ek_aciklama": "",
+    "inceleme_yaricapi": "1000",
+    "cevre_analizi": {},
 }
 
 
@@ -101,7 +103,10 @@ def hidrojeoloji_verisini_normalize_et(arazi):
     result = hidrojeoloji_varsayilanlari()
     for key in result:
         if key in source:
-            result[key] = _text(source.get(key))
+            if key == "cevre_analizi":
+                result[key] = copy.deepcopy(source.get(key)) if isinstance(source.get(key), dict) else {}
+            else:
+                result[key] = _text(source.get(key))
     result["yass_durumu"] = _status(
         result["yass_durumu"],
         YASS_DURUM_SECENEKLERI,
@@ -168,11 +173,64 @@ def _dere_var_cumlesi(kind, distance, direction):
     return f"İnceleme alanının {location} {subject} bulunmaktadır."
 
 
+def _otomatik_yok_metni(data, prefixes):
+    analysis = data.get("cevre_analizi")
+    if not isinstance(analysis, dict) or analysis.get("gecersiz"):
+        return ""
+    applied = analysis.get("uygulanan_degerler")
+    if not isinstance(applied, dict):
+        return ""
+    for prefix in prefixes:
+        if data.get(prefix) != "Yok" or applied.get(prefix) != "Yok":
+            return ""
+    try:
+        radius = int(float(str(analysis.get("inceleme_yaricapi_m") or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        radius = 0
+    radius_text = f"{radius:,}".replace(",", ".") if radius else ""
+    if len(prefixes) == 2:
+        feature = "kayıtlı akar veya kuru dere"
+    elif prefixes[0] == "akar_dere":
+        feature = "kayıtlı akar dere"
+    else:
+        feature = "kayıtlı kuru dere"
+    area = f"{radius_text} m yakın çevrede " if radius_text else "yakın çevrede "
+    return (
+        f"Kullanılan sayısal hidrografya verisine göre parselin {area}"
+        f"{feature} saptanmamıştır."
+    )
+
+
+def _gecersiz_analiz_metni(data):
+    analysis = data.get("cevre_analizi")
+    if not isinstance(analysis, dict) or not analysis.get("gecersiz"):
+        return ""
+    applied = analysis.get("uygulanan_degerler")
+    if not isinstance(applied, dict):
+        return ""
+    matched = any(
+        prefix in applied and data.get(prefix) == applied.get(prefix)
+        for prefix in ("akar_dere", "kuru_dere")
+    )
+    if not matched:
+        return ""
+    return (
+        "Parsel sınırı değiştirildiğinden yakın çevredeki akar ve kuru dere durumu "
+        "güncel sayısal verilerle yeniden doğrulanmalıdır."
+    )
+
+
 def _dere_cumleleri(data):
+    stale = _gecersiz_analiz_metni(data)
+    if stale:
+        return [stale]
     akar = data["akar_dere"]
     kuru = data["kuru_dere"]
     sentences = []
     if akar == "Yok" and kuru == "Yok":
+        automatic = _otomatik_yok_metni(data, ("akar_dere", "kuru_dere"))
+        if automatic:
+            return [automatic]
         return ["İnceleme alanı ve yakın çevresinde akar veya kuru dere bulunmamaktadır."]
     if akar == "Var":
         sentences.append(_dere_var_cumlesi(
@@ -181,7 +239,10 @@ def _dere_cumleleri(data):
             data["akar_dere_yon"],
         ))
     elif akar == "Yok":
-        sentences.append("İnceleme alanı ve yakın çevresinde akar dere bulunmamaktadır.")
+        sentences.append(
+            _otomatik_yok_metni(data, ("akar_dere",))
+            or "İnceleme alanı ve yakın çevresinde akar dere bulunmamaktadır."
+        )
     if kuru == "Var":
         sentences.append(_dere_var_cumlesi(
             "kuru",
@@ -189,7 +250,10 @@ def _dere_cumleleri(data):
             data["kuru_dere_yon"],
         ))
     elif kuru == "Yok":
-        sentences.append("İnceleme alanı ve yakın çevresinde kuru dere bulunmamaktadır.")
+        sentences.append(
+            _otomatik_yok_metni(data, ("kuru_dere",))
+            or "İnceleme alanı ve yakın çevresinde kuru dere bulunmamaktadır."
+        )
     return sentences
 
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime
 import hashlib
 import json
@@ -262,6 +263,35 @@ def dosya_parmak_izi(path, chunk_size=1024 * 1024):
     return digest.hexdigest()
 
 
+def _manifest_yolu_paylasima_hazirla(value, manifest_dir):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    candidate = os.path.abspath(text)
+    try:
+        if os.path.commonpath([candidate, manifest_dir]) == manifest_dir:
+            return os.path.relpath(candidate, manifest_dir).replace(os.sep, "/")
+    except (OSError, TypeError, ValueError):
+        pass
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _manifest_dosya_yolu_coz(value, manifest_dir):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if os.path.isabs(text):
+        return ""
+    safe_root = os.path.realpath(os.path.abspath(manifest_dir))
+    candidate = os.path.realpath(os.path.abspath(os.path.join(safe_root, text)))
+    try:
+        if os.path.commonpath([candidate, safe_root]) != safe_root:
+            return ""
+    except (OSError, TypeError, ValueError):
+        return ""
+    return candidate
+
+
 def cikti_dosyalari_denetle(paths, veri=None):
     report = {
         "quality_schema": CIKTI_KALITE_SURUMU,
@@ -290,15 +320,37 @@ def cikti_dosyalari_denetle(paths, veri=None):
 
 
 def kalite_manifestosu_yaz(path, report, veri=None):
-    payload = dict(report or {})
+    payload = copy.deepcopy(report or {})
     payload["quality_schema"] = CIKTI_KALITE_SURUMU
     payload["project_fingerprint"] = proje_parmak_izi(veri) if veri is not None else payload.get("project_fingerprint", "")
+    manifest_dir = os.path.dirname(os.path.abspath(path))
+    path_replacements = {}
+    for item in payload.get("files", []) or []:
+        if not isinstance(item, dict):
+            continue
+        original = str(item.get("path") or "")
+        shared = _manifest_yolu_paylasima_hazirla(original, manifest_dir)
+        item["path"] = shared
+        if original:
+            path_replacements[original] = shared
+    if "path" in payload:
+        payload["path"] = _manifest_yolu_paylasima_hazirla(payload.get("path"), manifest_dir)
+    for finding in payload.get("findings", []) or []:
+        if not isinstance(finding, dict):
+            continue
+        original = str(finding.get("path") or "")
+        finding["path"] = _manifest_yolu_paylasima_hazirla(original, manifest_dir)
+        detail = str(finding.get("detail") or "")
+        for private_path, shared_path in path_replacements.items():
+            detail = detail.replace(private_path, shared_path)
+        finding["detail"] = detail
     atomic_json_dump(payload, path, indent=2, ensure_ascii=False)
     return path
 
 
 def kalite_manifestosu_dogrula(path, veri=None):
     report = {"path": str(path or ""), "findings": []}
+    manifest_dir = os.path.dirname(os.path.abspath(path))
     try:
         with open(path, "r", encoding="utf-8") as handle:
             manifest = json.load(handle)
@@ -315,11 +367,12 @@ def kalite_manifestosu_dogrula(path, veri=None):
             path,
         )
     for item in manifest.get("files", []):
-        file_path = item.get("path")
+        stored_path = item.get("path")
+        file_path = _manifest_dosya_yolu_coz(stored_path, manifest_dir)
         if not file_path or not os.path.isfile(file_path):
-            _bulgu(report, "error", "Silinmiş çıktı", f"Manifestodaki dosya bulunamadı: {file_path or '-'}", file_path)
+            _bulgu(report, "error", "Silinmiş çıktı", f"Manifestodaki dosya bulunamadı: {stored_path or '-'}", stored_path)
         elif item.get("sha256") and dosya_parmak_izi(file_path) != item.get("sha256"):
-            _bulgu(report, "warning", "Değiştirilmiş çıktı", f"Dosya denetimden sonra değiştirilmiş: {file_path}", file_path)
+            _bulgu(report, "warning", "Değiştirilmiş çıktı", f"Dosya denetimden sonra değiştirilmiş: {stored_path}", stored_path)
     return _raporu_tamamla(report)
 
 

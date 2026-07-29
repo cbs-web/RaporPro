@@ -1,6 +1,7 @@
 import datetime
 import unicodedata
 
+from excel_guvenligi import excel_satiri_guvenli_yap
 from karot_motoru import derinlik_baslangic
 from performans import perf_tracked
 from yardimcilar import litoloji_yazim_uyarilari, safe_float, temizle_baslik
@@ -108,6 +109,69 @@ def row_values_to_list(sheet_key, values, sheet_defs=None):
     return [values.get(col_key, "") for _, col_key in sheet_defs[sheet_key]["columns"]]
 
 
+def xlsx_workbook_satirlarini_oku(path, sheet_defs=None):
+    """Büyük XLSX dosyalarını salt-okunur kipte ve UI'dan bağımsız çöz."""
+
+    from openpyxl import load_workbook
+
+    definitions = sheet_defs or WORKBOOK_SHEET_DEFS
+    workbook = None
+    rows_by_sheet = {}
+    imported = 0
+    try:
+        workbook = load_workbook(
+            path,
+            data_only=True,
+            read_only=True,
+            keep_links=False,
+        )
+        for sheet_key, spec in definitions.items():
+            if spec["title"] not in workbook.sheetnames:
+                continue
+            row_iter = workbook[spec["title"]].iter_rows(values_only=True)
+            first_row = None
+            for row in row_iter:
+                cells = ["" if cell is None else str(cell) for cell in row]
+                if any(cell.strip() for cell in cells):
+                    first_row = cells
+                    break
+            if first_row is None:
+                continue
+
+            mapping = header_map(sheet_key, first_row, definitions)
+            new_rows = []
+
+            def append_row(raw):
+                values = {}
+                if mapping:
+                    for idx, value in enumerate(raw):
+                        if idx < len(mapping) and mapping[idx]:
+                            values[mapping[idx]] = value.strip()
+                else:
+                    for idx, value in enumerate(raw):
+                        if idx < len(spec["columns"]):
+                            values[spec["columns"][idx][1]] = value.strip()
+                if row_has_data(values, {"sondaj_no"}):
+                    new_rows.append(row_values_to_list(sheet_key, values, definitions))
+
+            if not mapping:
+                append_row(first_row)
+            for row in row_iter:
+                cells = ["" if cell is None else str(cell) for cell in row]
+                if any(cell.strip() for cell in cells):
+                    append_row(cells)
+            if new_rows:
+                rows_by_sheet[sheet_key] = new_rows
+                imported += len(new_rows)
+        return {"rows_by_sheet": rows_by_sheet, "imported": imported}
+    finally:
+        if workbook is not None:
+            try:
+                workbook.close()
+            except Exception:
+                pass
+
+
 @perf_tracked("workbook.excel_write")
 def excel_workbook_yaz(path, sheet_payloads):
     """UI'dan bağımsız Excel yazıcısı; büyük workbook aktarımını arka planda çalıştırır."""
@@ -120,13 +184,13 @@ def excel_workbook_yaz(path, sheet_payloads):
     total_rows = 0
     for payload in sheet_payloads:
         ws = wb.create_sheet(str(payload.get("title") or "Sayfa"))
-        ws.append(list(payload.get("headers") or []))
+        ws.append(excel_satiri_guvenli_yap(payload.get("headers") or []))
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.fill = PatternFill("solid", fgColor="D9EAF7")
         rows = list(payload.get("rows") or [])
         for row in rows:
-            ws.append(list(row))
+            ws.append(excel_satiri_guvenli_yap(row))
         total_rows += len(rows)
         for col_idx, width in enumerate(payload.get("widths") or [], start=1):
             ws.column_dimensions[get_column_letter(col_idx)].width = max(10, float(width) / 7)

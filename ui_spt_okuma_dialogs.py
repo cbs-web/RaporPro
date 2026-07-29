@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import Toplevel, filedialog, messagebox, ttk
 
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, FONT_BOLD
+from spt_gorsel import dogal_siralama_anahtari
 from spt_okuma_motoru import (
     SPT_AYARLAR_PATH,
     fotograflardan_spt_oku,
@@ -13,38 +14,61 @@ from spt_okuma_motoru import (
     spt_kaynak_raporu_kaydet,
     spt_kirp_kaydet,
 )
-from ui_spt_okuma_yardimci import collect_image_paths, source_unique_key
+from ui_spt_okuma_yardimci import collect_image_paths, source_content_key, source_unique_key
+from yardimcilar import safe_float
 
 
 def show_spt_history(app, parent):
     history = spt_gecmisi_oku(limit=500)
     popup = Toplevel(parent)
     app.pencere_hazirla(popup, "SPT Okuma Geçmişi", "960x520", (780, 420), modal=False)
-    cols = ("tarih", "islem", "sondaj", "der", "spt", "n30", "guven", "kaynak")
-    hist_tree = ttk.Treeview(popup, columns=cols, show="headings")
-    scroll = ttk.Scrollbar(popup, orient="vertical", command=hist_tree.yview)
+    filter_bar = ttk.Frame(popup, padding=(8, 8, 8, 0))
+    filter_bar.pack(fill="x")
+    ttk.Label(filter_bar, text="Proje / kaynak ara:").pack(side="left")
+    filter_var = tk.StringVar(value="")
+    ttk.Entry(filter_bar, textvariable=filter_var, width=36).pack(side="left", padx=6)
+
+    tree_frame = ttk.Frame(popup, padding=8)
+    tree_frame.pack(fill="both", expand=True)
+    cols = ("tarih", "proje", "islem", "sondaj", "der", "spt", "n30", "guven", "motor", "kaynak")
+    hist_tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
+    scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=hist_tree.yview)
     hist_tree.configure(yscrollcommand=scroll.set)
     scroll.pack(side="right", fill="y")
-    hist_tree.pack(fill="both", expand=True, padx=8, pady=8)
+    hist_tree.pack(fill="both", expand=True)
     for key, label, width in [
-        ("tarih", "Tarih", 145), ("islem", "İşlem", 95), ("sondaj", "Sondaj", 85),
+        ("tarih", "Tarih", 135), ("proje", "Proje", 160), ("islem", "İşlem", 95), ("sondaj", "Sondaj", 75),
         ("der", "Derinlik", 80), ("spt", "SPT", 105), ("n30", "N30", 70),
-        ("guven", "Güven", 70), ("kaynak", "Kaynak", 260),
+        ("guven", "Güven", 65), ("motor", "Motor", 110), ("kaynak", "Kaynak", 220),
     ]:
         hist_tree.heading(key, text=label)
-        hist_tree.column(key, width=width, stretch=key == "kaynak")
-    for item in reversed(history):
-        kayit = item.get("kayit", {}) or {}
-        hist_tree.insert("", "end", values=(
-            item.get("tarih", ""),
-            item.get("islem", ""),
-            kayit.get("sondaj_no", ""),
-            kayit.get("derinlik", ""),
-            "-".join([str(kayit.get(k, "")) for k in ("v15", "v30", "v45") if str(kayit.get(k, "")).strip()]),
-            kayit.get("n30", ""),
-            kayit.get("guven", ""),
-            kayit.get("kaynak", ""),
-        ))
+        hist_tree.column(key, width=width, stretch=key in ("proje", "kaynak"))
+
+    def render_history(*_args):
+        hist_tree.delete(*hist_tree.get_children())
+        query = filter_var.get().strip().casefold()
+        for item in reversed(history):
+            kayit = item.get("kayit", {}) or {}
+            raw = kayit.get("raw", {}) or {}
+            project = str(raw.get("proje", "") or item.get("detay", {}).get("proje", ""))
+            source = str(kayit.get("kaynak", "") or "")
+            if query and query not in f"{project} {source}".casefold():
+                continue
+            hist_tree.insert("", "end", values=(
+                item.get("tarih", ""),
+                project,
+                item.get("islem", ""),
+                kayit.get("sondaj_no", ""),
+                kayit.get("derinlik", ""),
+                "-".join([str(kayit.get(k, "")) for k in ("v15", "v30", "v45") if str(kayit.get(k, "")).strip()]),
+                kayit.get("n30", ""),
+                kayit.get("guven", ""),
+                " / ".join(filter(None, [str(raw.get("motor", "")), str(raw.get("model", ""))])),
+                source,
+            ))
+
+    filter_var.trace_add("write", render_history)
+    render_history()
 
 
 def export_spt_source_report(app, records):
@@ -106,6 +130,11 @@ def open_spt_photo_queue_dialog(app, parent, initial_dir, add_to_main_photo_queu
 
     def add_paths(paths):
         existing = {source_unique_key(path) for path in queued_paths}
+        existing_content = {
+            source_content_key(path)
+            for path in queued_paths
+            if source_content_key(path)
+        }
         added = 0
         skipped_duplicate = 0
         skipped_invalid = 0
@@ -115,22 +144,29 @@ def open_spt_photo_queue_dialog(app, parent, initial_dir, add_to_main_photo_queu
                 skipped_invalid += 1
             for abs_path in found:
                 key = source_unique_key(abs_path)
-                if key in existing:
+                content_key = source_content_key(abs_path)
+                if key in existing or (content_key and content_key in existing_content):
                     skipped_duplicate += 1
                     continue
                 queued_paths.append(os.path.abspath(abs_path))
                 existing.add(key)
+                if content_key:
+                    existing_content.add(content_key)
                 added += 1
-        queued_paths.sort(key=lambda item: item.lower())
+        queued_paths.sort(key=dogal_siralama_anahtari)
         unique_paths = []
         seen = set()
+        seen_content = set()
         for path in queued_paths:
             key = source_unique_key(path)
-            if key in seen:
+            content_key = source_content_key(path)
+            if key in seen or (content_key and content_key in seen_content):
                 skipped_duplicate += 1
                 continue
             unique_paths.append(path)
             seen.add(key)
+            if content_key:
+                seen_content.add(content_key)
         queued_paths[:] = unique_paths
         refresh_queue()
         if added:
@@ -341,6 +377,7 @@ def open_spt_crop_dialog(app, parent, initial_dir, target_var, project_spt_setti
                 default_sondaj_no=target_var.get(),
                 ayarlar=ayarlar,
                 auto_pro=project_spt_settings()["auto_pro"],
+                guven_esigi=project_spt_settings()["guven_esigi"],
             )
 
         app.arka_plan_gorevi_baslat(
@@ -364,6 +401,10 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
     project = app.veri.setdefault("ayarlar", {})
     popup = Toplevel(parent)
     app.pencere_hazirla(popup, "SPT Okuma Ayarları", "560x520", (520, 480), modal=True)
+    try:
+        popup.transient(parent)
+    except Exception:
+        pass
     body = ttk.Frame(popup, padding=12)
     body.pack(fill="both", expand=True)
     ttk.Label(body, text="Aktif Motor", font=FONT_BOLD).grid(row=0, column=0, sticky="w", pady=5)
@@ -406,6 +447,14 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
     body.columnconfigure(1, weight=1)
 
     def save_settings():
+        guven_esigi = safe_float(guven_entry.get())
+        if not 1 <= guven_esigi <= 100:
+            messagebox.showerror(
+                "SPT Ayarları",
+                "Düşük güven eşiğini 1 ile 100 arasında girin.",
+                parent=popup,
+            )
+            return
         new_settings = {
             "aktif_motor": motor_var.get().strip(),
             "openai_api_key": key_entries["openai_api_key"].get().strip(),
@@ -419,7 +468,7 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
         except Exception as exc:
             messagebox.showerror("SPT Ayarları", f"Ayarlar kaydedilemedi:\n{exc}")
             return
-        project["spt_guven_esigi"] = guven_entry.get().strip() or "90"
+        project["spt_guven_esigi"] = str(int(round(guven_esigi)))
         auto_pro_var.set(bool(popup_auto_pro_var.get()))
         project["spt_auto_pro"] = "1" if auto_pro_var.get() else "0"
         refresh_tree()
@@ -466,3 +515,11 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
     tk.Button(btns, text="Kaydet", command=save_settings, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
     tk.Button(btns, text="Ayar Kontrolü", command=check_settings, bg="#D6EAF8", fg="#111", font=FONT_BOLD).pack(side="right", padx=4)
     tk.Button(btns, text="Kapat", command=popup.destroy, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="right", padx=4)
+    try:
+        popup.grab_set()
+        popup.lift()
+        popup.focus_force()
+        popup.after_idle(lambda: (popup.lift(), popup.focus_force()))
+    except Exception:
+        pass
+    return popup

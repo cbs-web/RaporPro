@@ -8,6 +8,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
+from excel_guvenligi import excel_hucre_degeri
+
 
 TAAHHUT_SHEET = "tahhütname"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +29,37 @@ TAAHHUT_ALT_NOT = (
     "suç duyurusunda bulunulacak, ayrıca 6235 sayılı Türk  Mühendis ve  Mimar  Odaları  Birliği  "
     "Kanunu  ve ilgili  mevzuatı  uyarınca işlem yapılmak üzere ilgili Meslek Odasına bilgi verilecektir."
 )
+
+
+def _com_guvenli_temizle(pythoncom, com_initialized=False, belge=None, uygulama=None):
+    if belge is not None:
+        try:
+            belge.Close(False)
+        except Exception:
+            pass
+    if uygulama is not None:
+        try:
+            uygulama.Quit()
+        except Exception:
+            pass
+    if com_initialized:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def _com_ozelligini_ayarla(nesne, ad, deger):
+    try:
+        setattr(nesne, ad, deger)
+    except Exception:
+        pass
+
+
+def _raporpro_workbook_metadata(wb):
+    wb.properties.creator = "RaporPro"
+    wb.properties.lastModifiedBy = "RaporPro"
+    return wb
 
 
 def _clean(value, fallback=""):
@@ -131,7 +164,7 @@ def taahhutname_context(veri, tur):
 
 
 def _set(ws, cell, value):
-    ws[cell] = value
+    ws[cell] = excel_hucre_degeri(value)
 
 
 def _fill_ana_sayfa(wb, ctx):
@@ -177,7 +210,7 @@ def _set_merged(ws, cell_range, value, font=None, alignment=None, border=None, f
     _merge(ws, cell_range)
     target = CellRange(cell_range)
     cell = ws.cell(target.min_row, target.min_col)
-    cell.value = value
+    cell.value = excel_hucre_degeri(value)
     if font is not None:
         cell.font = font
     if alignment is not None:
@@ -338,13 +371,13 @@ def _fill_profile_cells(ws, veri, tur):
     signature_font = Font(name="Times New Roman", size=11)
     signature_align = Alignment(horizontal="center", vertical="center")
 
-    ws["A4"] = "Oda Sicil No"
-    ws["C4"] = profile["sicil"]
-    ws["C5"] = profile["unvan"]
-    ws["C6"] = profile["adres"]
-    ws["C7"] = profile["telefon"]
-    ws["F31"] = profile["ad"]
-    ws["F32"] = profile["imza_unvan"]
+    _set(ws, "A4", "Oda Sicil No")
+    _set(ws, "C4", profile["sicil"])
+    _set(ws, "C5", profile["unvan"])
+    _set(ws, "C6", profile["adres"])
+    _set(ws, "C7", profile["telefon"])
+    _set(ws, "F31", profile["ad"])
+    _set(ws, "F32", profile["imza_unvan"])
     for cell_ref in ("C4", "C5", "C6", "C7"):
         ws[cell_ref].font = value_font
         ws[cell_ref].alignment = value_align
@@ -430,7 +463,7 @@ def _build_workbook(veri, tur):
     _fill_project_cells(ws, ctx)
     _fill_body_text(ws)
     _configure_workbook_for_type(wb, "jeofizik" if tur == "jeofizik" else "jeoloji")
-    return wb
+    return _raporpro_workbook_metadata(wb)
 
 
 def _export_xlsx_to_pdf(xlsx_path, pdf_path):
@@ -442,12 +475,24 @@ def _export_xlsx_to_pdf(xlsx_path, pdf_path):
 
     excel = None
     workbook = None
-    pythoncom.CoInitialize()
+    com_initialized = False
     try:
+        pythoncom.CoInitialize()
+        com_initialized = True
         excel = win32com.client.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
-        workbook = excel.Workbooks.Open(os.path.abspath(xlsx_path))
+        _com_ozelligini_ayarla(excel, "AutomationSecurity", 3)
+        _com_ozelligini_ayarla(excel, "AskToUpdateLinks", False)
+        _com_ozelligini_ayarla(excel, "EnableEvents", False)
+        workbook = excel.Workbooks.Open(
+            os.path.abspath(xlsx_path),
+            UpdateLinks=0,
+            ReadOnly=True,
+            IgnoreReadOnlyRecommended=True,
+            AddToMru=False,
+            Notify=False,
+        )
         worksheet = workbook.Worksheets(TAAHHUT_SHEET)
         worksheet.ExportAsFixedFormat(0, os.path.abspath(pdf_path))
     except Exception as exc:
@@ -456,11 +501,12 @@ def _export_xlsx_to_pdf(xlsx_path, pdf_path):
             f"bu oturumda çalışabilir olması gerekir. Hata: {exc}"
         ) from exc
     finally:
-        if workbook is not None:
-            workbook.Close(False)
-        if excel is not None:
-            excel.Quit()
-        pythoncom.CoUninitialize()
+        _com_guvenli_temizle(
+            pythoncom,
+            com_initialized=com_initialized,
+            belge=workbook,
+            uygulama=excel,
+        )
 
 
 def _patch_xlsx_reference_defaults(path):
@@ -527,17 +573,23 @@ def taahhutname_olustur(veri, tur, path):
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     wb = _build_workbook(veri, tur)
-    if ext == ".xlsx":
-        wb.save(path)
-        _patch_xlsx_reference_defaults(path)
-        return path
+    try:
+        if ext == ".xlsx":
+            wb.save(path)
+            _patch_xlsx_reference_defaults(path)
+            return path
 
-    with tempfile.TemporaryDirectory(prefix="raporpro_taahhut_") as tmp_dir:
-        xlsx_path = os.path.join(tmp_dir, taahhutname_dosya_adi(veri, tur, ".xlsx"))
-        wb.save(xlsx_path)
-        _patch_xlsx_reference_defaults(xlsx_path)
-        _export_xlsx_to_pdf(xlsx_path, path)
-    return path
+        with tempfile.TemporaryDirectory(prefix="raporpro_taahhut_") as tmp_dir:
+            xlsx_path = os.path.join(tmp_dir, taahhutname_dosya_adi(veri, tur, ".xlsx"))
+            wb.save(xlsx_path)
+            _patch_xlsx_reference_defaults(xlsx_path)
+            _export_xlsx_to_pdf(xlsx_path, path)
+        return path
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
 
 
 def tum_taahhutnameleri_olustur(veri, folder, ext=".xlsx"):

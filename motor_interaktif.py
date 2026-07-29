@@ -1,21 +1,8 @@
 # Dosya: RaporPro/motor_interaktif.py
 import math
 
-try:
-    from cizim import GeoEngineDraw
-    from performans import log_exception
-except ImportError:
-    class GeoEngineDraw:
-        @staticmethod
-        def refresh_pattern(ax, poly):
-            return []
-
-        @staticmethod
-        def hide_same_unit_seams(ax, polygons, tolerance=0.08):
-            return []
-
-    def log_exception(name, exc_type=None, exc_value=None, exc_tb=None):
-        return None
+from cizim import GeoEngineDraw
+from performans import log_exception
 
 
 # --- İNTERAKTİF MOTOR (SEÇİM, KÖŞE GÖSTERME VE CTRL+TIK KÖŞE EKLEME) ---

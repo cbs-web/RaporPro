@@ -7,6 +7,8 @@ import string
 import difflib
 import tempfile
 import unicodedata
+from xml.etree import ElementTree
+from zipfile import ZIP_DEFLATED, ZipFile
 import pandas as pd
 from sabitler import KELIME_HARITASI
 
@@ -31,6 +33,68 @@ def atomic_write_text(path, text, encoding="utf-8"):
         raise
 
 
+def docx_metadata_nortrle(document):
+    """Word belgesindeki kişisel çekirdek metadata alanlarını temizle."""
+
+    props = document.core_properties
+    props.author = "RaporPro"
+    props.last_modified_by = "RaporPro"
+    props.comments = ""
+    props.keywords = ""
+    props.category = ""
+    props.content_status = ""
+    props.identifier = ""
+    props.version = ""
+    props._element._remove_created()
+    props._element._remove_modified()
+    props._element._remove_lastPrinted()
+    props.revision = 1
+    return document
+
+
+def docx_paket_metadata_nortrle(path):
+    """DOCX ZIP içindeki Company/Manager gibi extended alanları temizle."""
+
+    source_path = os.path.abspath(os.fspath(path))
+    folder = os.path.dirname(source_path) or "."
+    fd, clean_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(source_path)}.",
+        suffix=".metadata.docx",
+        dir=folder,
+    )
+    os.close(fd)
+    namespace = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+    try:
+        with ZipFile(source_path, "r") as source, ZipFile(
+            clean_path, "w", compression=ZIP_DEFLATED
+        ) as target:
+            for info in source.infolist():
+                payload = source.read(info.filename)
+                if info.filename == "docProps/app.xml":
+                    root = ElementTree.fromstring(payload)
+                    for field_name in ("Company", "Manager", "AppVersion"):
+                        element = root.find(f"{{{namespace}}}{field_name}")
+                        if element is not None:
+                            element.text = ""
+                    application = root.find(f"{{{namespace}}}Application")
+                    if application is not None:
+                        application.text = "RaporPro"
+                    payload = ElementTree.tostring(
+                        root,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+                target.writestr(info, payload)
+        os.replace(clean_path, source_path)
+    finally:
+        if os.path.exists(clean_path):
+            try:
+                os.remove(clean_path)
+            except OSError:
+                pass
+    return source_path
+
+
 def atomic_docx_save(document, path):
     """python-docx belgesini mevcut hedefi bozmadan tek hamlede kaydet."""
     target = os.path.abspath(os.fspath(path))
@@ -40,9 +104,38 @@ def atomic_docx_save(document, path):
     fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", suffix=suffix, dir=folder)
     os.close(fd)
     try:
+        if hasattr(document, "core_properties"):
+            docx_metadata_nortrle(document)
         document.save(tmp_path)
         if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
             raise OSError("Geçici Word dosyası oluşturulamadı.")
+        docx_paket_metadata_nortrle(tmp_path)
+        os.replace(tmp_path, target)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+    return target
+
+
+def atomic_fitz_pdf_save(document, path):
+    """PyMuPDF belgesini mevcut hedefi bozmadan aynı dizinde atomik kaydet."""
+
+    target = os.path.abspath(os.fspath(path))
+    folder = os.path.dirname(target) or "."
+    os.makedirs(folder, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(target)}.",
+        suffix=".pdf",
+        dir=folder,
+    )
+    os.close(fd)
+    try:
+        document.save(tmp_path, garbage=4, deflate=True)
+        if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
+            raise OSError("Geçici PDF dosyası oluşturulamadı.")
         os.replace(tmp_path, target)
     finally:
         if os.path.exists(tmp_path):
@@ -54,12 +147,15 @@ def atomic_docx_save(document, path):
 
 
 def atomic_json_dump(data, path, *, indent=2, ensure_ascii=False):
-    text = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii)
+    text = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii, allow_nan=False)
     atomic_write_text(path, text, encoding="utf-8")
 
 def safe_float(val):
-    try: return float(str(val).replace(',', '.'))
-    except: return 0.0
+    try:
+        number = float(str(val).replace(',', '.'))
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
 
 def temizle_baslik(metin):
     """

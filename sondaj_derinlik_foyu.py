@@ -11,6 +11,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from sondaj_derinlik import gerilme_yuzde_on_derinlik_hesapla
+from yardimcilar import atomic_docx_save, atomic_fitz_pdf_save
 
 
 def _clean(value, fallback=""):
@@ -325,7 +326,7 @@ def _build_docx(veri, output_path):
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.add_run().add_picture(graph_path, width=Cm(17.0))
     _add_detail_table(doc, result)
-    doc.save(output_path)
+    atomic_docx_save(doc, output_path)
     return {"path": output_path, "result": result}
 
 
@@ -455,8 +456,10 @@ def _build_pdf(veri, output_path):
             _fmt(row["yaklasik_delta"], 3),
         ])
     _pdf_table(page2, margin, 70, [50, 50, 54, 54, 68, 76, 76, 76], 15, rows, header_rows=1, size=6.8)
-    doc.save(output_path)
-    doc.close()
+    try:
+        atomic_fitz_pdf_save(doc, output_path)
+    finally:
+        doc.close()
     return {"path": output_path, "result": result}
 
 

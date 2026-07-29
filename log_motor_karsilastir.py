@@ -18,17 +18,16 @@ from PIL import Image, ImageDraw
 from motor_log_kaynak import GeoEngineLogMixin as CandidateLog
 
 
-def _load_cached_log_engine():
-    cache_path = Path(__file__).with_name("motor_log_cache.cpython-311.pyc")
+def _load_cached_log_engine(cache_path):
+    cache_path = Path(cache_path)
+    if not cache_path.is_file():
+        raise FileNotFoundError(f"Log motoru karsilastirma tabani bulunamadi: {cache_path}")
     spec = importlib.util.spec_from_file_location("_raporpro_cached_motor_for_log_compare", cache_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Motor log onbellegi yuklenemedi: {cache_path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.GeoEngine
-
-
-CurrentLog = _load_cached_log_engine()
 
 
 def _spt_rows(depths):
@@ -234,10 +233,10 @@ def _make_contact_sheet(page_results, output_dir, scenario_name):
     return path
 
 
-def compare_scenario(scenario, output_dir):
+def compare_scenario(scenario, output_dir, baseline_log):
     warnings_current = []
     warnings_candidate = []
-    current_figs = CurrentLog.ciz_profesyonel_log(
+    current_figs = baseline_log.ciz_profesyonel_log(
         scenario["sondaj"],
         scenario["project"],
         log_callback=lambda message, level="info": warnings_current.append({"level": level, "message": message}),
@@ -302,9 +301,17 @@ def write_text_summary(results, output_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PYC log motoru ile aday kaynak log motorunu karsilastirir.")
+    parser = argparse.ArgumentParser(
+        description="Arsivlenmis bir log motoru ile kaynak log motorunu karsilastirir."
+    )
+    parser.add_argument(
+        "--baseline-pyc",
+        required=True,
+        help="Kullanici tarafindan saklanan CPython 3.11 PYC karsilastirma tabani.",
+    )
     parser.add_argument("--output", default=None, help="Cikti klasoru. Varsayilan: _log_analiz/log_motor_karsilastirma/<timestamp>")
     args = parser.parse_args()
+    baseline_log = _load_cached_log_engine(args.baseline_pyc)
 
     if args.output:
         output_dir = Path(args.output)
@@ -313,7 +320,10 @@ def main():
         output_dir = Path("_log_analiz") / "log_motor_karsilastirma" / stamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    results = [compare_scenario(scenario, output_dir) for scenario in build_scenarios()]
+    results = [
+        compare_scenario(scenario, output_dir, baseline_log)
+        for scenario in build_scenarios()
+    ]
     (output_dir / "ozet.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     write_text_summary(results, output_dir)
     print(output_dir)

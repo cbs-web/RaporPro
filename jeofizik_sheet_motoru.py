@@ -153,6 +153,14 @@ def jeofizik_sheet_var_mi(veri):
     return any(any(_cell_text(cell) for cell in row) for row in rows or [])
 
 
+def jeofizik_sheet_rapora_hazir_mi(veri):
+    """Sheet'in yalnızca dolu değil, raporda kullanılabilir olduğunu döndür."""
+    return bool(
+        jeofizik_sheet_var_mi(veri)
+        and jeofizik_sheet_ozeti(veri).get("ready", False)
+    )
+
+
 def _hesapla_parametreler(vp, vs, h="", rho=None):
     vp_f, vs_f = safe_float(vp), safe_float(vs)
     if vp_f <= 0 or vs_f <= 0:

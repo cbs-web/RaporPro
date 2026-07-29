@@ -2,6 +2,7 @@
 import os
 
 from jeofizik_sheet_motoru import jeofizik_sheet_ozeti
+from jeoloji_raporu import jeoloji_birimleri
 from karot_motoru import derinlik_araligi_coz
 from sondaj_derinlik import sondaj_derinligi_kontrol_sonucu
 from tutarlilik_jeofizik import jeofizik_kontrol
@@ -374,6 +375,27 @@ def proje_tutarlilik_raporu(veri, dosya_durumlari=None, lab_rows=None):
         field="sahibi" if "proje adı" in missing_project else ("il" if "il" in missing_project else "ilce"),
     )
 
+    geology_units = jeoloji_birimleri(veri)
+    kontrol_ekle(
+        report,
+        "jeoloji.birimler",
+        "Jeoloji",
+        "Jeolojik birimler",
+        bool(geology_units),
+        (
+            f"{len(geology_units)} jeolojik birim rapor için tanımlı."
+            if geology_units
+            else "Rapor için jeolojik birim seçilmemiş."
+        ),
+        "haritalar",
+        (
+            "Haritalar sekmesindeki Jeolojik Birimleri Yönet ekranından inceleme "
+            "alanı ve yakın çevre birimlerini tanımlayın."
+        ),
+        failure_level="warning",
+        weight=2,
+    )
+
     sondajlar = veri.get("sondaj", []) if isinstance(veri.get("sondaj", []), list) else []
     kontrol_ekle(
         report,
@@ -455,8 +477,22 @@ def proje_tutarlilik_raporu(veri, dosya_durumlari=None, lab_rows=None):
             )
 
         for yass_key, yass_label in (("yass_d1", "YASS 1"), ("yass_d2", "YASS 2")):
-            yass = sayi_veya_none(sondaj.get(yass_key))
-            if yass is not None and (yass < 0 or (depth is not None and yass > depth + 0.05)):
+            yass_raw = sondaj.get(yass_key)
+            yass = sayi_veya_none(yass_raw)
+            if not bos_mu(yass_raw) and yass is None:
+                bulgu_ekle(
+                    report,
+                    f"sondaj.{_slug(no)}.{yass_key}",
+                    "warning",
+                    "Sondaj",
+                    "Yeraltı suyu",
+                    f"{no}: {yass_label} derinliği geçerli bir sayı değil.",
+                    "sondaj",
+                    "YASS derinliğini sıfır veya pozitif sayı olarak girin.",
+                    entity=no,
+                    field=yass_key,
+                )
+            elif yass is not None and (yass < 0 or (depth is not None and yass > depth + 0.05)):
                 bulgu_ekle(
                     report,
                     f"sondaj.{_slug(no)}.{yass_key}",

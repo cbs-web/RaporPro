@@ -1,4 +1,5 @@
 # Dosya: RaporPro/tutarlilik_ortak.py
+import math
 import re
 import unicodedata
 
@@ -14,9 +15,10 @@ def sayi_veya_none(value):
     if bos_mu(value):
         return None
     try:
-        return float(str(value).strip().replace(",", "."))
+        number = float(str(value).strip().replace(",", "."))
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def kimlik_anahtari(value):

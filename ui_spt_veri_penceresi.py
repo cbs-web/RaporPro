@@ -315,7 +315,8 @@ class SPTVeriPenceresi:
         
         has_refusal = False
         for v in [val15, val30, val45]:
-            if "50/" in v or "-" in v:
+            upper = v.upper()
+            if "50/" in upper or upper in ("R", "REF", "REFU", "REFÜ"):
                 has_refusal = True
                 break
                 

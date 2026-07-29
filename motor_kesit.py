@@ -9,41 +9,21 @@ import textwrap
 
 from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT, kesit_motoru_normalize
 
-try:
-    from sabitler import (
-        A4_LANDSCAPE_SIZE,
-        LEJANTLAR,
-        SECTION_AXES_RECT,
-        SECTION_FIGURE_DPI,
-    )
-    from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
-    from cizim import GeoEngineDraw
-    from kesit_baski import (
-        kesit_baski_yerlesimi,
-        kesit_cok_sayfa_plani,
-        kesit_dusey_abarti,
-        kesit_sayfa_boyutu,
-    )
-    from performans import log_exception
-except ImportError:
-    LEJANTLAR = []
-    def safe_float(v): return 0.0
-    def haversine_distance(l1, ln1, l2, ln2): return 0.0
-    def litoloji_cozumle(t): return "tanimsiz"
-    class GeoEngineDraw:
-        @staticmethod
-        def draw_pattern(ax, p, s, c, bbox=None, density_scale=1): pass
-        @staticmethod
-        def hide_same_unit_seams(ax, polygons, tolerance=0.08): return []
-    def log_exception(name, exc_type=None, exc_value=None, exc_tb=None): return None
-    A4_LANDSCAPE_SIZE = (11.69, 8.27)
-    SECTION_FIGURE_DPI = 100
-    SECTION_AXES_RECT = [0.08, 0.05, 0.84, 0.90]
-    def kesit_sayfa_boyutu(page_name): return "A4 Yatay", A4_LANDSCAPE_SIZE
-    def kesit_dusey_abarti(horizontal_scale, vertical_scale):
-        return float(horizontal_scale or 1) / max(1.0, float(vertical_scale or 1))
-    def kesit_baski_yerlesimi(*args, **kwargs): return {}
-    def kesit_cok_sayfa_plani(*args, **kwargs): return {"page_count": 1, "windows": []}
+from sabitler import (
+    A4_LANDSCAPE_SIZE,
+    LEJANTLAR,
+    SECTION_AXES_RECT,
+    SECTION_FIGURE_DPI,
+)
+from yardimcilar import safe_float, haversine_distance, litoloji_cozumle
+from cizim import GeoEngineDraw
+from kesit_baski import (
+    kesit_baski_yerlesimi,
+    kesit_cok_sayfa_plani,
+    kesit_dusey_abarti,
+    kesit_sayfa_boyutu,
+)
+from performans import log_exception
 
 from motor_interaktif import GeoInteractiveTool
 from kesit_korelasyon import (
