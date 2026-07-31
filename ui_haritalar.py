@@ -3,6 +3,15 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from PIL import Image, ImageTk
+
+from harita_durum import (
+    HARITA_CIKTI_ANAHTARLARI,
+    harita_cikti_durumu,
+    harita_cikti_meta_olustur,
+    harita_formasyon_kodu,
+    harita_katman_ayarlari,
+)
 from harita_motoru import DEFAULT_TILE_SERVER, TILE_SERVERS
 from harita_referans import kml_koordinatlari_oku, ss_harita_etiketi
 from harita_resim_cache import display_image_read
@@ -142,7 +151,7 @@ class HaritalarSekmesiMixin:
         ).pack(side="left", padx=(0, SPACE_XS))
         self.modern_button(
             kml_actions,
-            "Ada Görseli",
+            "Ada + Komşular",
             command=self.tkgm_ada_gorseli_al,
             role="primary",
             padx=7,
@@ -227,6 +236,46 @@ class HaritalarSekmesiMixin:
             pady=4,
         ).grid(row=1, column=3, sticky="e", pady=(SPACE_SM, 0))
 
+        layer_frame = ttk.LabelFrame(setup, text="Katmanlar", padding=(8, 5))
+        layer_frame.grid(
+            row=2,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(SPACE_SM, 0),
+        )
+        for column in range(4):
+            layer_frame.columnconfigure(column, weight=1)
+        saved_layers = harita_katman_ayarlari(
+            self.veri.get("ayarlar", {}).get("harita_katmanlari")
+        )
+        self.harita_layer_vars = {}
+        for index, (key, title) in enumerate(
+            (
+                ("altlik", "Görsel altlık"),
+                ("kml", "KML sınırı"),
+                ("sondaj", "Sondajlar"),
+                ("ss", "Sismik serimler"),
+                ("mt", "Mikrotremör"),
+                ("etiketler", "Etiketler"),
+                ("otomatik_etiket", "Etiket çakışmasını azalt"),
+            )
+        ):
+            variable = tk.BooleanVar(value=saved_layers[key])
+            self.harita_layer_vars[key] = variable
+            ttk.Checkbutton(
+                layer_frame,
+                text=title,
+                variable=variable,
+                command=self.harita_katmanlari_degisti,
+            ).grid(
+                row=index // 4,
+                column=index % 4,
+                sticky="w",
+                padx=(0, SPACE_SM),
+                pady=2,
+            )
+
         coordinates = ttk.LabelFrame(page, text="Çalışma Noktaları", padding=(12, 10))
         coordinates.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_SM))
         coord_header = ttk.Frame(coordinates)
@@ -289,6 +338,7 @@ class HaritalarSekmesiMixin:
             ("Araştırma Noktaları Vaziyet Planı", "lbl_harita_vaziyet", "accent", lambda: self.harita_cizici_ac("vaziyet")),
             ("Mühendislik Jeolojisi", "lbl_harita_jeoloji", "warning", lambda: self.harita_cizici_ac("jeoloji")),
             ("Yerbuldurur Haritası", "lbl_harita_yerbuldurur", "primary", self.yerbuldurur_ac),
+            ("TKGM Ada ve Komşu Parseller", "lbl_harita_tkgm_ada", "success", self.tkgm_ada_gorseli_al),
         ]:
             card = tk.Frame(
                 action_grid,
@@ -327,10 +377,22 @@ class HaritalarSekmesiMixin:
             padx=7,
             pady=4,
         ).pack(side="right")
+        self.modern_button(
+            output_header,
+            "Tüm Rapor Haritalarını Yenile",
+            command=self.harita_toplu_yenile,
+            role="primary",
+            padx=7,
+            pady=4,
+        ).pack(side="right", padx=(0, SPACE_XS))
 
         output_grid = ttk.Frame(outputs)
         output_grid.pack(fill="x")
         self.harita_output_labels = {}
+        self.harita_output_previews = {}
+        self.harita_output_preview_images = {}
+        self.harita_output_preview_cache = {}
+        self.harita_output_cards = {}
         output_cards = []
         for key, title in (
             ("sondaj", "Sondaj Lokasyon"),
@@ -354,6 +416,24 @@ class HaritalarSekmesiMixin:
                 fg=COLOR_PRIMARY,
                 font=FONT_UI_BODY_BOLD,
             ).pack(anchor="w")
+            preview_wrap = tk.Frame(
+                card,
+                bg="#F3F5F6",
+                width=170,
+                height=88,
+                highlightthickness=1,
+                highlightbackground=COLOR_BORDER,
+            )
+            preview_wrap.pack(fill="x", pady=(5, 4))
+            preview_wrap.pack_propagate(False)
+            preview = tk.Label(
+                preview_wrap,
+                text="Önizleme yok",
+                bg="#F3F5F6",
+                fg=COLOR_TEXT_MUTED,
+                font=FONT_UI_BODY,
+            )
+            preview.pack(fill="both", expand=True)
             status = tk.Label(
                 card,
                 text="-",
@@ -365,37 +445,106 @@ class HaritalarSekmesiMixin:
             )
             status.pack(fill="x", pady=(2, 0))
             self.harita_output_labels[key] = status
+            self.harita_output_previews[key] = preview
+            self.harita_output_cards[key] = card
             output_cards.append(card)
         self.responsive_widget_grid(output_grid, output_cards, min_width=180, max_cols=5, padx=4, pady=4)
 
         self.harita_durum_yenile()
 
+    def harita_katman_ayarlarini_al(self):
+        if hasattr(self, "harita_layer_vars"):
+            return harita_katman_ayarlari(
+                {
+                    key: variable.get()
+                    for key, variable in self.harita_layer_vars.items()
+                }
+            )
+        ayarlar = self.veri.get("ayarlar", {}) if isinstance(self.veri, dict) else {}
+        return harita_katman_ayarlari(
+            ayarlar.get("harita_katmanlari") if isinstance(ayarlar, dict) else None
+        )
+
+    def harita_katmanlari_degisti(self):
+        layers = self.harita_katman_ayarlarini_al()
+        self.veri.setdefault("ayarlar", {})["harita_katmanlari"] = layers
+        drawings = self.veri.setdefault(
+            "harita_cizimleri",
+            {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
+        )
+        visibility = dict(layers)
+        visibility["jeofizik"] = layers["ss"] and layers["mt"]
+        for drawing_key in ("vaziyet", "jeoloji"):
+            drawing = drawings.get(drawing_key)
+            if isinstance(drawing, dict) and drawing:
+                drawing["visibility"] = dict(visibility)
+        if hasattr(self, "set_save_indicator"):
+            self.set_save_indicator("Harita katmanları değişti: kaydedilmedi", "warning")
+        self.harita_durum_yenile()
+
+    def _harita_output_paths(self):
+        return {
+            "sondaj": getattr(self, "word_img_sondaj", None),
+            "jeofizik": getattr(self, "word_img_jeofizik", None),
+            "mjh": getattr(self, "img_mjh", None),
+            "yer": getattr(self, "img_yer", None),
+            "tkgm": getattr(self, "img_tkgm", None),
+        }
+
+    def _harita_cikti_meta_kaydet(self, cikti_tipi, path):
+        if cikti_tipi not in HARITA_CIKTI_ANAHTARLARI or not path:
+            return
+        self.veri.setdefault("harita_cikti_meta", {})[cikti_tipi] = (
+            harita_cikti_meta_olustur(self.veri, cikti_tipi, path)
+        )
+
+    def _harita_cikti_onizleme_yenile(self, key, path):
+        preview = getattr(self, "harita_output_previews", {}).get(key)
+        if preview is None:
+            return
+        if not path or not os.path.isfile(path):
+            self.harita_output_preview_images.pop(key, None)
+            self.harita_output_preview_cache.pop(key, None)
+            preview.configure(image="", text="Önizleme yok", cursor="")
+            preview.unbind("<Button-1>")
+            return
+        try:
+            cache_key = (os.path.abspath(path), os.path.getmtime(path), os.path.getsize(path))
+        except OSError:
+            cache_key = (os.path.abspath(path), None, None)
+        if self.harita_output_preview_cache.get(key) == cache_key:
+            return
+        try:
+            with Image.open(path) as source:
+                image = source.convert("RGB")
+                resampling = getattr(Image, "Resampling", Image).LANCZOS
+                image.thumbnail((176, 84), resampling)
+            preview_image = ImageTk.PhotoImage(image)
+            self.harita_output_preview_images[key] = preview_image
+            self.harita_output_preview_cache[key] = cache_key
+            preview.configure(image=preview_image, text="", cursor="hand2")
+            preview.bind(
+                "<Button-1>",
+                lambda _event, output_path=path: self._harita_cikti_ac(output_path),
+            )
+        except Exception:
+            self.harita_output_preview_images.pop(key, None)
+            self.harita_output_preview_cache.pop(key, None)
+            preview.configure(image="", text="Önizleme açılamadı", cursor="")
+            preview.unbind("<Button-1>")
+
+    @staticmethod
+    def _harita_cikti_ac(path):
+        if path and os.path.isfile(path):
+            try:
+                os.startfile(path)
+            except OSError:
+                pass
+
     def _harita_formasyon_secimini_yenile(self):
         if not hasattr(self, "cmb_formasyon"):
             return
-        ayarlar = self.veri.setdefault("ayarlar", {})
-        selected_code = str(ayarlar.get("harita_formasyon", "")).strip()
-        if selected_code not in JEOLOJI_BIRIM_KATALOGU:
-            selected_code = ""
-        if not selected_code:
-            for record in jeoloji_birimleri(self.veri):
-                if (
-                    record.get("konum")
-                    in {KONUM_INCELEME_ALANI, KONUM_HER_IKISI}
-                    and record.get("kod") in JEOLOJI_BIRIM_KATALOGU
-                ):
-                    selected_code = record["kod"]
-                    break
-        if not selected_code:
-            suggestion = self.veri.get("jeoloji", {}).get(
-                "harita_formasyon_onerisi",
-                "",
-            )
-            if suggestion in JEOLOJI_BIRIM_KATALOGU:
-                selected_code = suggestion
-        if not selected_code:
-            selected_code = next(iter(JEOLOJI_BIRIM_KATALOGU))
-
+        selected_code = harita_formasyon_kodu(self.veri)
         info = JEOLOJI_BIRIM_KATALOGU[selected_code]
         self.cmb_formasyon.set(f"{selected_code} ({info['ad']})")
 
@@ -440,9 +589,23 @@ class HaritalarSekmesiMixin:
             self.ozet_yenile()
 
     def harita_durum_yenile(self):
+        saved_layers = harita_katman_ayarlari(
+            self.veri.get("ayarlar", {}).get("harita_katmanlari")
+            if isinstance(self.veri, dict)
+            else None
+        )
+        for key, variable in getattr(self, "harita_layer_vars", {}).items():
+            if bool(variable.get()) != saved_layers[key]:
+                variable.set(saved_layers[key])
+
         kml_path = getattr(self, "kml_path", None)
         kml_state, kml_text = self.harita_dosya_durumu(kml_path, "KML seçilmedi")
-        status_colors = {"ok": COLOR_SUCCESS, "warning": COLOR_WARNING, "empty": COLOR_DANGER}
+        status_colors = {
+            "ok": COLOR_SUCCESS,
+            "stale": COLOR_WARNING,
+            "warning": COLOR_WARNING,
+            "empty": COLOR_DANGER,
+        }
         kml_color = status_colors[kml_state]
         if hasattr(self, "lbl_harita_kml_detay"):
             self.lbl_harita_kml_detay.config(text=kml_text, foreground=kml_color)
@@ -535,22 +698,48 @@ class HaritalarSekmesiMixin:
                 text, color = empty_text, COLOR_WARNING
             getattr(self, attr).config(text=text, foreground=color)
 
-        output_paths = {
-            "sondaj": getattr(self, "word_img_sondaj", None),
-            "jeofizik": getattr(self, "word_img_jeofizik", None),
-            "mjh": getattr(self, "img_mjh", None),
-            "yer": getattr(self, "img_yer", None),
-            "tkgm": getattr(self, "img_tkgm", None),
-        }
+        output_paths = self._harita_output_paths()
+        output_meta = (
+            self.veri.get("harita_cikti_meta", {})
+            if isinstance(self.veri.get("harita_cikti_meta"), dict)
+            else {}
+        )
         output_ready = 0
+        output_stale = 0
         for key, label in getattr(self, "harita_output_labels", {}).items():
-            state, text = self.harita_dosya_durumu(output_paths.get(key))
+            path = output_paths.get(key)
+            state, text = harita_cikti_durumu(
+                self.veri,
+                key,
+                path,
+                output_meta.get(key),
+            )
             if state == "ok":
                 output_ready += 1
+            elif state == "stale":
+                output_stale += 1
             label.config(text=text, foreground=status_colors[state])
+            if key == "tkgm" and hasattr(self, "lbl_harita_tkgm_ada"):
+                self.lbl_harita_tkgm_ada.config(
+                    text=text,
+                    foreground=status_colors[state],
+                )
+            card = getattr(self, "harita_output_cards", {}).get(key)
+            if card is not None:
+                card.config(
+                    highlightbackground=(
+                        COLOR_SUCCESS
+                        if state == "ok"
+                        else COLOR_WARNING
+                        if state in {"stale", "warning"}
+                        else COLOR_BORDER
+                    )
+                )
+            self._harita_cikti_onizleme_yenile(key, path)
         if hasattr(self, "lbl_harita_cikti_ozet"):
+            stale_text = f" · Eski: {output_stale}" if output_stale else ""
             self.lbl_harita_cikti_ozet.config(
-                text=f"Word için hazır: {output_ready}/{len(output_paths)}",
+                text=f"Word için hazır: {output_ready}/{len(output_paths)}{stale_text}",
                 foreground=COLOR_SUCCESS if output_ready == len(output_paths) else COLOR_WARNING,
             )
 
@@ -564,6 +753,104 @@ class HaritalarSekmesiMixin:
                 if kml_state == "ok" and coord_all_ready and output_ready == len(output_paths)
                 else COLOR_WARNING
             )
+
+    def harita_toplu_yenile(self):
+        self.guncelle_veri_objesi()
+        paths = self._harita_output_paths()
+        meta = (
+            self.veri.get("harita_cikti_meta", {})
+            if isinstance(self.veri.get("harita_cikti_meta"), dict)
+            else {}
+        )
+        states = {
+            key: harita_cikti_durumu(self.veri, key, paths.get(key), meta.get(key))[0]
+            for key in HARITA_CIKTI_ANAHTARLARI
+        }
+        steps = []
+        if states["sondaj"] != "ok" or states["jeofizik"] != "ok":
+            steps.append("vaziyet")
+        if states["mjh"] != "ok":
+            steps.append("jeoloji")
+        if states["yer"] != "ok":
+            steps.append("yerbuldurur")
+        if states["tkgm"] != "ok":
+            steps.append("tkgm")
+
+        if not steps:
+            if not messagebox.askyesno(
+                "Rapor Haritalarını Yenile",
+                "Bütün rapor haritaları güncel görünüyor.\n\n"
+                "Yine de tamamını yeniden oluşturmak ister misiniz?",
+            ):
+                return
+            steps = ["vaziyet", "jeoloji", "yerbuldurur", "tkgm"]
+
+        if getattr(self, "_harita_yenileme_aktif", False):
+            messagebox.showinfo(
+                "Rapor Haritalarını Yenile",
+                "Harita yenileme akışı zaten devam ediyor.",
+            )
+            return
+
+        self._harita_yenileme_aktif = True
+        self._harita_yenileme_kuyrugu = list(steps)
+        self._harita_yenileme_current = None
+        self._harita_yenileme_tamamlanan = 0
+        self._harita_yenileme_toplam = len(steps)
+        self.set_status(
+            f"Harita yenileme başladı: {len(steps)} adım.",
+            level="info",
+        )
+        self._harita_toplu_sonraki()
+
+    def _harita_toplu_sonraki(self):
+        if not getattr(self, "_harita_yenileme_aktif", False):
+            return
+        if getattr(self, "_harita_yenileme_current", None):
+            return
+        queue = getattr(self, "_harita_yenileme_kuyrugu", [])
+        if not queue:
+            completed = getattr(self, "_harita_yenileme_tamamlanan", 0)
+            total = getattr(self, "_harita_yenileme_toplam", completed)
+            self._harita_yenileme_aktif = False
+            self.harita_durum_yenile()
+            self.set_status(
+                f"Harita yenileme tamamlandı: {completed}/{total} adım.",
+                level="success" if completed == total else "warning",
+            )
+            messagebox.showinfo(
+                "Rapor Haritalarını Yenile",
+                f"Harita yenileme akışı tamamlandı.\n\nTamamlanan: {completed}/{total}",
+            )
+            return
+
+        step = queue.pop(0)
+        self._harita_yenileme_current = step
+        opened = False
+        if step in {"vaziyet", "jeoloji"}:
+            opened = bool(self.harita_cizici_ac(step))
+        elif step == "yerbuldurur":
+            opened = bool(self.yerbuldurur_ac())
+        elif step == "tkgm":
+            opened = bool(self.tkgm_ada_gorseli_al())
+        if not opened:
+            self._harita_toplu_adim_bitti(step, success=False)
+
+    def _harita_toplu_adim_bitti(self, step, *, success):
+        if not getattr(self, "_harita_yenileme_aktif", False):
+            return
+        if getattr(self, "_harita_yenileme_current", None) != step:
+            return
+        if success:
+            self._harita_yenileme_tamamlanan = (
+                getattr(self, "_harita_yenileme_tamamlanan", 0) + 1
+            )
+        self._harita_yenileme_current = None
+        self.root.after(250, self._harita_toplu_sonraki)
+
+    def _harita_cizici_kapandi(self, harita_tipi, exported):
+        if not exported:
+            self._harita_toplu_adim_bitti(harita_tipi, success=False)
 
     def harita_altlik_secildi(self, _event=None):
         self.harita_altlik_kaydet(self.harita_altlik_var.get(), notify=True)
@@ -682,7 +969,7 @@ class HaritalarSekmesiMixin:
                 "Ada görseli oluşturmak için Künye sekmesinde şu alanlar dolu olmalı:\n- "
                 + "\n- ".join(missing),
             )
-            return
+            return False
 
         tile_name = self.harita_altlik_var.get() if hasattr(self, "harita_altlik_var") else DEFAULT_TILE_SERVER
         if tile_name not in TILE_SERVERS:
@@ -723,9 +1010,11 @@ class HaritalarSekmesiMixin:
             path = result.get("path")
             if not path or not os.path.isfile(path):
                 messagebox.showerror("TKGM Ada Görseli", "Ada görseli dosyası oluşturulamadı.")
+                self._harita_toplu_adim_bitti("tkgm", success=False)
                 return
             self.img_tkgm = path
             self.veri.setdefault("dosyalar", {})["img_tkgm"] = path
+            self._harita_cikti_meta_kaydet("tkgm", path)
             if hasattr(self, "lbl_tkgm"):
                 self.lbl_tkgm.config(text=os.path.basename(path), foreground=COLOR_SUCCESS)
             self.harita_durum_yenile()
@@ -752,6 +1041,7 @@ class HaritalarSekmesiMixin:
                 f"Kaynak yöntemi: {source_text}\n"
                 f"Rapor etiketi: RESIM:TKGM\n\n{path}{fallback_text}{limit_text}",
             )
+            self._harita_toplu_adim_bitti("tkgm", success=True)
 
         def error(exc):
             if progress.winfo_exists():
@@ -762,6 +1052,7 @@ class HaritalarSekmesiMixin:
                 f"{exc}\n\n"
                 "TKGM servisi geçici olarak yoğun ise kısa bir süre sonra yeniden deneyebilirsiniz.",
             )
+            self._harita_toplu_adim_bitti("tkgm", success=False)
 
         self.arka_plan_gorevi_baslat(
             "TKGM ada görseli",
@@ -772,6 +1063,7 @@ class HaritalarSekmesiMixin:
             on_success=success,
             on_error=error,
         )
+        return True
 
     def harita_cizici_ac(self, harita_tipi):
         with perf_timer("map.image_marker_data_prepare", harita_tipi):
@@ -802,6 +1094,8 @@ class HaritalarSekmesiMixin:
         if img_path:
             formasyon_kod = self.cmb_formasyon.get().split(" ")[0]
             self.harita_altlik_hazirla_ve_ac(harita_tipi, img_path, map_data, formasyon_kod, harita_data)
+            return True
+        return False
 
     def harita_altlik_hazirla_ve_ac(self, harita_tipi, img_path, map_data, formasyon_kod, harita_data):
         progress = tk.Toplevel(self.root)
@@ -831,12 +1125,18 @@ class HaritalarSekmesiMixin:
                     word_callback=self.harita_word_aktar,
                     save_callback=lambda data: self.harita_cizim_kaydet(harita_tipi, data),
                     saved_state=harita_data,
+                    layer_settings=self.harita_katman_ayarlarini_al(),
+                    close_callback=lambda exported: self._harita_cizici_kapandi(
+                        harita_tipi,
+                        exported,
+                    ),
                 )
 
         def show_error(exc):
             if progress.winfo_exists():
                 progress.destroy()
             messagebox.showerror("Harita Altlığı", f"Harita altlığı hazırlanamadı:\n{exc}")
+            self._harita_toplu_adim_bitti(harita_tipi, success=False)
 
         self.arka_plan_gorevi_baslat(
             "Harita altlığı hazırla",
@@ -852,43 +1152,82 @@ class HaritalarSekmesiMixin:
         if "harita_cizimleri" not in self.veri:
             self.veri["harita_cizimleri"] = {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}}
         self.veri["harita_cizimleri"][harita_tipi] = data
+        if harita_tipi == "jeoloji" and isinstance(data, dict):
+            code = str(data.get("formasyon") or "").strip()
+            if code in JEOLOJI_BIRIM_KATALOGU:
+                self.veri.setdefault("ayarlar", {})["harita_formasyon"] = code
+        visibility = data.get("visibility", {}) if isinstance(data, dict) else {}
+        if isinstance(visibility, dict):
+            layers = harita_katman_ayarlari(visibility)
+            self.veri.setdefault("ayarlar", {})["harita_katmanlari"] = layers
+            shared_visibility = dict(layers)
+            shared_visibility["jeofizik"] = layers["ss"] and layers["mt"]
+            for drawing_key in ("vaziyet", "jeoloji"):
+                drawing = self.veri["harita_cizimleri"].get(drawing_key)
+                if isinstance(drawing, dict) and drawing:
+                    drawing["visibility"] = dict(shared_visibility)
+            for key, variable in getattr(self, "harita_layer_vars", {}).items():
+                variable.set(layers[key])
         self.harita_durum_yenile()
         self.veri_kaydet()
         self.set_status(f"{harita_tipi.upper()} çizim verileri projeye kaydedildi.", level="success")
 
     def harita_word_aktar(self, path_son=None, path_jeo=None, path_mjh=None, harita_tipi="vaziyet"):
+        dosyalar = self.veri.setdefault("dosyalar", {})
         if path_mjh:
             self.img_mjh = path_mjh
+            dosyalar["img_mjh"] = path_mjh
+            self._harita_cikti_meta_kaydet("mjh", path_mjh)
             if hasattr(self, "lbl_mjh"):
                 self.lbl_mjh.config(text=os.path.basename(path_mjh), foreground=COLOR_SUCCESS)
             self.harita_durum_yenile()
             self.veri_kaydet()
             self.set_status("Mühendislik jeolojisi haritası RESIM:MJH için hafızaya alındı.", level="success")
+            self._harita_toplu_adim_bitti("jeoloji", success=True)
             return
         if path_son:
             self.word_img_sondaj = path_son
+            dosyalar["word_img_sondaj"] = path_son
+            self._harita_cikti_meta_kaydet("sondaj", path_son)
         if path_jeo:
             self.word_img_jeofizik = path_jeo
+            dosyalar["word_img_jeofizik"] = path_jeo
+            self._harita_cikti_meta_kaydet("jeofizik", path_jeo)
         self.harita_durum_yenile()
         self.veri_kaydet()
         self.set_status("Sondaj ve Jeofizik haritaları Word raporu için hafızaya alındı.", level="success")
+        self._harita_toplu_adim_bitti("vaziyet", success=True)
 
     @perf_tracked("map.yerbuldurur_open")
     def yerbuldurur_ac(self):
         if not self.kml_path or not os.path.exists(self.kml_path):
             messagebox.showerror("Hata", "Lütfen önce üst menüden bir KML Sınır Dosyası seçin!")
-            return
+            return False
 
         harita_data = self.veri.get("harita_cizimleri", {}).get("yerbuldurur", {})
-        YerbuldururMotoru(self.root, kml_path=self.kml_path, saved_state=harita_data, save_callback=self.yerbuldurur_kaydet)
+        YerbuldururMotoru(
+            self.root,
+            kml_path=self.kml_path,
+            saved_state=harita_data,
+            save_callback=self.yerbuldurur_kaydet,
+            close_callback=lambda exported: (
+                None
+                if exported
+                else self._harita_toplu_adim_bitti("yerbuldurur", success=False)
+            ),
+        )
+        return True
 
     def yerbuldurur_kaydet(self, state, img_path):
         if "harita_cizimleri" not in self.veri:
             self.veri["harita_cizimleri"] = {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}}
         self.veri["harita_cizimleri"]["yerbuldurur"] = state
         self.img_yer = img_path
+        self.veri.setdefault("dosyalar", {})["img_yer"] = img_path
+        self._harita_cikti_meta_kaydet("yer", img_path)
         if hasattr(self, "lbl_yer"):
             self.lbl_yer.config(text=os.path.basename(img_path), foreground=COLOR_SUCCESS)
         self.harita_durum_yenile()
         self.veri_kaydet()
         self.set_status("Yerbuldurur haritası projeye kaydedildi ve Rapor sekmesine aktarıldı.", level="success")
+        self._harita_toplu_adim_bitti("yerbuldurur", success=True)

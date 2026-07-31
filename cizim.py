@@ -389,19 +389,34 @@ class VeriGirisPenceresi(Toplevel):
         self.litoloji_uyari_var = tk.StringVar(value="")
         if self.litoloji_modu:
             style = ttk.Style(self)
-            style.configure("LitolojiNormal.TEntry", fieldbackground="white")
-            style.configure("LitolojiWarning.TEntry", fieldbackground="#FCF3CF")
+            style.configure(
+                "LitolojiNormal.TEntry",
+                fieldbackground="white",
+                foreground="#1F2933",
+            )
+            style.configure(
+                "LitolojiWarning.TEntry",
+                fieldbackground="#FCF3CF",
+                foreground="#1F2933",
+            )
         
         self.c = Canvas(self, bg=COLOR_BG)
         self.f = ttk.Frame(self.c)
         self.s = ttk.Scrollbar(self, orient="vertical", command=self.c.yview)
-        
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
         self.c.configure(yscrollcommand=self.s.set)
-        self.s.pack(side="right", fill="y")
-        self.c.pack(side="left", fill="both", expand=True)
-        self.c.create_window((0, 0), window=self.f, anchor="nw")
+        self.c.grid(row=0, column=0, sticky="nsew")
+        self.s.grid(row=0, column=1, sticky="ns")
+        self._canvas_window = self.c.create_window((0, 0), window=self.f, anchor="nw")
         
         self.f.bind("<Configure>", lambda e: self.c.configure(scrollregion=self.c.bbox("all")))
+        if self.litoloji_modu:
+            self.f.columnconfigure(0, weight=1, minsize=120)
+            self.f.columnconfigure(1, weight=1, minsize=120)
+            self.f.columnconfigure(2, weight=3, minsize=300)
+            self.c.bind("<Configure>", self._litoloji_tablo_genisligi_guncelle)
         
         for i, col in enumerate(kolonlar):
             ttk.Label(self.f, text=col, font=FONT_BOLD, relief="flat", background="#dfe6e9", anchor="center", padding=5).grid(row=0, column=i, sticky="nsew", padx=1, pady=1)
@@ -412,12 +427,55 @@ class VeriGirisPenceresi(Toplevel):
         if not self.satirlar: self.satir_ekle()
         
         btn_f = ttk.Frame(self, padding=10)
-        btn_f.pack(fill="x", side="bottom")
+        btn_f.grid(row=1, column=0, columnspan=2, sticky="ew")
+        btn_f.columnconfigure(1, weight=1)
         
-        tk.Button(btn_f, text="+ Satır Ekle", command=lambda: self.satir_ekle(), bg=COLOR_ACCENT, fg="white", font=FONT_BOLD).pack(side="left", padx=10)
-        ttk.Label(btn_f, textvariable=self.litoloji_uyari_var, foreground="#B7950B").pack(side="left", padx=8)
-        tk.Button(btn_f, text="💾 KAYDET VE KAPAT", bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD, command=self.kaydet).pack(side="right", padx=10)
+        self.btn_satir_ekle = tk.Button(
+            btn_f,
+            text="+ Satır Ekle",
+            command=lambda: self.satir_ekle(),
+            bg=COLOR_ACCENT,
+            fg="white",
+            font=FONT_BOLD,
+        )
+        self.btn_satir_ekle.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.lbl_litoloji_uyari = ttk.Label(
+            btn_f,
+            textvariable=self.litoloji_uyari_var,
+            foreground="#9A7D0A",
+            anchor="w",
+            justify="left",
+            wraplength=420,
+        )
+        self.lbl_litoloji_uyari.grid(row=0, column=1, sticky="ew", padx=8)
+        self.btn_kaydet_kapat = tk.Button(
+            btn_f,
+            text="💾 KAYDET VE KAPAT",
+            bg=COLOR_SUCCESS,
+            fg="white",
+            font=FONT_BOLD,
+            command=self.kaydet,
+        )
+        self.btn_kaydet_kapat.grid(row=0, column=2, sticky="e", padx=(10, 0))
+        btn_f.bind("<Configure>", self._litoloji_uyari_genisligi_guncelle)
         self.litoloji_yazim_kontrol()
+
+    def _litoloji_tablo_genisligi_guncelle(self, event):
+        if not self.litoloji_modu:
+            return
+        self.c.itemconfigure(self._canvas_window, width=max(1, event.width))
+
+    def _litoloji_uyari_genisligi_guncelle(self, event):
+        if not hasattr(self, "lbl_litoloji_uyari"):
+            return
+        button_width = (
+            self.btn_satir_ekle.winfo_reqwidth()
+            + self.btn_kaydet_kapat.winfo_reqwidth()
+            + 70
+        )
+        self.lbl_litoloji_uyari.configure(
+            wraplength=max(180, event.width - button_width)
+        )
 
     def varsayilan_litoloji_satiri(self):
         if not self.satirlar:

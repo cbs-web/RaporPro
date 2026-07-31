@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.image as mpimg
 
+from harita_etiket import harita_etiketlerini_ayir
 from sabitler import DEFAULT_EXPORT_DPI, HARITA_PAFTA_LAYOUT
 
 
@@ -21,7 +22,13 @@ class ResimPaftaMixin:
 
     def pafta_harita_ciz(self, ax_map, respect_visibility=True):
         layout = HARITA_PAFTA_LAYOUT
-        ax_map.imshow(mpimg.imread(self.img_path))
+        if self.export_altlik_gorunur(respect_visibility):
+            ax_map.imshow(mpimg.imread(self.img_path))
+        else:
+            ax_map.set_facecolor("white")
+        if getattr(self, "image_width", None) and getattr(self, "image_height", None):
+            ax_map.set_xlim(0, self.image_width)
+            ax_map.set_ylim(self.image_height, 0)
         self.pafta_panel_hazirla(ax_map)
         ax_map.set_title(
             self.pafta_basligi(),
@@ -29,6 +36,8 @@ class ResimPaftaMixin:
             fontweight='bold',
             pad=layout["title_pad"],
         )
+        if self.export_kml_gorunur(respect_visibility):
+            self.harita_kml_export_ciz(ax_map)
 
         if self.export_mod_gorunur("sondaj", respect_visibility):
             for item_id, (x, y) in self.coords_memory["sondaj"].items():
@@ -37,19 +46,39 @@ class ResimPaftaMixin:
             for item_id, coords in self.coords_memory["ss"].items():
                 ax_map.plot([coords[0][0], coords[1][0]], [coords[0][1], coords[1][1]], 'r--', linewidth=2)
                 ax_map.plot(coords[0][0], coords[0][1], 'ro', markersize=4)
-                ax_map.plot(coords[1][0], coords[1][1], 'ro', markersize=4)
         if self.export_mod_gorunur("mt", respect_visibility):
             for item_id, (x, y) in self.coords_memory["mt"].items():
                 ax_map.plot(x, y, 'rs', markersize=8, markeredgecolor='black')
 
-        for mod, items in self.drawn_objects.items():
-            if not self.export_mod_gorunur(mod, respect_visibility):
-                continue
-            for item_id, elements in items.items():
-                for t in elements.get("texts", []):
-                    x, y = t.get_position()
-                    bbox_props = dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3') if mod == "formasyon" else None
-                    ax_map.text(x, y, t.get_text(), color=t.get_color(), fontsize=t.get_fontsize(), fontweight=t.get_fontweight(), ha=t.get_ha(), va=t.get_va(), bbox=bbox_props)
+        export_texts = []
+        if self.export_etiketler_gorunur(respect_visibility):
+            for mod, items in self.drawn_objects.items():
+                if not self.export_mod_gorunur(mod, respect_visibility):
+                    continue
+                for item_id, elements in items.items():
+                    for t in elements.get("texts", []):
+                        x, y = t.get_position()
+                        bbox_props = dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3') if mod == "formasyon" else None
+                        export_texts.append(
+                            ax_map.text(
+                                x,
+                                y,
+                                t.get_text(),
+                                color=t.get_color(),
+                                fontsize=t.get_fontsize(),
+                                fontweight=t.get_fontweight(),
+                                ha=t.get_ha(),
+                                va=t.get_va(),
+                                bbox=bbox_props,
+                            )
+                        )
+
+        harita_etiketlerini_ayir(
+            ax_map.figure,
+            ax_map,
+            export_texts,
+            enabled=bool(self.auto_label_var.get()),
+        )
 
         if self.kuzey_oku_var.get():
             ax_map.annotate(

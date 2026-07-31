@@ -1,6 +1,8 @@
 # Dosya: RaporPro/ui_lab_sheet.py
 import os
+import re
 import tkinter as tk
+import unicodedata
 from tkinter import filedialog, messagebox, ttk
 
 from excel_guvenligi import excel_satiri_guvenli_yap
@@ -10,6 +12,113 @@ from sabitler import COLOR_ACCENT, COLOR_DANGER, COLOR_SUCCESS, COLOR_WARNING, F
 
 LAB_SHEET_DEFAULT_ROWS = 80
 LAB_SHEET_DEFAULT_COLS = 35
+
+
+def _lab_metin(value):
+    return "" if value is None else str(value).strip()
+
+
+def _lab_anahtar(value):
+    text = _lab_metin(value).casefold()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _lab_sayi(value):
+    text = _lab_metin(value).replace(" ", "").replace(",", ".")
+    if not text or text in {"-", "—"}:
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def laboratuvar_baslik_bilgisi(rows):
+    """Çok satırlı LAB başlığını ve gerekli litoloji sütunlarını belirle."""
+    clean_rows = [
+        ["" if cell is None else str(cell).strip() for cell in row]
+        for row in (rows or [])
+        if isinstance(row, (list, tuple))
+    ]
+    if not clean_rows:
+        return {
+            "rows": [],
+            "header_row": 0,
+            "data_start": 0,
+            "signatures": [],
+            "keys": [],
+            "columns": {},
+        }
+
+    max_cols = max((len(row) for row in clean_rows), default=0)
+    for row in clean_rows:
+        row.extend([""] * (max_cols - len(row)))
+
+    header_row = 0
+    for row_index, row in enumerate(clean_rows[:35]):
+        if any(
+            "sondajno" in _lab_anahtar(cell)
+            or "kuyuno" in _lab_anahtar(cell)
+            or "boringno" in _lab_anahtar(cell)
+            for cell in row
+        ):
+            header_row = row_index
+            break
+
+    data_start = len(clean_rows)
+    for row_index in range(header_row + 1, len(clean_rows)):
+        row = clean_rows[row_index]
+        first = _lab_metin(row[0] if row else "")
+        depth = _lab_sayi(row[2] if len(row) > 2 else "")
+        numeric_count = sum(_lab_sayi(cell) is not None for cell in row)
+        if first and depth is not None and numeric_count >= 2:
+            data_start = row_index
+            break
+    if data_start == len(clean_rows):
+        data_start = min(len(clean_rows), header_row + 5)
+
+    header_rows = [list(row) for row in clean_rows[header_row:data_start]]
+    if header_rows:
+        current = ""
+        for column_index, value in enumerate(header_rows[0]):
+            if _lab_metin(value):
+                current = _lab_metin(value)
+            elif current:
+                header_rows[0][column_index] = current
+
+    signatures = []
+    keys = []
+    for column_index in range(max_cols):
+        parts = []
+        for row in header_rows:
+            value = _lab_metin(row[column_index] if column_index < len(row) else "")
+            if value and value not in parts:
+                parts.append(value)
+        signature = " / ".join(parts)
+        signatures.append(signature)
+        keys.append(_lab_anahtar(signature))
+
+    columns = {"sondaj": 0, "numune": 1, "derinlik": 2, "sinif": None}
+    for index, key in enumerate(keys):
+        if "sondajno" in key or "kuyuno" in key or "boringno" in key:
+            columns["sondaj"] = index
+        elif "numuneno" in key or "sampleno" in key:
+            columns["numune"] = index
+        elif "derinlik" in key or "depth" in key:
+            columns["derinlik"] = index
+        elif "siniflama" in key or "classification" in key or "uscs" in key:
+            columns["sinif"] = index
+
+    return {
+        "rows": clean_rows,
+        "header_row": header_row,
+        "data_start": data_start,
+        "signatures": signatures,
+        "keys": keys,
+        "columns": columns,
+    }
 
 
 def lab_sheet_rows_temizle(rows):
@@ -38,6 +147,47 @@ def lab_sheet_grid_hazirla(rows, min_rows=LAB_SHEET_DEFAULT_ROWS, min_cols=LAB_S
 def lab_sheet_var_mi(veri):
     rows = (veri or {}).get("lab_sheet", {}).get("rows", [])
     return any(any(str(cell).strip() for cell in row) for row in rows or [])
+
+
+def lab_excel_satirlari_oku(path):
+    """Bağlı LAB Excel dosyasının etkin sayfasını satır listesi olarak oku."""
+    source = os.fspath(path) if path else ""
+    if not source or not os.path.isfile(source):
+        return []
+    extension = os.path.splitext(source)[1].lower()
+    if extension in {".xlsx", ".xlsm"}:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(source, data_only=True, read_only=True)
+        try:
+            worksheet = workbook.active
+            return [
+                ["" if cell is None else cell for cell in row]
+                for row in worksheet.iter_rows(values_only=True)
+            ]
+        finally:
+            workbook.close()
+
+    import pandas as pd
+
+    frame = pd.read_excel(source, header=None)
+    return [
+        ["" if pd.isna(cell) else cell for cell in row]
+        for row in frame.itertuples(index=False, name=None)
+    ]
+
+
+def lab_kaynak_satirlari(veri, excel_path=None):
+    """Raporla aynı öncelikle LAB Sheet'i, gerekirse bağlı Excel'i kullan."""
+    rows = lab_sheet_rows_temizle(
+        ((veri or {}).get("lab_sheet", {}) or {}).get("rows", [])
+    )
+    if any(any(str(cell).strip() for cell in row) for row in rows):
+        return rows, "LAB Sheet"
+    source = os.fspath(excel_path) if excel_path else ""
+    if source and os.path.isfile(source):
+        return lab_sheet_rows_temizle(lab_excel_satirlari_oku(source)), os.path.basename(source)
+    return [], ""
 
 
 class LabSheetMixin:
@@ -137,21 +287,14 @@ class LabSheetMixin:
             refresh_info()
 
         def import_excel():
-            try:
-                from openpyxl import load_workbook
-            except Exception as exc:
-                messagebox.showerror("LAB Sheet", f"openpyxl yuklenemedi:\n{exc}")
-                return
-            path = filedialog.askopenfilename(title="LAB Excel'den Al", filetypes=[("Excel", "*.xlsx;*.xlsm")])
+            path = filedialog.askopenfilename(
+                title="LAB Excel'den Al",
+                filetypes=[("Excel", "*.xlsx;*.xlsm;*.xls")],
+            )
             if not path:
                 return
             try:
-                wb = load_workbook(path, data_only=True, read_only=True)
-                ws = wb.active
-                rows = []
-                for row in ws.iter_rows(values_only=True):
-                    rows.append(["" if cell is None else str(cell) for cell in row])
-                wb.close()
+                rows = lab_excel_satirlari_oku(path)
             except Exception as exc:
                 messagebox.showerror("LAB Sheet", f"Excel okunamadi:\n{exc}")
                 return

@@ -97,12 +97,15 @@ def test_atomic_docx_kaydi_extended_metadata_ve_zamanlari_temizler(tmp_path):
     assert reopened.core_properties.last_printed is None
     assert reopened.core_properties.revision == 1
     with ZipFile(output) as package:
-        app_xml = ElementTree.fromstring(package.read("docProps/app.xml"))
+        app_payload = package.read("docProps/app.xml")
+        app_xml = ElementTree.fromstring(app_payload)
     ns = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
     assert (app_xml.find(f"{{{ns}}}Company").text or "") == ""
     manager = app_xml.find(f"{{{ns}}}Manager")
     assert manager is None or (manager.text or "") == ""
     assert app_xml.find(f"{{{ns}}}Application").text == "RaporPro"
+    assert app_xml.find(f"{{{ns}}}AppVersion").text
+    assert b"ns0:Properties" not in app_payload
 
 
 def test_rapor_baglami_ui_nesnesini_ve_gereksiz_alanlari_tasimaz():

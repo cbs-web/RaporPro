@@ -10,7 +10,7 @@ from pathlib import Path
 from uygulama_yollari import SOURCE_DIR
 
 
-DAHILI_SABLON_SURUMU = "2026.07"
+DAHILI_SABLON_SURUMU = "2026.08"
 DAHILI_SABLON_GORELI_YOLU = Path("sablonlar") / "rapor" / "varsayilan_rapor_sablonu.docx"
 
 

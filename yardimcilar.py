@@ -64,6 +64,13 @@ def docx_paket_metadata_nortrle(path):
     )
     os.close(fd)
     namespace = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+    value_types_namespace = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
+    )
+    # Word, extended properties kökünde varsayılan ad alanını ve geçerli bir
+    # AppVersion değerini bekliyor. ElementTree'nin ns0/ns1 üretmesini önle.
+    ElementTree.register_namespace("", namespace)
+    ElementTree.register_namespace("vt", value_types_namespace)
     try:
         with ZipFile(source_path, "r") as source, ZipFile(
             clean_path, "w", compression=ZIP_DEFLATED
@@ -72,7 +79,7 @@ def docx_paket_metadata_nortrle(path):
                 payload = source.read(info.filename)
                 if info.filename == "docProps/app.xml":
                     root = ElementTree.fromstring(payload)
-                    for field_name in ("Company", "Manager", "AppVersion"):
+                    for field_name in ("Company", "Manager"):
                         element = root.find(f"{{{namespace}}}{field_name}")
                         if element is not None:
                             element.text = ""

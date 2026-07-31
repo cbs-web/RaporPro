@@ -15,6 +15,10 @@ from tutarlilik_motoru import (
 from docx import Document
 from ekler import uygun_ek_sablonu
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_sheet_var_mi
+from rapor_parsel_bilgileri import (
+    RAPOR_METIN_ETIKETLERI,
+    rapor_bilgileri_eksikleri,
+)
 from rapor_etiketleri import DUZELTME_ETIKET_ADLARI
 from rapor_sablonu import etkin_rapor_sablonu_yolu
 
@@ -38,6 +42,16 @@ KNOWN_TAGS = {
     "RESIM:Yerbuldurur",
 }
 KNOWN_TAGS.update(DUZELTME_ETIKET_ADLARI)
+KNOWN_TAGS.update(RAPOR_METIN_ETIKETLERI)
+KNOWN_TAGS.update(
+    {
+        "[ILGILI_IDARE]",
+        "[RAPOR_TARIHI]",
+        "[RAPOR_AY_YIL]",
+        "[RAPOR_NO]",
+        "[YAPI_SAHIBI]",
+    }
+)
 
 PREFIXED_TAG_RE = re.compile(
     r"^\[S[1-5]_(PROJE_ADI|IL|ILCE|MAHALLE|MEVKI|PAFTA|ADA|PARSEL)\]$"
@@ -121,6 +135,20 @@ TAG_DESCRIPTIONS = {
     "[RESIM_SONDAJ]": "Sondaj vaziyet planı görselini ekler.",
     "[RESIM:SONDAJ]": "Sondaj vaziyet planı görselini ekler.",
 }
+for _dynamic_report_tag in RAPOR_METIN_ETIKETLERI:
+    TAG_DESCRIPTIONS.setdefault(
+        _dynamic_report_tag,
+        "Parsel ve Rapor Bilgileri ile proje verilerinden dinamik metin üretir.",
+    )
+TAG_DESCRIPTIONS.update(
+    {
+        "[ILGILI_IDARE]": "Raporun sunulacağı ilgili idareyi yazar.",
+        "[RAPOR_TARIHI]": "Proje bazlı rapor tarihini yazar.",
+        "[RAPOR_AY_YIL]": "Rapor tarihini ay ve yıl biçiminde yazar.",
+        "[RAPOR_NO]": "Proje bazlı rapor numarasını yazar.",
+        "[YAPI_SAHIBI]": "Yapı sahibi veya işveren bilgisini yazar.",
+    }
+)
 
 RECOMMENDED_TAGS = [
     "[PROJE_ADI]", "[IL]", "[ILCE]", "[MAHALLE]", "[SONDAJ_BILGISI]",
@@ -400,6 +428,24 @@ def build_preflight_report(app_instance):
     file_map = _preflight_file_map(app_instance)
     lab_rows, lab_read_error = _preflight_lab_rows(app_instance)
     report = proje_tutarlilik_raporu(app_instance.veri, file_map, lab_rows=lab_rows)
+
+    report_info_missing = rapor_bilgileri_eksikleri(app_instance.veri)
+    kontrol_ekle(
+        report,
+        "rapor.parsel_bilgileri",
+        "Rapor bilgileri",
+        "Parsel ve Rapor Bilgileri",
+        not report_info_missing,
+        (
+            "Parsel bazlı rapor bilgileri hazır."
+            if not report_info_missing
+            else "Eksik rapor alanları: " + ", ".join(report_info_missing)
+        ),
+        "rapor",
+        "Rapor sekmesindeki Parsel ve Rapor Bilgileri penceresinden eksikleri tamamlayın.",
+        failure_level="warning",
+        weight=2,
+    )
 
     if lab_read_error:
         bulgu_ekle(

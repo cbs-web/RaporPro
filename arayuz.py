@@ -429,6 +429,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.toolbar_menu(toolbar, "Araçlar", [
             ("KML Sınır Seç", self.kml_sec),
             ("Tüm Koordinatları Seç", self.toplu_harita_ac),
+            ("TKGM Ada ve Komşu Parseller", self.tkgm_ada_gorseli_al),
             ("Sondaj Derinliği Hesabı", self.sondaj_derinlik_hesabi_penceresi),
             None,
             ("Ayarlar", self.ayarlar_penceresi),
@@ -1272,6 +1273,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.ek_tutanak_path = self.veri.get("ayarlar", {}).get("ek_tutanak_path")
         self.ek_arazi_deneyli_path = self.veri.get("ayarlar", {}).get("ek_arazi_deneyli_path")
         self.ayarlari_uygula()
+        if hasattr(self, "_harita_formasyon_secimini_yenile"):
+            self._harita_formasyon_secimini_yenile()
         if hasattr(self, "e_jeo_tar"):
             self.e_jeo_tar.delete(0, "end")
             self.e_jeo_tar.insert(0, self.veri.get("jeofizik", {}).get("tarih", ""))

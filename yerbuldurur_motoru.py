@@ -7,13 +7,23 @@ from PIL import ImageGrab
 import os
 
 class YerbuldururMotoru(tk.Toplevel):
-    def __init__(self, master, kml_path, saved_state=None, save_callback=None):
+    def __init__(
+        self,
+        master,
+        kml_path,
+        saved_state=None,
+        save_callback=None,
+        close_callback=None,
+    ):
         super().__init__(master)
         self.title("Yerbuldurur Haritası Oluşturucu (Hassas Zoom & KML Destekli)")
         self.geometry("1100x800")
         self.kml_path = kml_path
         self.saved_state = saved_state or {}
         self.save_callback = save_callback
+        self.close_callback = close_callback
+        self._exported = False
+        self.protocol("WM_DELETE_WINDOW", self._kapat)
         
         self.setup_ui()
         self.load_kml_and_state()
@@ -139,7 +149,13 @@ class YerbuldururMotoru(tk.Toplevel):
                     self.save_callback(state, path)
                 
                 messagebox.showinfo("Başarılı", "Yerbuldurur Haritası başarıyla projeye kaydedildi ve Rapor sekmesine aktarıldı!")
+                self._exported = True
                 self.destroy()
                 
         except Exception as e:
             messagebox.showerror("Hata", f"Ekran görüntüsü alınırken bir sorun oluştu:\n{str(e)}")
+
+    def _kapat(self):
+        if self.close_callback:
+            self.close_callback(self._exported)
+        self.destroy()

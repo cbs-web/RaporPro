@@ -15,9 +15,10 @@ from jeoloji_raporu import (
 )
 from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT
 from proje_surumleri import VARSAYILAN_SURUM_SINIRI
+from rapor_parsel_bilgileri import rapor_bilgileri_varsayilanlari
 
 
-PROJE_SEMA_SURUMU = 3
+PROJE_SEMA_SURUMU = 4
 
 
 class ProjeSemaHatasi(ValueError):
@@ -61,8 +62,10 @@ def varsayilan_proje_verisi():
         "sondaj": [],
         "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
         "jeoloji": jeoloji_varsayilanlari(),
+        "rapor_bilgileri": rapor_bilgileri_varsayilanlari(),
         "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
         "lab_sheet": {"rows": []},
+        "litoloji_manuel_taslak": {"surum": 1, "sondajlar": {}},
         "jeofizik_sheet": {"rows": []},
         "kesit_ayarlari": {
             "section_engine": KESIT_ENGINE_DEFAULT,
@@ -308,6 +311,41 @@ def _v2_v3_migrasyonu(veri):
     return ["Jeolojik birim ve dinamik rapor alanlari proje verisine eklendi."]
 
 
+def _v3_v4_migrasyonu(veri):
+    rapor_bilgileri = veri.get("rapor_bilgileri")
+    if not isinstance(rapor_bilgileri, dict):
+        rapor_bilgileri = {}
+        veri["rapor_bilgileri"] = rapor_bilgileri
+    _eksikleri_tamamla(rapor_bilgileri, rapor_bilgileri_varsayilanlari())
+
+    kunye = veri.get("kunye") if isinstance(veri.get("kunye"), dict) else {}
+    ayarlar = veri.get("ayarlar") if isinstance(veri.get("ayarlar"), dict) else {}
+    legacy_name = str(kunye.get("sahibi") or "").strip()
+    if legacy_name:
+        rapor_bilgileri["proje_adi"] = (
+            str(rapor_bilgileri.get("proje_adi") or "").strip() or legacy_name
+        )
+        rapor_bilgileri["yapi_sahibi"] = (
+            str(rapor_bilgileri.get("yapi_sahibi") or "").strip() or legacy_name
+        )
+    if not str(rapor_bilgileri.get("ilgili_idare") or "").strip():
+        rapor_bilgileri["ilgili_idare"] = str(
+            ayarlar.get("taahhut_ilgili_idare") or ""
+        ).strip()
+
+    for target, source in (
+        ("sismik_cihaz", "tutanak_jeofizik_cihaz"),
+        ("sismik_kanal_sayisi", "tutanak_kanal_sayisi"),
+        ("jeofon_frekansi", "tutanak_jeofon"),
+        ("sismik_kaynak", "tutanak_kaynak"),
+    ):
+        if not str(rapor_bilgileri.get(target) or "").strip():
+            rapor_bilgileri[target] = str(ayarlar.get(source) or "").strip()
+
+    veri["schema_version"] = 4
+    return ["Parsel bazli Word raporu alanlari proje verisine eklendi."]
+
+
 def proje_verisini_migre_et(veri, varsayilan=None):
     """Proje verisini kopyalayarak guncel semaya getirir ve migrasyon bilgisini dondurur."""
     if not isinstance(veri, dict):
@@ -334,6 +372,9 @@ def proje_verisini_migre_et(veri, varsayilan=None):
     if surum == 2:
         notlar.extend(_v2_v3_migrasyonu(sonuc))
         surum = 3
+    if surum == 3:
+        notlar.extend(_v3_v4_migrasyonu(sonuc))
+        surum = 4
 
     if varsayilan is not None and not isinstance(varsayilan, dict):
         raise TypeError("Varsayilan proje verisi bir sozluk olmalidir.")

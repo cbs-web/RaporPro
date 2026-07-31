@@ -41,6 +41,10 @@ from rapor_sablonu import rapor_sablonu_durumu
 from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
 from raporlama_arazi import arazi_deney_rapor_verileri, arazi_deney_word_bolumlerini_uygula
+from rapor_parsel_bilgileri import (
+    rapor_metin_degerleri,
+    rapor_proje_adi,
+)
 from raporlama_litoloji import (
     INCE_DANELILER,
     IRI_DANELILER,
@@ -67,6 +71,10 @@ from raporlama_tablo import (
     set_vertical_cell_alignment,
     style_cell_text,
     style_report_table_row,
+)
+from raporlama_parsel import (
+    rapor_kosullu_bolumlerini_uygula,
+    rapor_sabit_tablolarini_uygula,
 )
 
 
@@ -837,7 +845,11 @@ def raporla(app_instance, final_path=None, autosave=True):
         kunye_map = [("sahibi", "PROJE_ADI"), ("il", "IL"), ("ilce", "ILCE"), ("mah", "MAHALLE"), ("mev", "MEVKI"), ("paf", "PAFTA"), ("ada", "ADA"), ("par", "PARSEL")]
         basic_replacements = {}
         for key, tag_base in kunye_map:
-            val = kunye.get(key, "")
+            val = (
+                rapor_proje_adi(app_instance.veri)
+                if tag_base == "PROJE_ADI"
+                else kunye.get(key, "")
+            )
             for pre in prefixes: basic_replacements[f"[{pre}{tag_base}]"] = val
         
         basic_replacements["[KATEGORI]"] = arazi.get("kategori", "-")
@@ -867,7 +879,22 @@ def raporla(app_instance, final_path=None, autosave=True):
         else: sondaj_metni = "Sahada sondaj çalışması yapılmamıştır."
         basic_replacements["[SONDAJ_BILGISI]"] = sondaj_metni
         replaced_basic_tags = replace_many_text(doc, basic_replacements, paragraphs=report_paragraphs)
+        parcel_text_replacements = rapor_metin_degerleri(app_instance.veri)
+        replaced_parcel_tags = replace_many_text(
+            doc,
+            parcel_text_replacements,
+            paragraphs=report_paragraphs,
+        )
+        fixed_table_result = rapor_sabit_tablolarini_uygula(
+            doc,
+            app_instance.veri,
+        )
         basic_tag_detail = _report_detail(tags=len(basic_replacements), replaced=replaced_basic_tags, sondaj=len(sondajlar))
+        basic_tag_detail += " " + _report_detail(
+            parcel_tags=replaced_parcel_tags,
+            fault_rows=fixed_table_result.get("aktif_fay_satiri", 0),
+            seismic_rows=fixed_table_result.get("sismik_satiri", 0),
+        )
         perf_log("report.basic_tags.replace", time.perf_counter() - basic_tag_start, basic_tag_detail)
         report_step("basic_tags", basic_tag_detail)
 
@@ -1522,6 +1549,15 @@ def raporla(app_instance, final_path=None, autosave=True):
             doc_replace_img(doc, "[RESIM_SONDAJ]", getattr(app_instance, 'word_img_sondaj', None), paragraphs=report_paragraphs)
             doc_replace_img(doc, "[RESIM:SONDAJ]", getattr(app_instance, 'word_img_sondaj', None), paragraphs=report_paragraphs)
         report_step("images", image_detail)
+
+        removed_sections = rapor_kosullu_bolumlerini_uygula(
+            doc,
+            app_instance.veri,
+        )
+        report_step(
+            "conditional_sections",
+            _report_detail(removed=",".join(removed_sections) or "none"),
+        )
         
         final = final_path
         if final is None:

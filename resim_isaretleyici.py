@@ -8,6 +8,8 @@ import math
 import os
 
 from harita_cikti import yeni_harita_cikti_yolu
+from harita_durum import harita_katman_ayarlari
+from harita_etiket import harita_etiketlerini_ayir
 from harita_referans import affine_from_refs, coord_to_pixel, valid_latlon
 from harita_resim_cache import display_image_read
 from performans import log_exception, perf_timer
@@ -17,7 +19,20 @@ from resim_georef import ResimGeorefMixin
 
 
 class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
-    def __init__(self, master, img_path, map_data, harita_tipi="vaziyet", formasyon=None, kml_points=None, word_callback=None, save_callback=None, saved_state=None):
+    def __init__(
+        self,
+        master,
+        img_path,
+        map_data,
+        harita_tipi="vaziyet",
+        formasyon=None,
+        kml_points=None,
+        word_callback=None,
+        save_callback=None,
+        saved_state=None,
+        layer_settings=None,
+        close_callback=None,
+    ):
         super().__init__(master)
         
         baslik = "Araştırma Noktaları Vaziyet Planı Çizimi" if harita_tipi == "vaziyet" else "Mühendislik Jeolojisi Haritası Çizimi"
@@ -37,6 +52,9 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.word_callback = word_callback
         self.save_callback = save_callback
         self.saved_state = saved_state
+        self.close_callback = close_callback
+        self._exported = False
+        self.protocol("WM_DELETE_WINDOW", self.kapat)
         
         self.active_id = None
         self.active_mod = None
@@ -45,14 +63,50 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.active_ref_index = None
         
         saved_visibility = (saved_state or {}).get("visibility", {}) if isinstance(saved_state, dict) else {}
+        layer_defaults = harita_katman_ayarlari(layer_settings)
+        legacy_jeofizik = bool(
+            saved_visibility.get(
+                "jeofizik",
+                layer_defaults["ss"] and layer_defaults["mt"],
+            )
+        )
         saved_scale = str((saved_state or {}).get("scale", "Yok") if isinstance(saved_state, dict) else "Yok")
         if saved_scale not in ("Yok", "1/500", "1/1000"):
             saved_scale = "Yok"
         self.kuzey_oku_var = tk.BooleanVar(value=True)
         self.olcek_var = tk.StringVar(value=saved_scale)
-        self.show_sondaj_var = tk.BooleanVar(value=bool(saved_visibility.get("sondaj", True)))
-        self.show_jeofizik_var = tk.BooleanVar(value=bool(saved_visibility.get("jeofizik", True)))
+        self.show_background_var = tk.BooleanVar(
+            value=bool(saved_visibility.get("altlik", layer_defaults["altlik"]))
+        )
+        self.show_kml_var = tk.BooleanVar(
+            value=bool(saved_visibility.get("kml", layer_defaults["kml"]))
+        )
+        self.show_sondaj_var = tk.BooleanVar(
+            value=bool(saved_visibility.get("sondaj", layer_defaults["sondaj"]))
+        )
+        self.show_ss_var = tk.BooleanVar(
+            value=bool(saved_visibility.get("ss", legacy_jeofizik))
+        )
+        self.show_mt_var = tk.BooleanVar(
+            value=bool(saved_visibility.get("mt", legacy_jeofizik))
+        )
+        self.show_jeofizik_var = tk.BooleanVar(
+            value=self.show_ss_var.get() and self.show_mt_var.get()
+        )
+        self.show_labels_var = tk.BooleanVar(
+            value=bool(saved_visibility.get("etiketler", layer_defaults["etiketler"]))
+        )
+        self.auto_label_var = tk.BooleanVar(
+            value=bool(
+                saved_visibility.get(
+                    "otomatik_etiket",
+                    layer_defaults["otomatik_etiket"],
+                )
+            )
+        )
         self.olcek_artist = None
+        self.background_artist = None
+        self.kml_layer_artists = []
         
         self.drawn_objects = {"sondaj": {}, "ss": {}, "mt": {}, "formasyon": {}}
         self.coords_memory = {"sondaj": {}, "ss": {}, "mt": {}, "formasyon": {}}
@@ -193,8 +247,21 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
 
         vis_frame = ttk.LabelFrame(side_content, text="Görünürlük", padding=6)
         vis_frame.pack(fill="x", padx=5, pady=(2, 5))
-        ttk.Checkbutton(vis_frame, text="Sondajları Göster", variable=self.show_sondaj_var, command=self.gorunurluk_uygula).pack(anchor="w")
-        ttk.Checkbutton(vis_frame, text="Jeofizik Ölçümleri Göster", variable=self.show_jeofizik_var, command=self.gorunurluk_uygula).pack(anchor="w")
+        for text, variable in (
+            ("Görsel altlığı göster", self.show_background_var),
+            ("KML sınırını göster", self.show_kml_var),
+            ("Sondajları göster", self.show_sondaj_var),
+            ("Sismik serimleri göster", self.show_ss_var),
+            ("Mikrotremörleri göster", self.show_mt_var),
+            ("Etiketleri göster", self.show_labels_var),
+            ("Çıktıda etiket çakışmasını azalt", self.auto_label_var),
+        ):
+            ttk.Checkbutton(
+                vis_frame,
+                text=text,
+                variable=variable,
+                command=self.gorunurluk_uygula,
+            ).pack(anchor="w")
         self.kml_preview_ciz()
 
     def plot_image(self):
@@ -202,7 +269,10 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.fig.patch.set_facecolor('#ecf0f1')
         
         img = self.display_image_oku()
-        self.ax.imshow(img, extent=(0, self.image_width, self.image_height, 0))
+        self.background_artist = self.ax.imshow(
+            img,
+            extent=(0, self.image_width, self.image_height, 0),
+        )
         self.ax.set_xlim(0, self.image_width)
         self.ax.set_ylim(self.image_height, 0)
         self.ax.axis('off')
@@ -441,7 +511,16 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             "formasyon": self.formasyon,
             "scale": self.olcek_var.get() if hasattr(self, "olcek_var") else "Yok",
             "georef_refs": self.georef_refs,
-            "visibility": {"sondaj": self.show_sondaj_var.get(), "jeofizik": self.show_jeofizik_var.get()},
+            "visibility": {
+                "altlik": self.show_background_var.get(),
+                "kml": self.show_kml_var.get(),
+                "sondaj": self.show_sondaj_var.get(),
+                "ss": self.show_ss_var.get(),
+                "mt": self.show_mt_var.get(),
+                "jeofizik": self.show_ss_var.get() and self.show_mt_var.get(),
+                "etiketler": self.show_labels_var.get(),
+                "otomatik_etiket": self.auto_label_var.get(),
+            },
             "objects": {"sondaj": {}, "ss": {}, "mt": {}, "formasyon": {}}
         }
         for mod in ["sondaj", "mt", "formasyon"]:
@@ -826,14 +905,23 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
     def mod_gorunur(self, mod):
         if mod == "sondaj":
             return bool(self.show_sondaj_var.get())
-        if mod in ("ss", "mt"):
-            return bool(self.show_jeofizik_var.get())
+        if mod == "ss":
+            return bool(self.show_ss_var.get())
+        if mod == "mt":
+            return bool(self.show_mt_var.get())
         return True
 
     def gorunurluk_uygula(self, redraw=True):
+        self.show_jeofizik_var.set(
+            bool(self.show_ss_var.get() and self.show_mt_var.get())
+        )
+        if self.background_artist is not None:
+            self.background_artist.set_visible(bool(self.show_background_var.get()))
+        self.set_kml_layer_visibility(bool(self.show_kml_var.get()))
         self.set_mod_visibility("sondaj", self.mod_gorunur("sondaj"))
         self.set_mod_visibility("ss", self.mod_gorunur("ss"))
         self.set_mod_visibility("mt", self.mod_gorunur("mt"))
+        self.set_mod_visibility("formasyon", True)
         if self.temp_ss_marker:
             try:
                 self.temp_ss_marker.set_visible(self.mod_gorunur("ss"))
@@ -845,6 +933,19 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
     def export_mod_gorunur(self, mod, respect_visibility=True):
         return True if not respect_visibility else self.mod_gorunur(mod)
 
+    def export_altlik_gorunur(self, respect_visibility=True):
+        return True if not respect_visibility else bool(self.show_background_var.get())
+
+    def export_kml_gorunur(self, respect_visibility=True):
+        return (
+            bool(self.kml_points)
+            if not respect_visibility
+            else bool(self.show_kml_var.get() and self.kml_points)
+        )
+
+    def export_etiketler_gorunur(self, respect_visibility=True):
+        return True if not respect_visibility else bool(self.show_labels_var.get())
+
     def set_mod_visibility(self, mod, visible):
         if mod in self.drawn_objects:
             for item_id, elements in self.drawn_objects[mod].items():
@@ -855,7 +956,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                         log_exception(f"resim_isaretleyici.set_mod_visibility.{mod}.{item_id}.marker", exc_value=exc)
                 for t in elements.get("texts", []):
                     try:
-                        t.set_visible(visible)
+                        t.set_visible(visible and bool(self.show_labels_var.get()))
                     except Exception as exc:
                         log_exception(f"resim_isaretleyici.set_mod_visibility.{mod}.{item_id}.text", exc_value=exc)
 
@@ -880,16 +981,13 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             path_mjh = yeni_harita_cikti_yolu("mjh")
             orig_title = self.ax.get_title()
             self.ax.set_title("")
-            self.set_mod_visibility("sondaj", True)
-            self.set_mod_visibility("ss", True)
-            self.set_mod_visibility("mt", True)
-            self.set_mod_visibility("formasyon", True)
             self.canvas.draw()
-            self.save_a4_pafta(path_mjh, respect_visibility=False)
+            self.save_a4_pafta(path_mjh, respect_visibility=True)
             self.ax.set_title(orig_title)
             self.set_georef_visibility(True)
             self.canvas.draw()
 
+            self._exported = True
             self.word_callback(None, None, path_mjh, harita_tipi=self.harita_tipi)
             messagebox.showinfo("Başarılı", "Mühendislik jeolojisi haritası Word raporu için RESIM:MJH alanına aktarıldı!")
             self.destroy()
@@ -906,6 +1004,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.set_georef_visibility(True)
         self.canvas.draw()
         
+        self._exported = True
         self.word_callback(path_son, path_jeo, None, harita_tipi=self.harita_tipi)
         messagebox.showinfo("Başarılı", "Çizimler projeye kaydedildi ve filtrelenmiş haritalar Word raporu için hafızaya alındı!")
         self.destroy()
@@ -914,10 +1013,22 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         fig_exp = plt.figure(figsize=self.fig.get_size_inches() if hasattr(self, "fig") else (10, 8))
         fig_exp.patch.set_facecolor('#ecf0f1')
         ax_map = fig_exp.add_subplot(111)
-        ax_map.imshow(self.display_image_oku(), extent=(0, self.image_width, self.image_height, 0))
+        if self.export_altlik_gorunur(respect_visibility=True):
+            ax_map.imshow(
+                self.display_image_oku(),
+                extent=(0, self.image_width, self.image_height, 0),
+            )
+        else:
+            ax_map.set_facecolor("white")
         ax_map.set_xlim(0, self.image_width)
         ax_map.set_ylim(self.image_height, 0)
         ax_map.axis('off')
+
+        show_sondaj = bool(show_sondaj and self.mod_gorunur("sondaj"))
+        show_ss = bool(show_ss and self.mod_gorunur("ss"))
+        show_mt = bool(show_mt and self.mod_gorunur("mt"))
+        if self.export_kml_gorunur(respect_visibility=True):
+            self.harita_kml_export_ciz(ax_map)
 
         if show_sondaj:
             for item_id, (x, y) in self.coords_memory["sondaj"].items():
@@ -929,7 +1040,6 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                     continue
                 ax_map.plot([coords[0][0], coords[1][0]], [coords[0][1], coords[1][1]], 'r--', linewidth=2.5)
                 ax_map.plot(coords[0][0], coords[0][1], 'ro', markersize=4)
-                ax_map.plot(coords[1][0], coords[1][1], 'ro', markersize=4)
         if show_mt:
             for item_id, (x, y) in self.coords_memory["mt"].items():
                 if item_id in self.drawn_objects.get("mt", {}):
@@ -944,12 +1054,15 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             visible_mods.append("mt")
         if show_formasyon:
             visible_mods.append("formasyon")
+        export_texts = []
         for mod in visible_mods:
+            if not self.export_etiketler_gorunur(respect_visibility=True):
+                continue
             for item_id, elements in self.drawn_objects.get(mod, {}).items():
                 for t in elements.get("texts", []):
                     x, y = t.get_position()
                     bbox_props = dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3') if mod == "formasyon" else None
-                    ax_map.text(
+                    export_texts.append(ax_map.text(
                         x, y, t.get_text(),
                         color=t.get_color(),
                         fontsize=t.get_fontsize(),
@@ -957,7 +1070,18 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
                         ha=t.get_ha(),
                         va=t.get_va(),
                         bbox=bbox_props,
-                    )
+                    ))
 
+        harita_etiketlerini_ayir(
+            fig_exp,
+            ax_map,
+            export_texts,
+            enabled=bool(self.auto_label_var.get()),
+        )
         fig_exp.savefig(path, dpi=DEFAULT_EXPORT_DPI, bbox_inches='tight', pad_inches=0.02)
         plt.close(fig_exp)
+
+    def kapat(self):
+        if self.close_callback:
+            self.close_callback(self._exported)
+        self.destroy()

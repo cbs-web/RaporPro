@@ -1,7 +1,7 @@
 # Dosya: RaporPro/resim_georef.py
 from tkinter import messagebox
 
-from harita_referans import valid_latlon
+from harita_referans import affine_from_refs, coord_to_pixel, valid_latlon
 
 
 class ResimGeorefMixin:
@@ -159,6 +159,78 @@ class ResimGeorefMixin:
                 zorder=20,
             )
             self.georef_artists.extend([marker, text])
+        self.kml_layer_ciz()
+
+    def kml_pixel_noktalari(self):
+        if len(getattr(self, "georef_refs", [])) < 3:
+            return []
+        try:
+            coeff = affine_from_refs(self.georef_refs)
+        except Exception:
+            return []
+        points = []
+        for point in getattr(self, "kml_points", []):
+            if not valid_latlon(point.get("lat"), point.get("lon")):
+                continue
+            try:
+                x, y = coord_to_pixel(
+                    coeff,
+                    float(point["lat"]),
+                    float(point["lon"]),
+                )
+            except (TypeError, ValueError):
+                continue
+            points.append((x, y))
+        if len(points) > 2 and points[0] != points[-1]:
+            points.append(points[0])
+        return points
+
+    def kml_layer_ciz(self):
+        for artist in getattr(self, "kml_layer_artists", []):
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self.kml_layer_artists = []
+        if not hasattr(self, "ax"):
+            return
+        points = self.kml_pixel_noktalari()
+        if len(points) < 2:
+            return
+        line, = self.ax.plot(
+            [point[0] for point in points],
+            [point[1] for point in points],
+            color="#148F77",
+            linewidth=1.8,
+            linestyle="-",
+            alpha=0.95,
+            zorder=14,
+        )
+        self.kml_layer_artists = [line]
+        self.set_kml_layer_visibility(
+            bool(self.show_kml_var.get()) if hasattr(self, "show_kml_var") else True
+        )
+
+    def set_kml_layer_visibility(self, visible):
+        for artist in getattr(self, "kml_layer_artists", []):
+            try:
+                artist.set_visible(visible)
+            except Exception:
+                pass
+
+    def harita_kml_export_ciz(self, ax_map):
+        points = self.kml_pixel_noktalari()
+        if len(points) < 2:
+            return
+        ax_map.plot(
+            [point[0] for point in points],
+            [point[1] for point in points],
+            color="#148F77",
+            linewidth=1.6,
+            linestyle="-",
+            alpha=0.95,
+            zorder=14,
+        )
 
     def set_georef_visibility(self, visible):
         for artist in self.georef_artists:

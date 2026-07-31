@@ -66,9 +66,10 @@ from yonetmelik_motoru import (
     yonetmelikleri_listele,
 )
 from ui_rapor_onizleme import RaporOnizlemeMixin
+from ui_rapor_bilgileri import RaporBilgileriMixin
 
 
-class RaporSekmesiMixin(RaporOnizlemeMixin):
+class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
     def dis_ai_veri_aktarim_onayi(self, motor, veri_turu, parent=None):
         """Dış AI kullanımında sağlayıcı ve gönderilecek veriyi bir kez açıkla."""
         selected = str(motor or "otomatik").strip().lower()
@@ -163,6 +164,7 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
                 text=os.path.basename(path) if file_ready(path) else ("Dosya bulunamadı" if path else "Hazırlanmadı"),
                 foreground=COLOR_SUCCESS if file_ready(path) else COLOR_WARNING,
             )
+        self.rapor_bilgileri_durum_guncelle()
 
     def rapor_etiketlerini_guncelle(self):
         self.rapor_sablon_etiketini_guncelle()
@@ -385,8 +387,39 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
 
         preparation, _ = self.scrollable_page(self.rapor_hazirlik_tab, padding=(10, 8))
         preparation.columnconfigure(0, weight=1)
+        report_info_box = ttk.LabelFrame(
+            preparation,
+            text="Parsel ve Rapor Bilgileri",
+            padding=(10, 8),
+        )
+        report_info_box.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        report_info_box.columnconfigure(0, weight=1)
+        self.rapor_bilgileri_durum_var = tk.StringVar(
+            value="Parsel raporu bilgileri kontrol ediliyor"
+        )
+        self.rapor_bilgileri_durum_label = ttk.Label(
+            report_info_box,
+            textvariable=self.rapor_bilgileri_durum_var,
+            style="Muted.TLabel",
+        )
+        self.rapor_bilgileri_durum_label.grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, SPACE_SM),
+        )
+        self.modern_button(
+            report_info_box,
+            "Bilgileri Düzenle",
+            command=self.rapor_bilgileri_penceresi,
+            role="primary",
+            outline=True,
+            padx=8,
+            pady=4,
+        ).grid(row=0, column=1, sticky="e")
+
         source_box = ttk.LabelFrame(preparation, text="Veri Kaynakları", padding=(10, 8))
-        source_box.grid(row=0, column=0, sticky="ew", pady=(0, SPACE_SM))
+        source_box.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
         drop_targets.extend([page, source_box, self.rapor_hazirlik_tab])
         source_row(
             source_box,
@@ -420,7 +453,7 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
         )
 
         visuals = ttk.LabelFrame(preparation, text="Rapor Görselleri", padding=(10, 8))
-        visuals.grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
+        visuals.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_SM))
         drop_targets.append(visuals)
         visual_header = ttk.Frame(visuals)
         visual_header.pack(fill="x", pady=(0, SPACE_XS))
@@ -481,7 +514,7 @@ class RaporSekmesiMixin(RaporOnizlemeMixin):
         self.responsive_widget_grid(visual_grid, image_cards, min_width=210, max_cols=3, padx=4, pady=4)
 
         report_actions = ttk.LabelFrame(preparation, text="Rapor İşlemleri", padding=(10, 8))
-        report_actions.grid(row=2, column=0, sticky="ew")
+        report_actions.grid(row=3, column=0, sticky="ew")
         primary_actions = ttk.Frame(report_actions)
         primary_actions.pack(fill="x")
         self.modern_button(

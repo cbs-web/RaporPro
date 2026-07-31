@@ -119,6 +119,11 @@ class SondajMixin:
             ("Karot Merkezi", self.karot_tcr_merkezi_ac, "Karot fotoğrafından TCR, SCR ve RQD hesaplar"),
             ("Akıllı Tamamla", self.sondaj_akilli_tamamla, "Eksik temel sondaj alanlarını hazırlar"),
             ("Toplu Log", self.toplu_log_kaydet, "Tüm sondaj loglarını toplu kaydeder"),
+            (
+                "Litoloji İşaretle",
+                self.litoloji_manuel_isaretleme_ac,
+                "LAB sınıflarını tüm sondajlarda 0,50 m sınırlarla işaretler",
+            ),
             ("Kesit Çiz", self.kesit_secim_penceresi, "Sondajlardan jeolojik kesit hazırlar"),
         ]
         toolbar_buttons = []
@@ -134,7 +139,7 @@ class SondajMixin:
             )
             toolbar_buttons.append(button)
             self.tooltip_ekle(button, tooltip)
-        self.responsive_widget_grid(toolbar, toolbar_buttons, min_width=132, max_cols=7, padx=3, pady=3)
+        self.responsive_widget_grid(toolbar, toolbar_buttons, min_width=132, max_cols=8, padx=3, pady=3)
         ttk.Separator(toolbar_shell).pack(fill="x", pady=(SPACE_XS, 0))
 
         table_header = ttk.Frame(page)
@@ -263,6 +268,25 @@ class SondajMixin:
             "yass_t2": 11,
         }
         self.sondaj_tablosunu_ciz()
+
+    @perf_tracked("sondaj.litoloji_manuel_open")
+    def litoloji_manuel_isaretleme_ac(self):
+        self.sondaj_verilerini_kaydet(silent=True)
+        if not self.veri.get("sondaj"):
+            messagebox.showwarning(
+                "LAB Rehberli Litoloji",
+                "Litoloji işaretlemek için önce en az bir sondaj ekleyin.",
+            )
+            return
+        try:
+            from ui_litoloji_manuel import ManuelLitolojiPenceresi
+
+            ManuelLitolojiPenceresi(self)
+        except Exception as exc:
+            messagebox.showerror(
+                "LAB Rehberli Litoloji",
+                f"Litoloji işaretleme ekranı açılamadı:\n{exc}",
+            )
 
     @perf_tracked("pmt.excel_import")
     def pmt_excel_aktar(self):
