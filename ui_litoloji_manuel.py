@@ -2016,7 +2016,7 @@ class ManuelLitolojiPenceresi:
                 return
             if decision:
                 self._save_draft(show_message=False)
-        self.win.destroy()
+        self.app.pencere_kapat(self.win)
 
 
 __all__ = ["ManuelLitolojiPenceresi"]

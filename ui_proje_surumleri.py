@@ -113,9 +113,15 @@ class ProjeSurumleriMixin:
         self._surum_gecmisi_win = win
         self.pencere_hazirla(win, "Proje Sürüm Geçmişi", "1320x820", (980, 650), modal=False)
 
-        def close_window():
+        def close_window_now():
             self._surum_gecmisi_win = None
-            win.destroy()
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+        def close_window():
+            self.pencere_kapat(win, callback=close_window_now)
 
         win.protocol("WM_DELETE_WINDOW", close_window)
 

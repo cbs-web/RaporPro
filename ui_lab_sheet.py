@@ -272,7 +272,7 @@ class LabSheetMixin:
             self.set_status(f"LAB Sheet kaydedildi: {len(rows)} satir.", level="success")
             refresh_info()
             if close:
-                win.destroy()
+                self.pencere_kapat(win)
 
         def clear_sheet():
             if not messagebox.askyesno("LAB Sheet", "LAB Sheet verisi temizlensin mi?"):
@@ -351,9 +351,9 @@ class LabSheetMixin:
         buttons.pack(fill="x")
         tk.Button(buttons, text="Excel'den Al", command=import_excel, bg="#D6EAF8", font=FONT_BOLD).pack(side="left", padx=(0, 4))
         tk.Button(buttons, text="Excel'e Aktar", command=export_excel, bg="#D5F5E3", font=FONT_BOLD).pack(side="left", padx=4)
-        tk.Button(buttons, text="+20 Satir", command=lambda: add_rows(20), bg=COLOR_ACCENT, fg="white", font=FONT_BOLD).pack(side="left", padx=4)
-        tk.Button(buttons, text="Temizle", command=clear_sheet, bg=COLOR_DANGER, fg="white", font=FONT_BOLD).pack(side="left", padx=4)
-        tk.Button(buttons, text="Kaydet", command=lambda: save_sheet(False), bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=(4, 0))
-        tk.Button(buttons, text="Kaydet ve Kapat", command=lambda: save_sheet(True), bg="#2C3E50", fg="white", font=FONT_BOLD).pack(side="right", padx=4)
+        self.modern_button(buttons, text="+20 Satır", command=lambda: add_rows(20), role="primary", outline=True).pack(side="left", padx=4)
+        self.modern_button(buttons, text="Temizle", command=clear_sheet, role="danger", outline=True).pack(side="left", padx=4)
+        self.modern_button(buttons, text="Kaydet", command=lambda: save_sheet(False), role="success", outline=True).pack(side="right", padx=(4, 0))
+        self.modern_button(buttons, text="Kaydet ve Kapat", command=lambda: save_sheet(True), role="success").pack(side="right", padx=4)
 
         refresh_info()

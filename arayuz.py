@@ -62,6 +62,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.kml_path = None
         
         self.veri = self.veri_yukle()
+        self.ui_motion_apply_settings()
         self.word_path = None
         self.img_yer = None; self.img_tkgm = None; self.img_pga = None; self.img_mjh = None
         
@@ -99,6 +100,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.kur_kisayollar()
         self.doldur_arayuz()
         self.kayit_imzasi_guncelle(collect=True)
+        self.ui_motion_window_enter(self.root, duration=220)
         
         if self.aktif_dosya_yolu:
             self.root.title(f"Zemin Rapor Pro - {os.path.basename(self.aktif_dosya_yolu)}")
@@ -215,10 +217,15 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
                 self.task_engine.shutdown(wait=False)
         except Exception:
             pass
-        try:
-            self.root.destroy()
-        except tk.TclError:
-            pass
+
+        def destroy_root():
+            self.ui_motion_shutdown()
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+
+        self.ui_motion_window_close(self.root, callback=destroy_root, duration=140)
 
     def _gorevler_bittiginde_kapat(self):
         if getattr(self, "_closing", False):
@@ -404,7 +411,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
 
     @perf_tracked("ui.build")
     def kur_arayuz(self):
-        toolbar = tk.Frame(self.root, bg="#E9EEF2", height=44)
+        toolbar = tk.Frame(self.root, bg=COLOR_SURFACE, height=46, bd=0, highlightthickness=0)
         toolbar.pack(fill="x", side="top")
 
         self.toolbar_menu(toolbar, "Proje", [
@@ -455,21 +462,38 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             ("İleri", self.global_redo),
         ], bg="#E8DAEF", tooltip="Harita, ayar ve geri alma araçları", role="secondary")
 
-        tk.Frame(toolbar, width=12, bg="#E9EEF2").pack(side="left")
-        self.lbl_kml_top = tk.Label(toolbar, text="KML Sınır: Seçilmedi", bg="#E9EEF2", fg="#333", font=("Arial", 8))
+        tk.Frame(toolbar, width=12, bg=COLOR_SURFACE).pack(side="left")
+        self.lbl_kml_top = tk.Label(toolbar, text="KML Sınır: Seçilmedi", bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED, font=FONT_UI_SMALL)
         self.lbl_kml_top.pack(side="left", padx=10)
         self.tooltip_ekle(self.lbl_kml_top, "Seçili KML sınır dosyasının durumunu gösterir")
 
-        self.autosave_status_label = tk.Label(toolbar, textvariable=self.autosave_status_var, bg="#E9EEF2", fg="#333333", font=("Arial", 8, "bold"))
+        self.autosave_status_label = tk.Label(toolbar, textvariable=self.autosave_status_var, bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED, font=FONT_UI_BODY_BOLD)
         self.autosave_status_label.pack(side="right", padx=10)
         self.tooltip_ekle(self.autosave_status_label, "Otomatik kayıt ve proje kayıt durumunu gösterir")
-        self.task_status_label = tk.Label(toolbar, textvariable=self.task_status_var, bg="#E9EEF2", fg="#333333", font=("Arial", 8, "bold"))
+        self.task_status_label = tk.Label(toolbar, textvariable=self.task_status_var, bg=COLOR_SURFACE, fg=COLOR_TEXT_MUTED, font=FONT_UI_BODY_BOLD)
         self.task_status_label.pack(side="right", padx=10)
         self.task_status_label.configure(cursor="hand2")
         self.task_status_label.bind("<Button-1>", lambda _event: self.gorev_merkezi_penceresi())
         self.tooltip_ekle(self.task_status_label, "Arka plan görevlerini açmak için tıklayın")
+        self.task_activity_progress = ttk.Progressbar(
+            toolbar,
+            mode="indeterminate",
+            length=68,
+            style="Dashboard.Horizontal.TProgressbar",
+        )
+        tk.Frame(self.root, bg=COLOR_BORDER, height=1).pack(fill="x", side="top")
         
-        main_splitter = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashwidth=4, bg=COLOR_BG)
+        main_splitter = tk.PanedWindow(
+            self.root,
+            orient=tk.VERTICAL,
+            sashwidth=4,
+            bg=COLOR_BORDER,
+            bd=0,
+            relief="flat",
+            sashrelief="flat",
+            showhandle=False,
+        )
+        self.main_splitter = main_splitter
         main_splitter.pack(fill="both", expand=True)
         top_frame = ttk.Frame(main_splitter)
         top_frame.grid_rowconfigure(0, weight=1)
@@ -479,7 +503,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.nb = nb
         nb.grid(row=0, column=1, sticky="nsew")
         self.bildirim_seridi_kur(top_frame, row=1, column=0, columnspan=2)
-        main_splitter.add(top_frame, height=750)
+        main_splitter.add(top_frame, height=750, stretch="always")
         
         self.tab_ozet=ttk.Frame(nb); nb.add(self.tab_ozet, text="0. Özet"); self.p_ozet(self.tab_ozet)
         self.tab_kunye=ttk.Frame(nb); nb.add(self.tab_kunye, text="1. Künye"); self.p_kunye(self.tab_kunye)
@@ -492,14 +516,85 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.ana_navigasyon_kur(top_frame)
         nb.bind("<<NotebookTabChanged>>", self.notebook_tab_changed)
         
-        log_frame = tk.Frame(main_splitter, bg=COLOR_LOG_BG)
-        self.log_text = tk.Text(log_frame, height=8, bg=COLOR_LOG_BG, fg=COLOR_LOG_TEXT, font=FONT_LOG, state="disabled")
-        self.log_text.pack(fill="both", expand=True)
-        main_splitter.add(log_frame, height=200)
+        log_frame = tk.Frame(main_splitter, bg=COLOR_LOG_BG, bd=0, highlightthickness=0)
+        self.log_frame = log_frame
+        log_header = tk.Frame(log_frame, bg=COLOR_SURFACE_ALT, height=34, bd=0, highlightthickness=0)
+        log_header.pack(fill="x")
+        log_header.pack_propagate(False)
+        tk.Label(
+            log_header,
+            text="İşlem Günlüğü",
+            bg=COLOR_SURFACE_ALT,
+            fg=COLOR_PRIMARY,
+            font=FONT_UI_BODY_BOLD,
+        ).pack(side="left", padx=(12, 6))
+        tk.Label(
+            log_header,
+            text="Son işlemler ve teknik ayrıntılar",
+            bg=COLOR_SURFACE_ALT,
+            fg=COLOR_TEXT_MUTED,
+            font=FONT_UI_SMALL,
+        ).pack(side="left")
+        self.log_toggle_button = tk.Button(
+            log_header,
+            text="▲",
+            command=lambda: self.islem_gunlugu_durum_ayarla(not self.log_panel_expanded),
+            bg=COLOR_SURFACE_ALT,
+            activebackground=COLOR_ACCENT_SOFT,
+            fg=COLOR_PRIMARY,
+            activeforeground=COLOR_PRIMARY,
+            relief="flat",
+            bd=0,
+            width=3,
+            cursor="hand2",
+            font=FONT_UI_BODY_BOLD,
+        )
+        self.log_toggle_button.pack(side="right", padx=8, pady=3)
+        self.tooltip_ekle(self.log_toggle_button, "İşlem günlüğünü aç veya daralt")
+        self.ui_motion_bind_hover(
+            self.log_toggle_button,
+            COLOR_SURFACE_ALT,
+            COLOR_ACCENT_SOFT,
+        )
+
+        log_body = tk.Frame(log_frame, bg=COLOR_LOG_BG, bd=0, highlightthickness=0)
+        self.log_body = log_body
+        log_scroll = ttk.Scrollbar(log_body, orient="vertical")
+        self.log_text = tk.Text(
+            log_body,
+            height=7,
+            bg=COLOR_LOG_BG,
+            fg=COLOR_LOG_TEXT,
+            insertbackground=COLOR_TEXT,
+            selectbackground=COLOR_ACCENT_SOFT,
+            selectforeground=COLOR_TEXT,
+            font=FONT_LOG,
+            state="disabled",
+            relief="flat",
+            bd=0,
+            padx=10,
+            pady=5,
+            yscrollcommand=log_scroll.set,
+        )
+        log_scroll.configure(command=self.log_text.yview)
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_scroll.pack(side="right", fill="y")
+        main_splitter.add(log_frame, height=34, minsize=34, stretch="never")
+        self.log_panel_expanded = False
         self.log_text.tag_config("error", foreground=COLOR_DANGER)
-        self.log_text.tag_config("success", foreground="#00FF00")
+        self.log_text.tag_config("success", foreground=COLOR_SUCCESS)
         self.log_text.tag_config("warning", foreground=COLOR_WARNING)
         self.log_text.tag_config("normal", foreground=COLOR_LOG_TEXT)
+        main_splitter.bind(
+            "<Configure>",
+            lambda _event: self.root.after_idle(
+                lambda: self.islem_gunlugu_durum_ayarla(False, immediate=True)
+            )
+            if not getattr(self, "log_panel_expanded", False)
+            else None,
+            add="+",
+        )
+        self.root.after(160, lambda: self.islem_gunlugu_durum_ayarla(False, immediate=True))
 
     def form_klavye_gecisi_ekle(self, widgets):
         """Form alanlarında Enter ve ok tuşlarıyla dikey gezinmeyi standartlaştır."""

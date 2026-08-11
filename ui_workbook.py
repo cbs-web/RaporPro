@@ -788,7 +788,8 @@ class WorkbookMixin(WorkbookEskiMixin):
             self.set_status(f"Excel mod workbook uygulandı: {len(new_sondajlar)} sondaj güncellendi.", level="success")
             for warning in warnings[:5]: self.set_status(warning, level="warning")
             if len(warnings) > 5: self.set_status(f"{len(warnings) - 5} ek workbook uyarısı daha var.", level="warning")
-            if close: win.destroy()
+            if close:
+                self.pencere_kapat(win)
 
         def create_sheet(sheet_key):
             if sheet_key in sheets:

@@ -535,8 +535,15 @@ class CiktiMerkeziMixin:
             ayarlar["cikti_merkezi_secimler"] = selections
             if not ayarlar.get("varsayilan_cikti_klasor"):
                 ayarlar["varsayilan_cikti_klasor"] = base_folder
-            win.destroy()
-            self.cikti_merkezi_baslat(config)
+
+            def continue_output():
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+                self.cikti_merkezi_baslat(config)
+
+            self.pencere_kapat(win, callback=continue_output)
 
         start_button = self.modern_button(
             footer,

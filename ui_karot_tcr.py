@@ -372,11 +372,18 @@ class KarotTCRPenceresi:
     def _close(self):
         if not self._confirm_unsaved_session():
             return
-        try:
-            plt.close(self.fig)
-        except Exception:
-            pass
-        self.win.destroy()
+
+        def finish_close():
+            try:
+                plt.close(self.fig)
+            except Exception:
+                pass
+            try:
+                self.win.destroy()
+            except tk.TclError:
+                pass
+
+        self.app.pencere_kapat(self.win, callback=finish_close)
 
     def _sync_mode_buttons(self):
         self.btn_pan_mode.configure(relief=tk.SUNKEN if self.action == "pan" else tk.RAISED)

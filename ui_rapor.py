@@ -1119,7 +1119,7 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
         def choose():
             result["ext"] = ".pdf" if fmt_var.get() == "PDF" else ".xlsx"
             self.veri.setdefault("ayarlar", {})["cikti_taahhut_format"] = fmt_var.get()
-            win.destroy()
+            self.pencere_kapat(win)
 
         self.modern_button(btns, text="Devam", command=choose, role="success").pack(side="right")
         self.modern_button(btns, text="Vazgeç", command=win.destroy, role="neutral", outline=True).pack(side="right", padx=(0, 6))
@@ -2829,7 +2829,7 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
         def create_selected():
             selected = [tag for tag, var in tag_vars if var.get()]
             if self.duzeltme_etiket_ciktisi_baslat(selected, parent=win):
-                win.destroy()
+                self.pencere_kapat(win)
 
         self.modern_button(btns, text="Tümünü Seç", command=lambda: set_all(True), role="neutral", outline=True).pack(side="left")
         self.modern_button(btns, text="Temizle", command=lambda: set_all(False), role="warning", outline=True).pack(side="left", padx=6)

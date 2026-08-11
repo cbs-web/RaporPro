@@ -300,7 +300,7 @@ class ArayuzProjeMixin:
                 return "break"
             try:
                 self.proje_dosyasi_yukle(path)
-                win.destroy()
+                self.pencere_kapat(win)
             except Exception as exc:
                 messagebox.showerror("Hata", f"Dosya açılamadı:\n{exc}")
             return "break"
@@ -317,9 +317,9 @@ class ArayuzProjeMixin:
         lb.bind("<Return>", open_selected)
         btns = ttk.Frame(win)
         btns.pack(fill="x", padx=14, pady=(4, 12))
-        tk.Button(btns, text="Aç", command=open_selected, bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(side="left", padx=(0, 6))
-        tk.Button(btns, text="Listeden Kaldır", command=remove_selected, bg="#ECF0F1").pack(side="left", padx=6)
-        tk.Button(btns, text="Kapat", command=win.destroy, bg="#ECF0F1").pack(side="right")
+        self.modern_button(btns, text="Aç", command=open_selected, role="primary").pack(side="left", padx=(0, 6))
+        self.modern_button(btns, text="Listeden Kaldır", command=remove_selected, role="neutral", outline=True).pack(side="left", padx=6)
+        self.modern_button(btns, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(side="right")
         refresh()
         if self.recent_projects:
             lb.selection_set(0)
@@ -875,12 +875,12 @@ class ArayuzProjeMixin:
             self.root.title("Zemin Rapor Pro - Yeni Proje")
             self.set_save_indicator("Yeni proje: kaydedilmedi", "warning")
             self.set_status("Yeni proje sihirbazla oluşturuldu.", level="success")
-            win.destroy()
+            self.pencere_kapat(win)
 
         btns = ttk.Frame(body)
         btns.grid(row=len(defaults) + 3, column=0, columnspan=3, sticky="ew", pady=(18, 0))
-        tk.Button(btns, text="Oluştur", command=olustur, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
-        tk.Button(btns, text="Vazgeç", command=win.destroy, bg="#ECF0F1").pack(side="right", padx=4)
+        self.modern_button(btns, text="Oluştur", command=olustur, role="success").pack(side="right", padx=4)
+        self.modern_button(btns, text="Vazgeç", command=win.destroy, role="neutral", outline=True).pack(side="right", padx=4)
 
     def ornek_proje_yukle(self):
         if not messagebox.askyesno("Örnek Proje", "Mevcut çalışma kaydedilmemişse kaybolabilir. Örnek proje yüklensin mi?"):
@@ -931,9 +931,9 @@ class ArayuzProjeMixin:
         def apply_template():
             template = next(item for item in templates if item[0] == selected.get())
             self.proje_sablonu_uygula(template)
-            win.destroy()
+            self.pencere_kapat(win)
 
-        tk.Button(win, text="Şablonu Uygula", command=apply_template, bg=COLOR_PRIMARY, fg="white", font=FONT_BOLD).pack(fill="x", padx=18, pady=18)
+        self.modern_button(win, text="Şablonu Uygula", command=apply_template, role="primary").pack(fill="x", padx=18, pady=18)
 
     @perf_tracked("project.template_apply")
     def proje_sablonu_uygula(self, template):
@@ -1044,4 +1044,4 @@ class ArayuzProjeMixin:
             txt.insert("1.0", read_tail(path))
             txt.config(state="disabled")
 
-        tk.Button(win, text="Kapat", command=win.destroy, bg=COLOR_PRIMARY, fg="white").pack(pady=(0, 10))
+        self.modern_button(win, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(pady=(0, 10))

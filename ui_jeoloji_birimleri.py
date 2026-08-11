@@ -524,7 +524,7 @@ class JeolojiBirimleriPenceresi:
                 f"{len(self.records)} jeolojik birim proje verisine kaydedildi.",
                 level="success",
             )
-        self.win.destroy()
+        self.app.pencere_kapat(self.win)
 
 
 __all__ = ["JeolojiBirimleriPenceresi"]

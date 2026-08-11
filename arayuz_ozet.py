@@ -516,10 +516,24 @@ class ArayuzOzetMixin:
             score_value = max(0, min(100, int(score)))
         except Exception:
             score_value = 0
+        score_color = COLOR_SUCCESS if score_value >= 85 else (COLOR_WARNING if score_value >= 60 else COLOR_DANGER)
         if hasattr(self, "ozet_score_label"):
-            self.ozet_score_label.config(text=f"%{score_value}", fg=COLOR_SUCCESS if score_value >= 85 else (COLOR_WARNING if score_value >= 60 else COLOR_DANGER))
+            start_score = float(getattr(self, "_ozet_score_display", 0))
+
+            def update_score(value):
+                self._ozet_score_display = value
+                self.ozet_score_label.config(text=f"%{round(value)}")
+
+            self.ui_motion_tween(
+                "dashboard-score",
+                start_score,
+                score_value,
+                update_score,
+                duration=260,
+            )
+            self.ui_motion_color(self.ozet_score_label, "foreground", score_color, key="dashboard-score-color")
         if hasattr(self, "ozet_score_progress"):
-            self.ozet_score_progress["value"] = score_value
+            self.ui_motion_progress(self.ozet_score_progress, score_value, key="dashboard-progress", duration=280)
             if score_value >= 85:
                 self.ozet_score_progress.configure(style="Success.Horizontal.TProgressbar")
             elif score_value >= 60:

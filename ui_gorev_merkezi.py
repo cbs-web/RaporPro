@@ -44,9 +44,15 @@ class GorevMerkeziMixin:
         self._gorev_merkezi_win = win
         self.pencere_hazirla(win, "Görev Merkezi", "1040x650", (820, 500), modal=False)
 
-        def close():
+        def close_now():
             self._gorev_merkezi_win = None
-            win.destroy()
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+
+        def close():
+            self.pencere_kapat(win, callback=close_now)
 
         win.protocol("WM_DELETE_WINDOW", close)
 
@@ -177,7 +183,11 @@ class GorevMerkeziMixin:
             if task is None:
                 selected_title_var.set("Henüz görev seçilmedi")
                 selected_message_var.set("Görev seçildiğinde ilerleme ve ayrıntılar burada görünür.")
-                selected_progress_var.set(0)
+                self.ui_motion_progress(
+                    selected_progress,
+                    0,
+                    key="task-center-selected-progress",
+                )
                 selected_progress_text_var.set("-")
                 selected_progress.configure(style="Dashboard.Horizontal.TProgressbar")
                 cancel_btn.configure(state="disabled")
@@ -188,10 +198,18 @@ class GorevMerkeziMixin:
             selected_message_var.set(task.error or task.message or "Ek ayrıntı bildirilmedi.")
             percent = task.progress_percent
             if percent is None:
-                selected_progress_var.set(100 if task.state == "completed" else 0)
+                self.ui_motion_progress(
+                    selected_progress,
+                    100 if task.state == "completed" else 0,
+                    key="task-center-selected-progress",
+                )
                 selected_progress_text_var.set(f"{task.elapsed:.1f} sn")
             else:
-                selected_progress_var.set(percent)
+                self.ui_motion_progress(
+                    selected_progress,
+                    percent,
+                    key="task-center-selected-progress",
+                )
                 selected_progress_text_var.set(
                     f"%{percent:.0f} · {task.completed:g}/{task.total:g} · {task.elapsed:.1f} sn"
                 )

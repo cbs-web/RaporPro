@@ -171,6 +171,17 @@ class ArayuzAraclarMixin:
         entries["varsayilan_cikti_klasor"] = out_entry
         tk.Button(form, text="Seç", command=lambda: self._ayar_klasor_sec(out_entry), bg="#ECF0F1").grid(row=out_row, column=2, padx=6, pady=5)
 
+        motion_row = out_row + 1
+        ttk.Label(form, text="Arayüz geçişleri").grid(row=motion_row, column=0, sticky="e", padx=6, pady=5)
+        motion_var = tk.BooleanVar(value=str(ayarlar.get("ui_animasyon", "1")) != "0")
+        ttk.Checkbutton(form, text="Pürüzsüz geçişler", variable=motion_var).grid(
+            row=motion_row,
+            column=1,
+            sticky="w",
+            padx=6,
+            pady=5,
+        )
+
         form.columnconfigure(1, weight=1)
 
         ttk.Label(taahhut_form, text="İlgili idare").grid(row=0, column=0, sticky="e", padx=6, pady=5)
@@ -221,6 +232,7 @@ class ArayuzAraclarMixin:
         def kaydet():
             for key, entry in entries.items():
                 ayarlar[key] = entry.get().strip()
+            ayarlar["ui_animasyon"] = "1" if motion_var.get() else "0"
             if ayarlar.get("sondaj_turu") not in ("Zemin", "Kaya"):
                 ayarlar["sondaj_turu"] = "Zemin"
             if ayarlar.get("delgi_capi") not in ("76mm", "89mm"):
@@ -242,32 +254,31 @@ class ArayuzAraclarMixin:
             self.set_status("Ayarlar güncellendi.", level="success")
             if self.aktif_dosya_yolu:
                 self.veri_kaydet()
-            win.destroy()
+            self.pencere_kapat(win)
 
         btns = ttk.Frame(win, padding=(12, 6, 12, 12))
         btns.grid(row=1, column=0, sticky="ew")
-        save_btn = tk.Button(
+        save_btn = self.modern_button(
             btns,
             text="Kaydet",
             command=kaydet,
-            bg=COLOR_SUCCESS,
-            fg="white",
-            font=FONT_BOLD,
+            role="success",
             padx=16,
             pady=6,
         )
         save_btn.pack(side="right", padx=(5, 0))
-        cancel_btn = tk.Button(
+        cancel_btn = self.modern_button(
             btns,
             text="Vazgeç",
-            command=win.destroy,
-            bg="#ECF0F1",
+            command=lambda: self.pencere_kapat(win),
+            role="neutral",
+            outline=True,
             padx=14,
             pady=6,
         )
         cancel_btn.pack(side="right", padx=5)
         win.bind("<Control-s>", lambda _event: kaydet())
-        win.bind("<Escape>", lambda _event: win.destroy())
+        win.bind("<Escape>", lambda _event: self.pencere_kapat(win))
 
     def _ayar_dosya_sec(self, entry, filetypes):
         path = filedialog.askopenfilename(filetypes=filetypes)
@@ -283,6 +294,7 @@ class ArayuzAraclarMixin:
 
     def ayarlari_uygula(self):
         ayarlar = self.veri.get("ayarlar", {})
+        self.ui_motion_apply_settings()
         default_word = ayarlar.get("varsayilan_word_path")
         if not self.word_path and default_word and os.path.exists(default_word):
             self.word_path = default_word
@@ -453,6 +465,11 @@ class ArayuzAraclarMixin:
     def notebook_tab_changed(self, event):
         if hasattr(self, "ana_navigasyon_secimi_guncelle"):
             self.ana_navigasyon_secimi_guncelle()
+        try:
+            selected_page = event.widget.nametowidget(event.widget.select())
+            self.ui_motion_page_enter(selected_page)
+        except (KeyError, tk.TclError):
+            pass
         if hasattr(self, "tab_ozet") and event.widget.select() == str(self.tab_ozet):
             self.ozet_yenile()
         elif hasattr(self, "tab_haritalar") and event.widget.select() == str(self.tab_haritalar):

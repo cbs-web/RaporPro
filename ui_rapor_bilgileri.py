@@ -202,7 +202,7 @@ class RaporBilgileriMixin:
             if getattr(self, "aktif_dosya_yolu", None):
                 self.veri_kaydet()
             self.set_status("Parsel ve rapor bilgileri güncellendi.", level="success")
-            win.destroy()
+            self.pencere_kapat(win)
 
         footer = ttk.Frame(win, padding=(SPACE_MD, SPACE_XS, SPACE_MD, SPACE_MD))
         footer.grid(row=1, column=0, sticky="ew")
@@ -227,7 +227,7 @@ class RaporBilgileriMixin:
             command=save,
             role="success",
         ).grid(row=0, column=2)
-        win.bind("<Escape>", lambda _event: win.destroy())
+        win.bind("<Escape>", lambda _event: self.pencere_kapat(win))
         win.bind("<Control-s>", lambda _event: save())
 
 

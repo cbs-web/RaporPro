@@ -38,10 +38,19 @@ class HidrojeolojiAnalizPenceresi(tk.Toplevel):
         height = min(900, max(680, self.winfo_screenheight() - 120))
         self.geometry(f"{width}x{height}+35+35")
         self.transient(master)
+        self._motion_controller = getattr(master, "_ui_motion_controller", None)
+        if self._motion_controller is not None:
+            self._motion_controller.ui_motion_prepare_window(self)
 
         self._candidate_by_label = {}
         self._build()
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _close(self):
+        if self._motion_controller is not None:
+            self._motion_controller.ui_motion_window_close(self)
+        else:
+            self.destroy()
 
     def _build(self):
         root = ttk.Frame(self, padding=12)
@@ -322,7 +331,7 @@ class HidrojeolojiAnalizPenceresi(tk.Toplevel):
             "kuru_yok": self.dry_var.get() == SAPTANMADI,
         }
         self.on_apply(self.result, selection)
-        self.destroy()
+        self._close()
 
 
 __all__ = ["HidrojeolojiAnalizPenceresi", "KARAR_VERME", "SAPTANMADI"]

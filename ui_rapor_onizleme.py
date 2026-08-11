@@ -992,11 +992,18 @@ class RaporOnizlemeMixin:
                 except tk.TclError:
                     pass
                 setattr(self, job_name, None)
-        self._rapor_onizleme_doc_kapat()
         win = getattr(self, "_rapor_preview_window", None)
-        self._rapor_preview_window = None
-        try:
-            if win is not None and win.winfo_exists():
-                win.destroy()
-        except tk.TclError:
-            pass
+
+        def finish_close():
+            self._rapor_onizleme_doc_kapat()
+            self._rapor_preview_window = None
+            try:
+                if win is not None and win.winfo_exists():
+                    win.destroy()
+            except tk.TclError:
+                pass
+
+        if win is not None:
+            self.pencere_kapat(win, callback=finish_close)
+        else:
+            finish_close()

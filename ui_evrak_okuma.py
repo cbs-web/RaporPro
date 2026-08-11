@@ -338,13 +338,20 @@ class EvrakOkumaMixin:
             f"{source_label} {len(applied)} alan projeye aktarıldı.",
             level="success",
         )
-        window.destroy()
-        messagebox.showinfo(
-            dialog_title,
-            f"{len(applied)} alan projeye aktarıldı.\n\n"
-            "Dolu ve farklı alanlar yalnızca özellikle seçildiyse değiştirildi.",
-            parent=self.root,
-        )
+
+        def finish_transfer():
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+            messagebox.showinfo(
+                dialog_title,
+                f"{len(applied)} alan projeye aktarıldı.\n\n"
+                "Dolu ve farklı alanlar yalnızca özellikle seçildiyse değiştirildi.",
+                parent=self.root,
+            )
+
+        self.pencere_kapat(window, callback=finish_transfer)
 
     def evrak_okuma_sonuc_penceresi(self, result):
         fields = result.get("alanlar", [])

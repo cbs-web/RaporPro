@@ -185,11 +185,12 @@ class KontrolPaneliMixin:
         if card:
             card.config(bg=COLOR_SURFACE, highlightbackground=COLOR_BORDER, highlightcolor=COLOR_BORDER)
         if accent:
-            accent.config(bg=color)
+            self.ui_motion_color(accent, "background", color, key=f"metric-accent:{key}")
         if title:
             title.config(bg=COLOR_SURFACE, fg=COLOR_PRIMARY)
         if label:
-            label.config(text=text, fg=color, bg=COLOR_SURFACE)
+            label.config(text=text, bg=COLOR_SURFACE)
+            self.ui_motion_color(label, "foreground", color, key=f"metric-label:{key}")
 
     def _ozet_file_set(self, key, text, ok=True):
         label = self.ozet_file_labels.get(key)
@@ -206,11 +207,12 @@ class KontrolPaneliMixin:
         if card:
             card.config(bg=COLOR_SURFACE, highlightbackground=COLOR_BORDER, highlightcolor=COLOR_BORDER)
         if accent:
-            accent.config(bg=color)
+            self.ui_motion_color(accent, "background", color, key=f"file-accent:{key}")
         if title:
             title.config(bg=COLOR_SURFACE, fg=COLOR_PRIMARY)
         if label:
-            label.config(text=display_text, fg=color, bg=COLOR_SURFACE)
+            label.config(text=display_text, bg=COLOR_SURFACE)
+            self.ui_motion_color(label, "foreground", color, key=f"file-label:{key}")
 
     def _ozet_file_text_compact(self, text, max_name_len=36):
         text = str(text or "")
@@ -597,10 +599,10 @@ class KontrolPaneliMixin:
 
         buttons = ttk.Frame(win, padding=(12, 0, 12, 12))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Yenile", command=refresh).pack(side="left", padx=(0, 5))
-        ttk.Button(buttons, text="İlgili Yere Git", command=go_selected).pack(side="left", padx=5)
-        ttk.Button(buttons, text="Kopyala", command=copy_selected).pack(side="left", padx=5)
-        ttk.Button(buttons, text="Kapat", command=win.destroy).pack(side="right")
+        self.modern_button(buttons, text="Yenile", command=refresh, role="primary", outline=True).pack(side="left", padx=(0, 5))
+        self.modern_button(buttons, text="İlgili Yere Git", command=go_selected, role="primary").pack(side="left", padx=5)
+        self.modern_button(buttons, text="Kopyala", command=copy_selected, role="neutral", outline=True).pack(side="left", padx=5)
+        self.modern_button(buttons, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(side="right")
 
         populate()
         search_entry.focus_set()

@@ -1141,7 +1141,7 @@ class SondajMixin:
             self.ozet_yenile(collect=False)
             self.set_status(f"Hızlı tablodan {len(yeni_liste)} sondaj satırı uygulandı.", level="success")
             if close:
-                win.destroy()
+                self.pencere_kapat(win)
 
         def normalize_header(cell):
             text = str(cell).lower()
@@ -1372,11 +1372,17 @@ class SondajMixin:
             ayarlar["log_export_prefix"] = config["prefix"]
             if not ayarlar.get("varsayilan_cikti_klasor"):
                 ayarlar["varsayilan_cikti_klasor"] = folder
-            win.destroy()
-            self.toplu_log_kaydet_baslat(copy.deepcopy(sondajlar), config)
+            def continue_export():
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+                self.toplu_log_kaydet_baslat(copy.deepcopy(sondajlar), config)
 
-        tk.Button(btns, text="Başlat", command=start_export, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=(5, 0))
-        tk.Button(btns, text="Vazgeç", command=win.destroy, bg="#ECF0F1").pack(side="right", padx=5)
+            self.pencere_kapat(win, callback=continue_export)
+
+        self.modern_button(btns, text="Başlat", command=start_export, role="success").pack(side="right", padx=(5, 0))
+        self.modern_button(btns, text="Vazgeç", command=win.destroy, role="neutral", outline=True).pack(side="right", padx=5)
 
     def toplu_log_kaydet_baslat(self, sondajlar, config):
         config = dict(config)

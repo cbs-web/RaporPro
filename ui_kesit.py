@@ -209,7 +209,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         txt.config(state="disabled")
         btns = ttk.Frame(frame)
         btns.pack(fill="x", pady=(8, 0))
-        ttk.Button(btns, text="Kapat", command=win.destroy).pack(side="right")
+        self.modern_button(btns, text="Kapat", command=win.destroy, role="neutral", outline=True).pack(side="right")
         level = "success"
         if report.get("errors"):
             level = "error"
@@ -999,7 +999,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 self.set_status(f"Kesit kalite kontrol {len(quality_report['warnings'])} uyarı buldu.", level="warning")
             self._kesit_ayarlari_kaydet(options.copy())
             self.kesit_onizle_async(selected_sondajlar, options)
-            win.destroy()
+            self.pencere_kapat(win)
 
         def ayari_kaydet():
             selected = selected_with_line_endpoints(lb.curselection())

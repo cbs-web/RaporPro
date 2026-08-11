@@ -136,6 +136,7 @@ def varsayilan_proje_verisi():
             "taahhut_jeofizik_telefon": "0 532 281 12 95",
             "yedek_sayisi": "10",
             "surum_gecmisi_sayisi": str(VARSAYILAN_SURUM_SINIRI),
+            "ui_animasyon": "1",
             "spt_guven_esigi": "90",
             "spt_auto_pro": "1",
         },

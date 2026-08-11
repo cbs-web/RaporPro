@@ -6,10 +6,12 @@ from tkinter import ttk
 
 from sabitler import *
 from ui_icons import IconManager
+from ui_motion import MOTION_FAST_MS, MOTION_NORMAL_MS, UIMotionMixin, blend_hex
 
 
-class ArayuzTemelMixin:
+class ArayuzTemelMixin(UIMotionMixin):
     def setup_styles(self):
+        self.ui_motion_setup(enabled=True)
         self.bootstrap_theme_active = False
         self.bootstrap_theme_name = "classic"
         self._bootstrap_module = None
@@ -33,15 +35,15 @@ class ArayuzTemelMixin:
         style.configure("TLabelframe", background=COLOR_BG, relief="solid", borderwidth=1)
         style.configure("TLabelframe.Label", font=FONT_HEADER, background=COLOR_BG, foreground=COLOR_PRIMARY)
         style.configure("TLabel", background=COLOR_BG, font=FONT_MAIN, foreground="#333333")
-        style.configure("TButton", font=FONT_MAIN, padding=6)
-        style.configure("TEntry", font=FONT_MAIN, padding=5)
+        style.configure("TButton", font=FONT_MAIN, padding=(9, 6))
+        style.configure("TEntry", font=FONT_MAIN, padding=6)
         style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
         style.configure("TNotebook.Tab", font=FONT_BOLD, padding=(12, 7))
         style.configure("Main.TNotebook", background=COLOR_BG, borderwidth=0, tabmargins=0)
         style.layout("Main.TNotebook.Tab", [])
-        style.configure("Treeview", rowheight=26, font=FONT_MAIN)
+        style.configure("Treeview", rowheight=28, font=FONT_MAIN, background=COLOR_SURFACE, fieldbackground=COLOR_SURFACE)
         style.configure("Treeview.Heading", font=FONT_BOLD)
-        style.configure("TCombobox", font=FONT_MAIN, padding=4)
+        style.configure("TCombobox", font=FONT_MAIN, padding=5)
         style.configure("Valid.TEntry", fieldbackground="#FFFFFF")
         style.configure("Warning.TEntry", fieldbackground="#FCF3CF")
         style.configure("Invalid.TEntry", fieldbackground="#FADBD8")
@@ -79,14 +81,16 @@ class ArayuzTemelMixin:
         self.ana_nav_expanded = True
         self.ana_nav_manual = False
         self.ana_nav_items = []
+        self.ana_nav_full_width = 184
+        self.ana_nav_compact_width = 58
 
-        nav = tk.Frame(parent, bg=COLOR_PRIMARY, width=174, bd=0, highlightthickness=0)
+        nav = tk.Frame(parent, bg=COLOR_PRIMARY, width=self.ana_nav_full_width, bd=0, highlightthickness=0)
         nav.grid(row=0, column=0, sticky="ns")
         nav.grid_propagate(False)
         nav.grid_columnconfigure(0, weight=1)
         self.ana_nav_frame = nav
 
-        header = tk.Frame(nav, bg=COLOR_PRIMARY, height=52)
+        header = tk.Frame(nav, bg=COLOR_PRIMARY, height=56)
         header.grid(row=0, column=0, sticky="ew")
         header.grid_propagate(False)
         header.grid_columnconfigure(0, weight=1)
@@ -128,7 +132,7 @@ class ArayuzTemelMixin:
             ("7", "Rapor", "report", self.tab_rapor),
         )
         for row, (number, label, icon_key, tab) in enumerate(nav_specs, start=1):
-            item_frame = tk.Frame(nav, bg=COLOR_PRIMARY, height=44)
+            item_frame = tk.Frame(nav, bg=COLOR_PRIMARY, height=46)
             item_frame.grid(row=row, column=0, sticky="ew")
             item_frame.grid_propagate(False)
             item_frame.grid_columnconfigure(1, weight=1)
@@ -157,18 +161,20 @@ class ArayuzTemelMixin:
             )
             button.grid(row=0, column=1, sticky="nsew")
             self.tooltip_ekle(button, f"{number}. {label} sekmesine git")
-            self.ana_nav_items.append(
-                {
-                    "number": number,
-                    "label": label,
-                    "tab": tab,
-                    "frame": item_frame,
-                    "indicator": indicator,
-                    "button": button,
-                    "inactive_image": inactive_image,
-                    "active_image": active_image,
-                }
-            )
+            item = {
+                "number": number,
+                "label": label,
+                "tab": tab,
+                "frame": item_frame,
+                "indicator": indicator,
+                "button": button,
+                "inactive_image": inactive_image,
+                "active_image": active_image,
+                "active": False,
+            }
+            self.ana_nav_items.append(item)
+            button.bind("<Enter>", lambda _event, target=item: self._ana_nav_hover(target, True), add="+")
+            button.bind("<Leave>", lambda _event, target=item: self._ana_nav_hover(target, False), add="+")
 
         self.root.bind("<Configure>", self.ana_navigasyon_pencere_degisti, add="+")
         self.root.after_idle(self.ana_navigasyon_ilk_boyut)
@@ -179,13 +185,42 @@ class ArayuzTemelMixin:
         self.ana_nav_expanded = bool(expanded)
         if manual:
             self.ana_nav_manual = True
-        width = 174 if self.ana_nav_expanded else 54
-        self.ana_nav_frame.configure(width=width)
-        self.ana_nav_title.configure(text="RaporPro" if self.ana_nav_expanded else "")
-        self.ana_nav_toggle.configure(text="\u2039" if self.ana_nav_expanded else "\u203a")
+        target_width = self.ana_nav_full_width if self.ana_nav_expanded else self.ana_nav_compact_width
+        try:
+            current_width = int(self.ana_nav_frame.cget("width"))
+        except Exception:
+            current_width = target_width
+
+        if not self.ana_nav_expanded:
+            self._ana_nav_icerik_ayarla(False)
+
+        shown = {"value": not self.ana_nav_expanded}
+
+        def update(value):
+            self.ana_nav_frame.configure(width=max(self.ana_nav_compact_width, round(value)))
+            if self.ana_nav_expanded and not shown["value"] and value >= target_width - 36:
+                shown["value"] = True
+                self._ana_nav_icerik_ayarla(True)
+
+        def complete():
+            self._ana_nav_icerik_ayarla(self.ana_nav_expanded)
+            self.ana_navigasyon_secimi_guncelle()
+
+        self.ui_motion_tween(
+            "main-nav-width",
+            current_width,
+            target_width,
+            update,
+            duration=MOTION_NORMAL_MS,
+            complete=complete,
+        )
+
+    def _ana_nav_icerik_ayarla(self, expanded):
+        self.ana_nav_title.configure(text="RaporPro" if expanded else "")
+        self.ana_nav_toggle.configure(text="\u2039" if expanded else "\u203a")
         for item in self.ana_nav_items:
             button = item["button"]
-            if self.ana_nav_expanded:
+            if expanded:
                 button.configure(
                     text=f"{item['number']}.  {item['label']}",
                     compound="left",
@@ -194,7 +229,18 @@ class ArayuzTemelMixin:
                 )
             else:
                 button.configure(text="", compound="none", anchor="center", padx=0)
-        self.ana_navigasyon_secimi_guncelle()
+
+    def _ana_nav_hover(self, item, hovered):
+        if item.get("active"):
+            return
+        target = "#34495E" if hovered else COLOR_PRIMARY
+        self.ui_motion_color(
+            item["button"],
+            "background",
+            target,
+            key=f"nav-button:{id(item['button'])}",
+            duration=MOTION_FAST_MS,
+        )
 
     def ana_navigasyon_ilk_boyut(self):
         """İlk gerçek pencere boyutuna göre menünün başlangıç görünümünü seç."""
@@ -223,11 +269,30 @@ class ArayuzTemelMixin:
             return
         for item in self.ana_nav_items:
             active = selected == str(item["tab"])
+            item["active"] = active
             background = COLOR_ACCENT if active else COLOR_PRIMARY
-            item["frame"].configure(bg=background)
-            item["indicator"].configure(bg="white" if active else COLOR_PRIMARY)
+            self.ui_motion_color(
+                item["frame"],
+                "background",
+                background,
+                key=f"nav-frame:{id(item['frame'])}",
+                duration=MOTION_FAST_MS,
+            )
+            self.ui_motion_color(
+                item["indicator"],
+                "background",
+                "#FFFFFF" if active else COLOR_PRIMARY,
+                key=f"nav-indicator:{id(item['indicator'])}",
+                duration=MOTION_FAST_MS,
+            )
+            self.ui_motion_color(
+                item["button"],
+                "background",
+                background,
+                key=f"nav-button:{id(item['button'])}",
+                duration=MOTION_FAST_MS,
+            )
             item["button"].configure(
-                bg=background,
                 activebackground=COLOR_ACCENT if active else "#34495E",
                 fg="white" if active else "#E8EDF2",
                 image=item["active_image"] if active else item["inactive_image"],
@@ -245,6 +310,7 @@ class ArayuzTemelMixin:
 
         inner = ttk.Frame(canvas, padding=padding)
         window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        scroll_state = {"target": None}
 
         def update_region(_event=None):
             canvas.configure(scrollregion=canvas.bbox("all"))
@@ -272,7 +338,28 @@ class ArayuzTemelMixin:
                 if steps == 0 and event.delta:
                     steps = -1 if event.delta > 0 else 1
                 if steps:
-                    canvas.yview_scroll(steps, "units")
+                    bbox = canvas.bbox("all")
+                    content_height = max(1, (bbox[3] - bbox[1]) if bbox else 1)
+                    viewport_height = max(1, canvas.winfo_height())
+                    if content_height <= viewport_height:
+                        return "break"
+                    current = float(canvas.yview()[0])
+                    base = scroll_state["target"] if scroll_state["target"] is not None else current
+                    maximum = max(0.0, 1.0 - viewport_height / content_height)
+                    target = max(0.0, min(maximum, base + (steps * 62.0 / content_height)))
+                    scroll_state["target"] = target
+
+                    def finished():
+                        scroll_state["target"] = None
+
+                    self.ui_motion_tween(
+                        f"scroll:{id(canvas)}",
+                        current,
+                        target,
+                        canvas.yview_moveto,
+                        duration=140,
+                        complete=finished,
+                    )
                     return "break"
             except tk.TclError:
                 return None
@@ -379,7 +466,7 @@ class ArayuzTemelMixin:
         if text is not None:
             options["text"] = text
         if command is not None:
-            options["command"] = command
+            options["command"] = self.ui_motion_close_command(command)
         if options:
             try:
                 widget.configure(**options)
@@ -416,6 +503,7 @@ class ArayuzTemelMixin:
         return self._attach_button_icon(widget, image)
 
     def modern_button(self, parent, text, command=None, role="neutral", outline=False, **kwargs):
+        command = self.ui_motion_close_command(command)
         icon = kwargs.pop("icon", None)
         icon_size = kwargs.pop("icon_size", 16)
         image = self._button_icon_image(text, role=role, outline=outline, icon=icon, size=icon_size)
@@ -451,7 +539,13 @@ class ArayuzTemelMixin:
         if image is not None:
             kwargs["image"] = image
             kwargs["compound"] = "left"
-        return self._attach_button_icon(tk.Button(parent, text=text, command=command, **kwargs), image)
+        button = self._attach_button_icon(tk.Button(parent, text=text, command=command, **kwargs), image)
+        try:
+            hover = blend_hex(bg, "#FFFFFF", 0.12 if role not in {"neutral", "secondary"} else 0.35)
+            self.ui_motion_bind_hover(button, bg, hover)
+        except ValueError:
+            pass
+        return button
 
     def bildirim_seridi_kur(self, parent, row=1, column=0, columnspan=2):
         """Ana pencere içinde modal olmayan ortak bildirim şeridini oluştur."""
@@ -466,7 +560,7 @@ class ArayuzTemelMixin:
             bd=0,
             highlightthickness=1,
             highlightbackground=COLOR_ACCENT,
-            height=38,
+            height=42,
         )
         frame.grid(row=row, column=column, columnspan=columnspan, sticky="ew")
         frame.grid_columnconfigure(2, weight=1)
@@ -538,7 +632,7 @@ class ArayuzTemelMixin:
             except Exception as exc:
                 self.set_status(f"Bildirim işlemi çalıştırılamadı: {exc}", level="error")
 
-    def bildirim_gizle(self):
+    def bildirim_gizle(self, immediate=False):
         after_id = getattr(self, "_bildirim_after_id", None)
         if after_id:
             try:
@@ -549,10 +643,34 @@ class ArayuzTemelMixin:
         self._bildirim_action = None
         frame = getattr(self, "_bildirim_frame", None)
         if frame is not None:
+            def remove_frame():
+                try:
+                    frame.grid_remove()
+                    frame.configure(height=42)
+                except Exception:
+                    pass
+
             try:
-                frame.grid_remove()
+                visible = bool(frame.winfo_ismapped())
             except Exception:
-                pass
+                visible = False
+            if immediate or not visible or not getattr(self, "ui_motion_enabled", True):
+                self.ui_motion_cancel("notification-height")
+                remove_frame()
+                return
+            try:
+                frame.update_idletasks()
+                start_height = max(1, int(frame.winfo_height()))
+            except Exception:
+                start_height = 42
+            self.ui_motion_tween(
+                "notification-height",
+                start_height,
+                1,
+                lambda value: frame.configure(height=max(1, round(value))),
+                duration=MOTION_FAST_MS,
+                complete=remove_frame,
+            )
 
     def bildirim_goster(
         self,
@@ -615,8 +733,23 @@ class ArayuzTemelMixin:
             self._bildirim_action_button.grid()
         else:
             self._bildirim_action_button.grid_remove()
+        try:
+            was_visible = bool(frame.winfo_ismapped())
+        except Exception:
+            was_visible = False
+        self.ui_motion_cancel("notification-height")
+        if not was_visible:
+            frame.configure(height=1)
         frame.grid()
         frame.lift()
+        if not was_visible:
+            self.ui_motion_tween(
+                "notification-height",
+                1,
+                42,
+                lambda value: frame.configure(height=max(1, round(value))),
+                duration=MOTION_NORMAL_MS,
+            )
 
         old_after = getattr(self, "_bildirim_after_id", None)
         if old_after:
@@ -709,7 +842,75 @@ class ArayuzTemelMixin:
             else:
                 self.task_status_var.set("İşlem: hazır")
         if hasattr(self, "task_status_label"):
-            self.task_status_label.config(fg=COLOR_WARNING if active else "#333333")
+            self.task_status_label.config(fg=COLOR_WARNING if active else COLOR_TEXT_MUTED)
+        progress = getattr(self, "task_activity_progress", None)
+        if progress is not None:
+            if active:
+                try:
+                    if not progress.winfo_ismapped():
+                        progress.pack(side="right", before=self.task_status_label, padx=(4, 0))
+                    progress.start(12)
+                except tk.TclError:
+                    pass
+            else:
+                try:
+                    progress.stop()
+                    progress.pack_forget()
+                except tk.TclError:
+                    pass
+
+    def islem_gunlugu_durum_ayarla(self, expanded, immediate=False):
+        """Alt işlem günlüğünü kompakt ve akıcı biçimde açıp daralt."""
+        splitter = getattr(self, "main_splitter", None)
+        body = getattr(self, "log_body", None)
+        button = getattr(self, "log_toggle_button", None)
+        if splitter is None or body is None:
+            return
+        expanded = bool(expanded)
+        self.log_panel_expanded = expanded
+        try:
+            splitter.update_idletasks()
+            total_height = max(1, splitter.winfo_height())
+            start_y = float(splitter.sash_coord(0)[1])
+        except (tk.TclError, IndexError):
+            return
+        if total_height < 100:
+            try:
+                self.root.after(
+                    80,
+                    lambda: self.islem_gunlugu_durum_ayarla(expanded, immediate=immediate),
+                )
+            except tk.TclError:
+                pass
+            return
+
+        target_height = min(210, max(130, round(total_height * 0.22))) if expanded else 34
+        target_y = max(0, total_height - target_height)
+        if expanded and not body.winfo_manager():
+            body.pack(fill="both", expand=True)
+        if button is not None:
+            button.configure(text="▼" if expanded else "▲")
+
+        def update(value):
+            splitter.sash_place(0, 0, round(value))
+
+        def complete():
+            if not expanded:
+                body.pack_forget()
+
+        if immediate or not getattr(self, "ui_motion_enabled", True):
+            self.ui_motion_cancel("activity-log-height")
+            update(target_y)
+            complete()
+            return
+        self.ui_motion_tween(
+            "activity-log-height",
+            start_y,
+            target_y,
+            update,
+            duration=MOTION_NORMAL_MS,
+            complete=complete,
+        )
 
     def arka_plan_gorevi_baslat(self, ad, func, *args, **kwargs):
         engine = getattr(self, "task_engine", None)
@@ -878,7 +1079,12 @@ class ArayuzTemelMixin:
                 win.transient(self.root)
             except Exception:
                 pass
+        self.ui_motion_prepare_window(win)
         return win
+
+    def pencere_kapat(self, win, callback=None):
+        """Hazırlanmış pencereyi ortak çıkış geçişiyle kapat."""
+        self.ui_motion_window_close(win, callback=callback)
 
     def arayuz_butonu(self, parent, text, command=None, role="neutral", **kwargs):
         return self.modern_button(parent, text, command=command, role=role, **kwargs)
@@ -919,6 +1125,7 @@ class ArayuzTemelMixin:
             )
             label.pack()
             state["tip"] = tip
+            self.ui_motion_window_enter(tip, duration=100)
 
         def schedule(_event=None):
             cancel()
@@ -937,11 +1144,8 @@ class ArayuzTemelMixin:
                 state["after"] = None
             tip = state.get("tip")
             if tip is not None:
-                try:
-                    tip.destroy()
-                except Exception:
-                    pass
                 state["tip"] = None
+                self.ui_motion_window_close(tip, duration=70)
 
         widget.bind("<Enter>", schedule, add="+")
         widget.bind("<Leave>", cancel, add="+")
@@ -952,6 +1156,7 @@ class ArayuzTemelMixin:
         role = role or self._role_from_color(bg)
         image = self._button_icon_image(title, role=role, outline=True, size=16)
         menu_images = []
+        fallback_button = False
         if getattr(self, "bootstrap_theme_active", False) and self._bootstrap_module is not None:
             try:
                 kwargs = {
@@ -964,11 +1169,25 @@ class ArayuzTemelMixin:
                     kwargs["compound"] = "left"
                 btn = self._bootstrap_module.Menubutton(parent, **kwargs)
             except Exception:
-                btn = tk.Menubutton(parent, text=f"{title} ▾", bg=bg, fg=fg, font=FONT_BOLD, relief="raised", padx=10, pady=3)
+                fallback_button = True
+                btn = tk.Menubutton(parent, text=f"{title} ▾", bg=bg, fg=fg, font=FONT_BOLD, relief="flat", padx=10, pady=3)
         else:
-            btn = tk.Menubutton(parent, text=f"{title} ▾", bg=bg, fg=fg, font=FONT_BOLD, relief="raised", padx=10, pady=3)
+            fallback_button = True
+            btn = tk.Menubutton(parent, text=f"{title} ▾", bg=bg, fg=fg, font=FONT_BOLD, relief="flat", padx=10, pady=3)
         self._attach_button_icon(btn, image)
-        menu = tk.Menu(btn, tearoff=0)
+        menu = tk.Menu(
+            btn,
+            tearoff=0,
+            bg=COLOR_SURFACE,
+            fg=COLOR_TEXT,
+            activebackground=COLOR_ACCENT_SOFT,
+            activeforeground=COLOR_PRIMARY,
+            disabledforeground=COLOR_TEXT_MUTED,
+            font=FONT_UI_BODY,
+            relief="solid",
+            bd=1,
+            activeborderwidth=0,
+        )
         btn.configure(menu=menu)
         for item in commands:
             if item is None:
@@ -987,5 +1206,7 @@ class ArayuzTemelMixin:
         btn.pack(side="left", padx=3, pady=5)
         btn._ui_icon_image = image
         btn._ui_menu_icon_images = menu_images
+        if fallback_button:
+            self.ui_motion_bind_hover(btn, bg, blend_hex(bg, "#FFFFFF", 0.28))
         self.tooltip_ekle(btn, tooltip or f"{title} komutları")
         return btn
