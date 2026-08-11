@@ -12,7 +12,7 @@ from performans import log_exception, perf_log
 
 
 class TaskCancelledError(RuntimeError):
-    """Kullanici tarafindan iptal edilen ortak arka plan gorevini belirtir."""
+    """Kullanıcı tarafından iptal edilen ortak arka plan görevini belirtir."""
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,13 @@ class TaskInfo:
     elapsed: float = 0
     cancellable: bool = True
     error: str = ""
+
+    @property
+    def progress_percent(self):
+        """Bilinen toplam üzerinden 0-100 arası ilerleme yüzdesini döndür."""
+        if self.total <= 0:
+            return None
+        return max(0.0, min(100.0, (self.completed / self.total) * 100.0))
 
 
 @dataclass
@@ -57,7 +64,7 @@ class TaskContext:
 
     def check_cancelled(self):
         if self.cancelled:
-            raise TaskCancelledError("Gorev kullanici tarafindan iptal edildi.")
+            raise TaskCancelledError("Görev kullanıcı tarafından iptal edildi.")
 
     def report(self, completed=None, total=None, message=""):
         self._progress_callback(
@@ -164,6 +171,17 @@ class TkTaskEngine:
                 for handle in sorted(handles, key=lambda item: item.task_id, reverse=True)
             ]
 
+    def clear_history(self):
+        """Aktif görevlere dokunmadan tamamlanan görev geçmişini ve sayaçları temizle."""
+        with self._lock:
+            cleared = len(self._history)
+            self._history.clear()
+            self._completed = 0
+            self._failed = 0
+            self._cancelled = 0
+        self._notify_state()
+        return cleared
+
     def active_task_names(self):
         with self._lock:
             return [handle.name for handle in self._active.values()]
@@ -174,7 +192,7 @@ class TkTaskEngine:
             if handle is None or not handle.cancellable:
                 return False
             handle.state = "cancelling"
-            handle.message = "Iptal istegi alindi"
+            handle.message = "İptal isteği alındı"
         handle.cancel()
         self._notify_state(handle.name)
         return True
@@ -298,7 +316,7 @@ class TkTaskEngine:
                     if handle is not None:
                         handle.state = "running"
                         if not handle.message or handle.message.startswith("Kaynak bekleniyor"):
-                            handle.message = "Calisiyor"
+                            handle.message = "Çalışıyor"
                 self._notify_state(task_name)
                 if with_context:
                     return func(*args, task_context=context, **kwargs)
@@ -326,7 +344,7 @@ class TkTaskEngine:
             self._active[task_id] = handle
         start_gate.set()
 
-        self._set_status(status_start or f"Arka plan gorevi basladi: {task_name}", "info")
+        self._set_status(status_start or f"Arka plan görevi başladı: {task_name}", "info")
         self._notify_state(task_name)
 
         def finish(done_future):
@@ -339,7 +357,7 @@ class TkTaskEngine:
 
                 def cancelled_ui():
                     if self.status_callback:
-                        self.status_callback(status_cancel or f"Arka plan gorevi iptal edildi: {task_name}", "warning")
+                        self.status_callback(status_cancel or f"Arka plan görevi iptal edildi: {task_name}", "warning")
                     if on_cancel:
                         on_cancel()
                     if on_done:
@@ -357,7 +375,7 @@ class TkTaskEngine:
                     if self.status_callback and status_error:
                         self.status_callback(status_error.format(error=exc), "error")
                     elif self.status_callback:
-                        self.status_callback(f"Arka plan gorevi hata verdi: {task_name} - {exc}", "error")
+                        self.status_callback(f"Arka plan görevi hata verdi: {task_name} - {exc}", "error")
                     if on_error:
                         on_error(exc)
                     if on_done:
@@ -375,7 +393,7 @@ class TkTaskEngine:
                 if self.status_callback and status_success:
                     self.status_callback(status_success, "success")
                 elif self.status_callback:
-                    self.status_callback(f"Arka plan gorevi tamamlandi: {task_name}", "success")
+                    self.status_callback(f"Arka plan görevi tamamlandı: {task_name}", "success")
                 if on_success:
                     on_success(result)
                 if on_done:

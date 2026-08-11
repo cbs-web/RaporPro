@@ -33,7 +33,10 @@ from ui_spt_okuma_dialogs import (
     show_spt_history,
 )
 from ui_spt_okuma_preview import SPTPreviewController
-from ui_spt_okuma_pro import reread_selected_with_pro as run_spt_pro_reread
+from ui_spt_okuma_pro import (
+    reread_selected_with_pro as run_spt_pro_reread,
+    reread_selected_with_strongest as run_spt_strongest_reread,
+)
 from ui_spt_okuma_kuyruk import SPTFotografKuyrugu
 
 
@@ -91,11 +94,15 @@ class SPTOkumaMixin:
 
     def _spt_dis_servis_onayi_al(self, ayarlar=None, parent=None):
         ayarlar = ayarlar or spt_ayarlarini_yukle()
-        providers = [str(ayarlar.get("aktif_motor") or "openai").strip().lower()]
+        providers = [str(ayarlar.get("aktif_motor") or "gemini").strip().lower()]
         extra_providers = ayarlar.get("ek_motorlar") or []
         if isinstance(extra_providers, str):
             extra_providers = [extra_providers]
         providers.extend(str(item or "").strip().lower() for item in extra_providers)
+        providers = [
+            "openai" if provider in ("openai_pro", "openai_ust") else provider
+            for provider in providers
+        ]
         providers = list(
             dict.fromkeys(
                 provider
@@ -106,10 +113,8 @@ class SPTOkumaMixin:
         if not providers:
             return True
         provider_labels = {
-            "openai": "OpenAI",
-            "gemini": "Google Gemini",
-            "gemini_pro": "Google Gemini Pro",
-            "groq": "Groq",
+            "openai": "OpenAI (GPT-5.6)",
+            "gemini": "Google Gemini 3.6 Flash",
         }
         project_settings = self.veri.setdefault("ayarlar", {})
         pending = [
@@ -194,7 +199,11 @@ class SPTOkumaMixin:
 
         def save_auto_pro_setting():
             self.veri.setdefault("ayarlar", {})["spt_auto_pro"] = "1" if auto_pro_var.get() else "0"
-            status_var.set("Otomatik Pro açık." if auto_pro_var.get() else "Otomatik Pro kapalı.")
+            status_var.set(
+                "Otomatik ikinci okuma açık."
+                if auto_pro_var.get()
+                else "Otomatik ikinci okuma kapalı."
+            )
 
         header = tk.Frame(win, bg="#FFFFFF", padx=12, pady=10)
         header.pack(fill="x")
@@ -685,12 +694,30 @@ class SPTOkumaMixin:
 
         def reread_selected_with_pro():
             if not self._spt_dis_servis_onayi_al(
-                {"aktif_motor": "gemini_pro"},
+                {"aktif_motor": "openai_pro"},
                 parent=win,
             ):
                 status_var.set("Pro okuma başlatılmadı: dış servis onayı verilmedi.")
                 return
             run_spt_pro_reread(
+                self,
+                win,
+                selected_record,
+                update_selected_from_form,
+                target_var,
+                status_var,
+                refresh_tree,
+                load_detail,
+            )
+
+        def reread_selected_with_strongest():
+            if not self._spt_dis_servis_onayi_al(
+                {"aktif_motor": "openai_ust"},
+                parent=win,
+            ):
+                status_var.set("En güçlü modelle okuma başlatılmadı: dış servis onayı verilmedi.")
+                return
+            run_spt_strongest_reread(
                 self,
                 win,
                 selected_record,
@@ -1009,7 +1036,7 @@ class SPTOkumaMixin:
             settings = project_spt_settings()
             consent_settings = dict(ayarlar)
             if settings["auto_pro"]:
-                consent_settings["ek_motorlar"] = ["gemini_pro"]
+                consent_settings["ek_motorlar"] = ["openai"]
             if not self._spt_dis_servis_onayi_al(consent_settings, parent=win):
                 status_var.set("SPT fotoğraf okuma başlatılmadı: dış servis onayı verilmedi.")
                 refresh_main_queue_status("onay verilmedi")
@@ -1233,7 +1260,7 @@ class SPTOkumaMixin:
             ayarlar = spt_ayarlarini_yukle()
             consent_settings = dict(ayarlar)
             if project_spt_settings()["auto_pro"]:
-                consent_settings["ek_motorlar"] = ["gemini_pro"]
+                consent_settings["ek_motorlar"] = ["openai"]
             if not self._spt_dis_servis_onayi_al(consent_settings, parent=win):
                 status_var.set("Kırpılmış fotoğraf okuma başlatılmadı: dış servis onayı verilmedi.")
                 return
@@ -1395,8 +1422,13 @@ class SPTOkumaMixin:
         advanced_menu.add_command(label="Excel'den Al", command=import_excel)
         advanced_menu.add_command(label="Kırp ve Oku", command=import_cropped_photo)
         advanced_menu.add_separator()
-        advanced_menu.add_checkbutton(label="Otomatik Pro", variable=auto_pro_var, command=save_auto_pro_setting)
-        advanced_menu.add_command(label="Seçiliyi Pro ile Oku", command=reread_selected_with_pro, accelerator="Ctrl+Enter")
+        advanced_menu.add_checkbutton(
+            label="Düşük Güvende Otomatik İkinci Okuma",
+            variable=auto_pro_var,
+            command=save_auto_pro_setting,
+        )
+        advanced_menu.add_command(label="Seçiliyi Terra ile Oku", command=reread_selected_with_pro, accelerator="Ctrl+Enter")
+        advanced_menu.add_command(label="Seçiliyi Sol ile Oku", command=reread_selected_with_strongest)
         advanced_menu.add_separator()
         advanced_menu.add_command(label="N30 Değerlerini Hesapla", command=n30_all)
         advanced_menu.add_command(label="Kaynak Raporu", command=export_source_report)

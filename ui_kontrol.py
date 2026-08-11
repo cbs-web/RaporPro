@@ -11,7 +11,7 @@ from cikti_kalite import (
 from kalite_kontrol import build_preflight_report
 from performans import log_exception, perf_tracked
 from proje_motoru import kontrol_grubu_durumu, proje_saglik_ozeti
-from rapor_sablonu import rapor_sablonu_durumu
+from rapor_sablonu import proje_rapor_sablon_profili, rapor_sablonu_durumu
 from sabitler import (
     COLOR_BG,
     COLOR_BORDER,
@@ -85,7 +85,10 @@ class KontrolPaneliMixin:
         konum_ok = bool(str(kunye.get("il") or "").strip() and str(kunye.get("ilce") or "").strip())
         self._ozet_set("konum", konum_text or "Konum girilmemiş", ok=konum_ok)
 
-        template_info = rapor_sablonu_durumu(self.word_path)
+        template_info = rapor_sablonu_durumu(
+            self.word_path,
+            proje_rapor_sablon_profili(self.veri),
+        )
         file_map = {
             "word_path": template_info.get("path", ""),
             "lab_excel_path": self.lab_excel_path,

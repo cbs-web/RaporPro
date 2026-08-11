@@ -558,6 +558,98 @@ def build_section_correlations(
     return links
 
 
+def build_bounded_pinch_runs(
+    layers1: list[dict[str, Any]],
+    layers2: list[dict[str, Any]],
+    matches_s1: dict[int, int],
+    matches_s2: dict[int, int],
+    facies_s1: dict[int, int] | None = None,
+    facies_s2: dict[int, int] | None = None,
+    continuity_tolerance: float = 0.15,
+) -> list[dict[str, Any]]:
+    """Return unmatched layer runs bounded by clear exact correlations."""
+
+    def collect_runs(
+        source_layers: list[dict[str, Any]],
+        target_layers: list[dict[str, Any]],
+        matches: dict[int, int],
+        facies: dict[int, int],
+        source_side: str,
+    ) -> list[dict[str, Any]]:
+        occupied = {int(idx) for idx in matches} | {int(idx) for idx in facies}
+        unmatched = [idx for idx in range(len(source_layers)) if idx not in occupied]
+        runs = []
+        current = []
+        for idx in unmatched:
+            if current and idx != current[-1] + 1:
+                runs.append(current)
+                current = []
+            current.append(idx)
+        if current:
+            runs.append(current)
+
+        exact_indices = sorted(int(idx) for idx in matches)
+        plans = []
+        for run in runs:
+            start_idx, end_idx = run[0], run[-1]
+            above = [idx for idx in exact_indices if idx < start_idx]
+            below = [idx for idx in exact_indices if idx > end_idx]
+            if not above or not below:
+                continue
+
+            upper_source = above[-1]
+            lower_source = below[0]
+            upper_target = int(matches[upper_source])
+            lower_target = int(matches[lower_source])
+            if lower_target != upper_target + 1:
+                continue
+
+            source_chain = [upper_source] + run + [lower_source]
+            if any(
+                abs(
+                    safe_float(source_layers[left].get("bot"))
+                    - safe_float(source_layers[right].get("top"))
+                ) > continuity_tolerance
+                for left, right in zip(source_chain, source_chain[1:])
+            ):
+                continue
+            if abs(
+                safe_float(target_layers[upper_target].get("bot"))
+                - safe_float(target_layers[lower_target].get("top"))
+            ) > continuity_tolerance:
+                continue
+
+            if source_side == "left":
+                upper_pair = (upper_source, upper_target)
+                lower_pair = (lower_source, lower_target)
+            else:
+                upper_pair = (upper_target, upper_source)
+                lower_pair = (lower_target, lower_source)
+            plans.append({
+                "source_side": source_side,
+                "source_indices": list(run),
+                "upper_source_index": upper_source,
+                "upper_target_index": upper_target,
+                "upper_pair": upper_pair,
+                "lower_pair": lower_pair,
+            })
+        return plans
+
+    return collect_runs(
+        layers1,
+        layers2,
+        matches_s1,
+        facies_s1 or {},
+        "left",
+    ) + collect_runs(
+        layers2,
+        layers1,
+        matches_s2,
+        facies_s2 or {},
+        "right",
+    )
+
+
 def build_semantic_lens_tracks(
     sondajlar: list[dict[str, Any]],
     pair_links: list[dict[str, Any]],

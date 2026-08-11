@@ -48,9 +48,14 @@ SPT_OGRENME_DIR = Path(
     kullanici_yolu("spt_ogrenme_verisi", legacy=SOURCE_DIR / "spt_ogrenme_verisi")
 )
 SPT_CROP_DIR = Path(kullanici_yolu("logs", "spt_kirpilanlar"))
-DEFAULT_SPT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_SPT_GEMINI_MODEL = "gemini-3.6-flash"
+DEFAULT_SPT_OPENAI_MODEL = "gpt-5.6-luna"
+DEFAULT_SPT_PRO_OPENAI_MODEL = "gpt-5.6-terra"
+DEFAULT_SPT_UST_OPENAI_MODEL = "gpt-5.6-sol"
 DEFAULT_REVIZYON_OPENAI_MODEL = "gpt-5.5"
-SECRET_SETTING_KEYS = ("openai_api_key", "gemini_api_key", "groq_api_key")
+SECRET_SETTING_KEYS = ("openai_api_key", "gemini_api_key")
+LEGACY_SECRET_SETTING_KEYS = SECRET_SETTING_KEYS + ("groq_api_key",)
+SPT_OKUMA_MOTORLARI = ("gemini", "openai", "openai_pro", "openai_ust")
 
 
 @dataclass
@@ -372,12 +377,14 @@ def excelden_spt_oku(path, default_sondaj_no=""):
 
 def spt_ayarlarini_yukle(path=None):
     ayarlar = {
-        "aktif_motor": "openai",
+        "aktif_motor": "gemini",
         "openai_api_key": "",
         "openai_model": DEFAULT_SPT_OPENAI_MODEL,
+        "spt_pro_openai_model": DEFAULT_SPT_PRO_OPENAI_MODEL,
+        "spt_ust_openai_model": DEFAULT_SPT_UST_OPENAI_MODEL,
         "revizyon_openai_model": DEFAULT_REVIZYON_OPENAI_MODEL,
         "gemini_api_key": "",
-        "groq_api_key": "",
+        "spt_gemini_model": DEFAULT_SPT_GEMINI_MODEL,
     }
     varsayilan_yol = path is None
     path = Path(path) if path else SPT_AYARLAR_PATH
@@ -394,7 +401,7 @@ def spt_ayarlarini_yukle(path=None):
             if isinstance(data, dict):
                 secured_data = dict(data)
                 migrated = False
-                for key in SECRET_SETTING_KEYS:
+                for key in LEGACY_SECRET_SETTING_KEYS:
                     raw_value = str(data.get(key, "") or "")
                     if not raw_value:
                         continue
@@ -406,7 +413,18 @@ def spt_ayarlarini_yukle(path=None):
                     except Exception as exc:
                         data[key] = ""
                         log_exception(f"spt.settings.decrypt.{key}", exc_value=exc)
+                if "groq_api_key" in secured_data:
+                    secured_data.pop("groq_api_key", None)
+                    data.pop("groq_api_key", None)
+                    migrated = True
                 ayarlar.update({key: str(value) for key, value in data.items() if value is not None})
+                normalized_motor = spt_motorunu_normalize_et(ayarlar.get("aktif_motor"))
+                if normalized_motor not in ("gemini", "openai"):
+                    normalized_motor = "openai" if normalized_motor.startswith("openai") else "gemini"
+                if normalized_motor != ayarlar.get("aktif_motor"):
+                    ayarlar["aktif_motor"] = normalized_motor
+                    secured_data["aktif_motor"] = normalized_motor
+                    migrated = True
                 if migrated:
                     atomic_json_dump(secured_data, path, ensure_ascii=False, indent=2)
         except Exception:
@@ -415,9 +433,11 @@ def spt_ayarlarini_yukle(path=None):
     env_map = {
         "openai_api_key": ("RAPORPRO_SPT_OPENAI_API_KEY", "OPENAI_API_KEY"),
         "openai_model": ("RAPORPRO_SPT_OPENAI_MODEL", "RAPORPRO_OPENAI_MODEL", "OPENAI_MODEL"),
+        "spt_pro_openai_model": ("RAPORPRO_SPT_PRO_OPENAI_MODEL",),
+        "spt_ust_openai_model": ("RAPORPRO_SPT_UST_OPENAI_MODEL",),
         "revizyon_openai_model": ("RAPORPRO_REVIZYON_OPENAI_MODEL", "RAPORPRO_RAPOR_OPENAI_MODEL"),
         "gemini_api_key": ("RAPORPRO_SPT_GEMINI_API_KEY", "GEMINI_API_KEY"),
-        "groq_api_key": ("RAPORPRO_SPT_GROQ_API_KEY", "GROQ_API_KEY"),
+        "spt_gemini_model": ("RAPORPRO_SPT_GEMINI_MODEL",),
         "aktif_motor": ("RAPORPRO_SPT_MOTOR",),
     }
     for key, names in env_map.items():
@@ -426,20 +446,55 @@ def spt_ayarlarini_yukle(path=None):
             if val:
                 ayarlar[key] = val.strip()
                 break
+    aktif_motor = spt_motorunu_normalize_et(ayarlar.get("aktif_motor"))
+    if aktif_motor not in ("gemini", "openai"):
+        aktif_motor = "openai" if aktif_motor.startswith("openai") else "gemini"
+    if aktif_motor == "gemini" and not ayarlar.get("gemini_api_key") and ayarlar.get("openai_api_key"):
+        aktif_motor = "openai"
+    elif aktif_motor == "openai" and not ayarlar.get("openai_api_key") and ayarlar.get("gemini_api_key"):
+        aktif_motor = "gemini"
+    ayarlar["aktif_motor"] = aktif_motor
     return ayarlar
 
 
+def spt_motorunu_normalize_et(value):
+    """Eski SPT motor adlarini guncel rol tabanli motorlara donustur."""
+    motor = str(value or "gemini").strip().lower()
+    aliases = {
+        "groq": "gemini",
+        "gemini_pro": "openai_pro",
+        "openai_luna": "openai",
+        "openai_terra": "openai_pro",
+        "openai_sol": "openai_ust",
+    }
+    return aliases.get(motor, motor)
+
+
 def openai_model_sec(ayarlar=None, amac="spt"):
-    """SPT ve rapor revizyonu icin OpenAI modelini ayarlardan sec."""
+    """SPT rolleri ve rapor revizyonu icin OpenAI modelini ayarlardan sec."""
     ayarlar = ayarlar or spt_ayarlarini_yukle()
-    if str(amac or "").strip().lower() in ("revizyon", "rapor", "duzeltme", "metin"):
+    amac = str(amac or "").strip().lower()
+    if amac in ("revizyon", "rapor", "duzeltme", "metin"):
         model = str(ayarlar.get("revizyon_openai_model") or "").strip()
         if model:
             return model
         model = str(ayarlar.get("openai_model") or "").strip()
         return model or DEFAULT_REVIZYON_OPENAI_MODEL
+    if amac in ("spt_pro", "pro", "terra"):
+        model = str(ayarlar.get("spt_pro_openai_model") or "").strip()
+        return model or DEFAULT_SPT_PRO_OPENAI_MODEL
+    if amac in ("spt_ust", "ust", "zor", "sol"):
+        model = str(ayarlar.get("spt_ust_openai_model") or "").strip()
+        return model or DEFAULT_SPT_UST_OPENAI_MODEL
     model = str(ayarlar.get("openai_model") or "").strip()
     return model or DEFAULT_SPT_OPENAI_MODEL
+
+
+def gemini_model_sec(ayarlar=None):
+    """Normal SPT okumasinda kullanilacak Gemini modelini sec."""
+    ayarlar = ayarlar or spt_ayarlarini_yukle()
+    model = str(ayarlar.get("spt_gemini_model") or "").strip()
+    return model or DEFAULT_SPT_GEMINI_MODEL
 
 
 def spt_ayarlarini_kaydet(ayarlar, path=None):
@@ -454,9 +509,23 @@ def spt_ayarlarini_kaydet(ayarlar, path=None):
                 mevcut.update(loaded)
         except Exception:
             mevcut = {}
-    for key in ("aktif_motor", "openai_api_key", "openai_model", "revizyon_openai_model", "gemini_api_key", "groq_api_key"):
+    mevcut.pop("groq_api_key", None)
+    for key in (
+        "aktif_motor",
+        "openai_api_key",
+        "openai_model",
+        "spt_pro_openai_model",
+        "spt_ust_openai_model",
+        "revizyon_openai_model",
+        "gemini_api_key",
+        "spt_gemini_model",
+    ):
         if key in ayarlar:
             value = ayarlar.get(key, "")
+            if key == "aktif_motor":
+                value = spt_motorunu_normalize_et(value)
+                if value not in ("gemini", "openai"):
+                    value = "openai" if value.startswith("openai") else "gemini"
             mevcut[key] = gizli_deger_sakla(value) if key in SECRET_SETTING_KEYS and value else value
     atomic_json_dump(mevcut, path, ensure_ascii=False, indent=2)
     return path
@@ -476,13 +545,13 @@ Dikkat: Geçerli SPT derinlikleri sadece şunlardır: {hedefler}
 Derinliği farklı okuyorsan en yakın geçerli derinliği yaz. Örneğin 4.70 okursan 4.50, 14.90 okursan 15.00 yaz.
 Listeden eksik satır üretme, bu listenin tamamını asla yazma.
 SPT değerini mümkünse 4-5-6 biçiminde ver. Refü varsa spt alanına "R" veya "50/.." biçiminde yaz.
-Derinlik veya SPT vuruşları fotoğrafta okunmuyorsa [] döndür.
+Derinlik veya SPT vuruşları fotoğrafta okunmuyorsa {{"items": []}} döndür.
 Kendi okuma güvenini 0 ile 100 arasında guven alanına yaz.
-Sadece ham JSON döndür. Markdown, açıklama veya kod bloğu yazma.
+Sadece {{"items": [...]}} biçiminde ham JSON nesnesi döndür. Markdown, açıklama veya kod bloğu yazma.
 Örnekler:
-[{{"sondaj_no": "SK-1", "derinlik": "1.50-1.95", "spt": "4-4-5", "guven": 95}}]
-[{{"sondaj_no": "SK-4", "derinlik": "10.50-10.95", "spt": "8-9-10", "guven": 95}}]
-Bulamazsan [] döndür."""
+{{"items": [{{"sondaj_no": "SK-1", "derinlik": "1.50-1.95", "spt": "4-4-5", "guven": 95}}]}}
+{{"items": [{{"sondaj_no": "SK-4", "derinlik": "10.50-10.95", "spt": "8-9-10", "guven": 95}}]}}
+Bulamazsan {{"items": []}} döndür."""
 
 
 def _image_payload(path):
@@ -507,7 +576,13 @@ def _json_liste_ayikla(text):
         else:
             raise
     if isinstance(parsed, dict):
-        parsed = [parsed]
+        items = parsed.get("items")
+        if isinstance(items, list):
+            parsed = items
+        elif any(key in parsed for key in ("sondaj_no", "sondaj", "derinlik", "spt")):
+            parsed = [parsed]
+        else:
+            parsed = []
     if not isinstance(parsed, list):
         return []
     return [item for item in parsed if isinstance(item, dict)]
@@ -695,12 +770,10 @@ def _select_spt_records_for_batch(records_by_path, paths):
 
 
 def _api_key_kontrol(aktif, ayarlar):
-    if aktif == "openai" and not ayarlar.get("openai_api_key"):
+    if aktif in ("openai", "openai_pro", "openai_ust") and not ayarlar.get("openai_api_key"):
         raise RuntimeError("OpenAI API anahtarı bulunamadı. RaporPro ayarları veya OPENAI_API_KEY kontrol edilmeli.")
-    if aktif in ("gemini", "gemini_pro") and not ayarlar.get("gemini_api_key"):
+    if aktif == "gemini" and not ayarlar.get("gemini_api_key"):
         raise RuntimeError("Gemini API anahtarı bulunamadı. RaporPro ayarları veya GEMINI_API_KEY kontrol edilmeli.")
-    if aktif == "groq" and not ayarlar.get("groq_api_key"):
-        raise RuntimeError("Groq API anahtarı bulunamadı. RaporPro ayarları veya GROQ_API_KEY kontrol edilmeli.")
 
 
 def yapay_zeka_ile_spt_oku(
@@ -711,8 +784,8 @@ def yapay_zeka_ile_spt_oku(
     stop_event=None,
 ):
     ayarlar = ayarlar or spt_ayarlarini_yukle()
-    aktif = (motor_zorla or ayarlar.get("aktif_motor") or "openai").strip().lower()
-    if aktif not in ("openai", "gemini", "gemini_pro", "groq"):
+    aktif = spt_motorunu_normalize_et(motor_zorla or ayarlar.get("aktif_motor") or "gemini")
+    if aktif not in SPT_OKUMA_MOTORLARI:
         raise RuntimeError(f"Desteklenmeyen SPT okuma motoru: {aktif}")
     _api_key_kontrol(aktif, ayarlar)
 
@@ -727,7 +800,11 @@ def yapay_zeka_ile_spt_oku(
         mime_type=mime_type,
         timeout=timeout,
         stop_event=stop_event,
-        openai_model=openai_model_sec(ayarlar, "spt"),
+        openai_model=openai_model_sec(
+            ayarlar,
+            "spt_pro" if aktif == "openai_pro" else "spt_ust" if aktif == "openai_ust" else "spt",
+        ),
+        gemini_model=gemini_model_sec(ayarlar),
     )
     raw_items = _json_liste_ayikla(text_response)
 
@@ -809,7 +886,7 @@ def fotograflardan_spt_oku(
                     stop_event=stop_event,
                 )
 
-            active_motor = str(ayarlar.get("aktif_motor") or "openai").strip().lower()
+            active_motor = spt_motorunu_normalize_et(ayarlar.get("aktif_motor") or "gemini")
             confidences = [
                 safe_float(item.get("guven"))
                 for item in raw_items
@@ -823,18 +900,22 @@ def fotograflardan_spt_oku(
             elif min(confidences) < (safe_float(guven_esigi) or 90):
                 pro_reason = f"guven %{min(confidences):g} esigin altinda"
 
+            second_opinion_motor = (
+                "openai_pro"
+                if active_motor in ("openai", "openai_pro", "openai_ust")
+                else "openai"
+            )
             if (
                 not learned
                 and auto_pro
                 and pro_reason
-                and ayarlar.get("gemini_api_key")
-                and active_motor != "gemini_pro"
+                and ayarlar.get("openai_api_key")
             ):
                 time.sleep(0.3)
                 pro_items = yapay_zeka_ile_spt_oku(
                     path,
                     ayarlar=ayarlar,
-                    motor_zorla="gemini_pro",
+                    motor_zorla=second_opinion_motor,
                     timeout=60,
                     stop_event=stop_event,
                 )

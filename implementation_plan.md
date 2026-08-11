@@ -9,7 +9,7 @@ Projeniz son 1 haftada **çok ciddi bir mimari refaktör** geçirmiş. Tebrik ed
 | Değişiklik | Etki |
 |---|---|
 | `arayuz.py` 340KB → 89KB | %74 küçülme, 9 mixin modüle ayrıldı |
-| SPT AI Okuma Motoru (yeni) | `spt_okuma_motoru.py` + `ui_spt_okuma.py` — OpenAI/Gemini/Groq ile fotoğraftan SPT okuma |
+| SPT AI Okuma Motoru (yeni) | `spt_okuma_motoru.py` + `ui_spt_okuma.py` — Gemini 3.6 Flash ile ana okuma; OpenAI Luna/Terra/Sol ile ikinci görüş ve zor fotoğraf okuma |
 | Strater-tarzı Log Renderer (yeni) | `motor.py`'de profesyonel sondaj logu, eski renderer fallback olarak korunmuş |
 | Undo/Redo altyapısı | Kesit editörü ve entry widget'larında geri alma desteği |
 | Kesit Seam Gizleme | `GeoEngineDraw.hide_same_unit_seams()` — aynı birim sınırlarını gizleme |

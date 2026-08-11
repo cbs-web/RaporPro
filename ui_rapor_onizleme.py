@@ -15,7 +15,7 @@ from PIL import Image, ImageTk
 
 from performans import perf_tracked
 from raporlama import raporla as rapor_olustur
-from rapor_sablonu import etkin_rapor_sablonu_yolu
+from rapor_sablonu import etkin_rapor_sablonu_yolu, proje_rapor_sablon_profili
 from sabitler import (
     COLOR_ACCENT, COLOR_BG, COLOR_BORDER, COLOR_PRIMARY, COLOR_SUCCESS,
     COLOR_SURFACE, COLOR_TEXT_MUTED, FONT_UI_BODY, FONT_UI_BODY_BOLD,
@@ -952,7 +952,10 @@ class RaporOnizlemeMixin:
             return
         if self._preview_fingerprint and not self._preview_generation_active:
             sources = (
-                etkin_rapor_sablonu_yolu(getattr(self, "word_path", None)),
+                etkin_rapor_sablonu_yolu(
+                    getattr(self, "word_path", None),
+                    proje_rapor_sablon_profili(getattr(self, "veri", {})),
+                ),
                 getattr(self, "jeo_excel_path", None),
                 getattr(self, "lab_excel_path", None),
                 getattr(self, "img_yer", None),

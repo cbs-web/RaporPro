@@ -307,16 +307,15 @@ def _ai_metin_revizyonu(note, units, motor="otomatik", timeout=45):
     _api_key_kontrol(aktif, ayarlar)
 
     prompt = _ai_prompt(note, _aday_birimler(note, units))
-    if aktif in ("openai", "groq"):
-        is_openai = aktif == "openai"
-        url = "https://api.openai.com/v1/chat/completions" if is_openai else "https://api.groq.com/openai/v1/chat/completions"
-        api_key = ayarlar["openai_api_key"] if is_openai else ayarlar["groq_api_key"]
-        model_name = openai_model_sec(ayarlar, "revizyon") if is_openai else "meta-llama/llama-4-scout-17b-16e-instruct"
+    if aktif == "openai":
+        url = "https://api.openai.com/v1/chat/completions"
+        api_key = ayarlar["openai_api_key"]
+        model_name = openai_model_sec(ayarlar, "revizyon")
         payload = {
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.05,
-            "response_format": {"type": "json_object"} if is_openai else None,
+            "response_format": {"type": "json_object"},
         }
         payload = {key: value for key, value in payload.items() if value is not None}
         response = requests.post(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=payload, timeout=timeout)

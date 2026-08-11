@@ -261,10 +261,48 @@ class GizliBilgiRedaksiyonTestleri(unittest.TestCase):
 
         url = post.call_args.args[1]
         headers = post.call_args.kwargs["headers"]
+        payload = post.call_args.kwargs["payload"]
         self.assertNotIn(secret, url)
         self.assertNotIn("?key=", url)
+        self.assertIn("gemini-3.6-flash", url)
         self.assertEqual(headers["x-goog-api-key"], secret)
+        self.assertEqual(payload["generationConfig"]["thinkingConfig"]["thinkingLevel"], "low")
+        self.assertEqual(payload["generationConfig"]["mediaResolution"], "MEDIA_RESOLUTION_HIGH")
         self.assertNotIn(secret, str(raised.exception))
+
+    def test_spt_openai_rolleri_orijinal_gorsel_ve_uygun_akil_yurutme_kullanir(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"choices": [{"message": {"content": "{\"items\": []}"}}]}
+
+        expectations = [
+            ("openai", "gpt-5.6-luna", "none"),
+            ("openai_pro", "gpt-5.6-terra", "low"),
+            ("openai_ust", "gpt-5.6-sol", "medium"),
+        ]
+        for motor_name, model_name, effort in expectations:
+            with self.subTest(motor=motor_name):
+                with patch("spt_saglayicilar.http_post_with_retry", return_value=Response()) as post:
+                    raw, used_model = spt_ai_metin_iste(
+                        aktif=motor_name,
+                        ayarlar={"openai_api_key": "test-openai-key"},
+                        prompt="oku",
+                        image_b64="AA==",
+                        mime_type="image/jpeg",
+                        timeout=1,
+                        openai_model=model_name,
+                    )
+
+                payload = post.call_args.kwargs["payload"]
+                image_url = payload["messages"][0]["content"][1]["image_url"]
+                self.assertEqual(used_model, model_name)
+                self.assertEqual(raw, "{\"items\": []}")
+                self.assertEqual(payload["reasoning_effort"], effort)
+                self.assertEqual(image_url["detail"], "original")
+                self.assertNotIn("temperature", payload)
 
     def test_diger_gemini_akislari_da_header_kullanir_ve_hata_maskeler(self):
         secret = "AIzaSuperSecretValue123"

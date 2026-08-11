@@ -56,6 +56,7 @@ from spt_okuma_motoru import (
     SPTKaydi,
     _path_unique_key,
     _select_spt_records_for_batch,
+    gemini_model_sec,
     hedef_derinlige_yuvarla,
     kayit_normalize_et,
     n30_hesapla,
@@ -105,6 +106,7 @@ from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_
 from gizli_depo import gizli_deger_coz, gizli_deger_mi, gizli_deger_sakla
 from ui_kesit import KesitCizimMixin, kesit_hatti_sondaj_sirasi, kesit_kayit_dosya_adi
 from kesit_korelasyon import (
+    build_bounded_pinch_runs,
     build_pair_correlation,
     build_semantic_lens_tracks,
     correlation_pair_key,
@@ -186,7 +188,7 @@ from proje_paketi import (
     paket_proje_verisini_yukle,
     proje_paketi_olustur,
 )
-from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
+from yardimcilar import atomic_docx_save, atomic_json_dump, atomic_write_text, haversine_distance, litoloji_yazim_uyarilari, safe_float, zemin_sinifi_cevir
 from workbook_motoru import apply_rows_to_veri as wb_apply_rows_to_veri
 from workbook_motoru import build_initial_rows as wb_build_initial_rows
 from workbook_motoru import excel_workbook_yaz as wb_excel_workbook_yaz
@@ -620,8 +622,28 @@ class TaskEngineTestleri(unittest.TestCase):
             self.assertEqual(task.completed, 2)
             self.assertEqual(task.total, 5)
             self.assertEqual(task.message, "Iki dosya tamamlandi")
+            self.assertEqual(task.progress_percent, 40)
             release.set()
             self.assertTrue(done.wait(2))
+        finally:
+            release.set()
+            engine.shutdown(wait=True)
+
+    def test_gorev_gecmisini_aktif_gorevlere_dokunmadan_temizler(self):
+        first_done = threading.Event()
+        release = threading.Event()
+        engine = TkTaskEngine(_ImmediateTkRoot(), max_workers=2, log_failures=False)
+        try:
+            engine.run("tamamlanan", lambda: 1, on_success=lambda _result: first_done.set())
+            self.assertTrue(first_done.wait(2))
+            engine.run("aktif", lambda: release.wait(2))
+            self.assertEqual(engine.snapshot().active_count, 1)
+
+            self.assertEqual(engine.clear_history(), 1)
+            snap = engine.snapshot()
+            self.assertEqual(snap.active_count, 1)
+            self.assertEqual(snap.completed_count, 0)
+            self.assertEqual(len(engine.list_tasks(include_finished=True)), 1)
         finally:
             release.set()
             engine.shutdown(wait=True)
@@ -1043,6 +1065,9 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
             {"no": "SK-1", "der": "15", "y": "40.1", "x": "26.1", "litoloji": [["0", "15", "Kil"]]},
             {"no": "SK-2", "der": "15", "y": "40.2", "x": "26.2", "litoloji": [["0", "15", "Kum"]]},
         ]
+        veri["jeofizik"]["ss_list"] = [
+            {"ad": "Serim 1", "layers": [{"vp": "500", "vs": "220", "h": "3"}]}
+        ]
         with tempfile.TemporaryDirectory() as tmp:
             paths = []
             for idx in range(6):
@@ -1053,7 +1078,7 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
 
             states = cikti_merkezi_hazirlik_durumlari(
                 veri,
-                {"maps": paths[:2], "report_images": paths[2:]},
+                {"maps": paths[:2], "report_images": paths[2:], "source_files": [paths[0]]},
                 {"blocking": [], "warnings": []},
             )
 
@@ -2543,6 +2568,110 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertFalse(link["facies_s1"])
         self.assertTrue(all(item["source"] == "auto_v2" for item in link["relations"]))
 
+    def test_sinirli_eslesmeyen_tabaka_dizisini_kamalanma_plani_yapar(self):
+        layers1 = [
+            {"top": 0.0, "bot": 0.5, "code": "bt"},
+            {"top": 0.5, "bot": 3.0, "code": "k"},
+            {"top": 3.0, "bot": 10.0, "code": "kl"},
+        ]
+        layers2 = [
+            {"top": 0.0, "bot": 0.5, "code": "bt"},
+            {"top": 0.5, "bot": 10.0, "code": "kl"},
+        ]
+
+        plans = build_bounded_pinch_runs(
+            layers1,
+            layers2,
+            {0: 0, 2: 1},
+            {0: 0, 1: 2},
+        )
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]["source_side"], "left")
+        self.assertEqual(plans[0]["source_indices"], [1])
+        self.assertEqual(plans[0]["upper_pair"], (0, 0))
+        self.assertEqual(plans[0]["lower_pair"], (2, 1))
+
+        reverse_plans = build_bounded_pinch_runs(
+            layers2,
+            layers1,
+            {0: 0, 1: 2},
+            {0: 0, 2: 1},
+        )
+        self.assertEqual(len(reverse_plans), 1)
+        self.assertEqual(reverse_plans[0]["source_side"], "right")
+        self.assertEqual(reverse_plans[0]["source_indices"], [1])
+        self.assertEqual(reverse_plans[0]["lower_pair"], (1, 2))
+
+    def test_kesit_motoru_kamalanan_birimi_ana_birimle_ortak_sinirda_kapatir(self):
+        sondajlar = [
+            {
+                "no": "SK-1",
+                "k": "10",
+                "der": "10",
+                "litoloji": [
+                    ["0", "0.5", "Bitkisel Toprak"],
+                    ["0.5", "3.0", "Kum"],
+                    ["3.0", "10.0", "Kil"],
+                ],
+                "spt": [],
+            },
+            {
+                "no": "SK-4",
+                "k": "10",
+                "der": "10",
+                "litoloji": [
+                    ["0", "0.5", "Bitkisel Toprak"],
+                    ["0.5", "10.0", "Kil"],
+                ],
+                "spt": [],
+            },
+        ]
+
+        fig, _ = GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "schematic",
+                "section_engine": "v2",
+                "auto_lens": True,
+                "lens_max_thickness": "2.0",
+                "pinch_closure_ratio": "0.82",
+                "show_legend": False,
+                "show_yass": False,
+                "show_distance_labels": False,
+                "show_layer_depth_labels": False,
+                "show_consistency_labels": False,
+            },
+        )
+        polygons = {
+            getattr(poly, "_geo_edit_id", ""): poly
+            for poly in fig._geo_tool.polygons
+        }
+        pinch = polygons["pinch-left:SK-1:SK-4:1:k"]
+        host = polygons["match:SK-1:SK-4:2:1:kl"]
+        pinch_xy = [tuple(point) for point in pinch.get_xy()[:-1]]
+        host_xy = [tuple(point) for point in host.get_xy()[:-1]]
+        tip = tuple(pinch._geo_pinch_tip)
+
+        def contains_point(points, expected):
+            return any(
+                abs(point[0] - expected[0]) < 1e-9
+                and abs(point[1] - expected[1]) < 1e-9
+                for point in points
+            )
+
+        self.assertEqual(pinch._geo_priority_role, "pinch")
+        self.assertEqual(host._geo_priority_role, "host")
+        self.assertTrue(contains_point(host_xy, tip))
+        self.assertTrue(contains_point(host_xy, pinch_xy[2]))
+        self.assertAlmostEqual(
+            (tip[0] - pinch_xy[0][0]) / (max(point[0] for point in host_xy) - pinch_xy[0][0]),
+            0.82,
+            places=6,
+        )
+        self.assertGreater(pinch.get_zorder(), host.get_zorder())
+        self.assertEqual(pinch.get_alpha(), 1.0)
+
     def test_kesit_v2_farkli_ana_birimleri_mercek_yerine_fasiyes_cizer(self):
         sondajlar = [
             {
@@ -3292,6 +3421,35 @@ class KesitCizimTestleri(unittest.TestCase):
         self.assertLess(abs(sondajlar[1]["_offset"]), 0.05)
         self.assertFalse(messages)
 
+    def test_kesit_hattinda_kuyu_arasi_gercek_mesafe_kullanilir(self):
+        sondajlar = [
+            {"no": "SK-1", "y": "40.0000", "x": "26.0000", "k": "100", "der": "5", "litoloji": [["0", "5", "Kil"]], "spt": []},
+            {"no": "SK-2", "y": "40.0001", "x": "26.0001", "k": "99", "der": "5", "litoloji": [["0", "5", "Kum"]], "spt": []},
+            {"no": "SK-3", "y": "40.0000", "x": "26.0002", "k": "98", "der": "5", "litoloji": [["0", "5", "Kil"]], "spt": []},
+        ]
+        GeoEngine.kesit_ciz_interaktif(
+            sondajlar,
+            options={
+                "mode": "line_projection",
+                "line_start_y": "40.0000",
+                "line_start_x": "26.0000",
+                "line_end_y": "40.0000",
+                "line_end_x": "26.0002",
+                "max_offset": "20",
+                "show_legend": False,
+                "show_yass": False,
+                "show_distance_labels": False,
+                "show_layer_depth_labels": False,
+                "show_consistency_labels": False,
+            },
+        )
+
+        expected = haversine_distance(40.0000, 26.0000, 40.0001, 26.0001)
+        station_dist = sondajlar[1]["_station"] - sondajlar[0]["_station"]
+        self.assertAlmostEqual(sondajlar[0]["_station_dist"], station_dist, places=3)
+        self.assertAlmostEqual(sondajlar[0]["_true_dist"], expected, places=3)
+        self.assertGreater(abs(sondajlar[0]["_true_dist"] - station_dist), 1.0)
+
     def test_haritadan_kesit_hatti_yakin_sondajlari_sirali_secer(self):
         sondajlar = [
             {"no": "SK-1", "y": "41.0000", "x": "29.0000"},
@@ -3597,17 +3755,51 @@ class SPTMotorTestleri(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "ayarlar.json")
             ayarlar = spt_ayarlarini_yukle(path)
-            self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-4o-mini")
+            self.assertEqual(ayarlar["aktif_motor"], "gemini")
+            self.assertEqual(gemini_model_sec(ayarlar), "gemini-3.6-flash")
+            self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-5.6-luna")
+            self.assertEqual(openai_model_sec(ayarlar, "spt_pro"), "gpt-5.6-terra")
+            self.assertEqual(openai_model_sec(ayarlar, "spt_ust"), "gpt-5.6-sol")
             self.assertEqual(openai_model_sec(ayarlar, "revizyon"), "gpt-5.5")
             self.assertEqual(openai_model_sec({"openai_model": "", "revizyon_openai_model": "  "}, "revizyon"), "gpt-5.5")
 
             spt_ayarlarini_kaydet(
-                {"openai_model": "gpt-4o-mini-test", "revizyon_openai_model": "gpt-5.5-test"},
+                {
+                    "spt_gemini_model": "gemini-test",
+                    "openai_model": "luna-test",
+                    "spt_pro_openai_model": "terra-test",
+                    "spt_ust_openai_model": "sol-test",
+                    "revizyon_openai_model": "gpt-5.5-test",
+                },
                 path,
             )
             ayarlar = spt_ayarlarini_yukle(path)
-            self.assertEqual(openai_model_sec(ayarlar, "spt"), "gpt-4o-mini-test")
+            self.assertEqual(gemini_model_sec(ayarlar), "gemini-test")
+            self.assertEqual(openai_model_sec(ayarlar, "spt"), "luna-test")
+            self.assertEqual(openai_model_sec(ayarlar, "spt_pro"), "terra-test")
+            self.assertEqual(openai_model_sec(ayarlar, "spt_ust"), "sol-test")
             self.assertEqual(openai_model_sec(ayarlar, "revizyon"), "gpt-5.5-test")
+
+    def test_eski_groq_ayari_geminiye_tasinir_ve_anahtar_silinir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ayarlar.json"
+            atomic_json_dump(
+                {
+                    "aktif_motor": "groq",
+                    "groq_api_key": "eski-groq-anahtari",
+                    "gemini_api_key": "gemini-test-key",
+                },
+                path,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+            ayarlar = spt_ayarlarini_yukle(path)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertEqual(ayarlar["aktif_motor"], "gemini")
+            self.assertNotIn("groq_api_key", ayarlar)
+            self.assertNotIn("groq_api_key", raw)
 
     def test_api_anahtari_ayar_dosyasinda_sifreli_saklanir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4026,8 +4218,8 @@ class BinaBlokRaporTestleri(unittest.TestCase):
         bina = {
             "coklu_blok": True,
             "bloklar": [
-                {"blok_adi": "A Blok", "kul": "Konut", "kat": "5", "der": "3.0", "tem": "Radye", "gqe_min": "10", "gqe_ort": "11", "gqe_max": "12"},
-                {"blok_adi": "B Blok", "kul": "Ticaret", "kat": "3", "der": "2.5", "tem": "Mütemadi", "gqe_min": "8", "gqe_ort": "9", "gqe_max": "10"},
+                {"blok_adi": "A Blok", "kul": "Konut", "bod": "1", "kat": "5", "temel_alan": "300", "ins": "1800", "der": "3.0", "tem": "Radye", "ysinif": "ZC", "gqe_min": "10", "gqe_ort": "11", "gqe_max": "12"},
+                {"blok_adi": "B Blok", "kul": "Ticaret", "bod": "2", "kat": "3", "temel_alan": "250 m2", "ins": "1200 m²", "der": "2.5", "tem": "Mütemadi", "ysinif": "ZD", "gqe_min": "8", "gqe_ort": "9", "gqe_max": "10"},
             ],
         }
         self.assertEqual([item["blok_adi"] for item in bina_bloklari_rapor(bina)], ["A Blok", "B Blok"])
@@ -4037,26 +4229,44 @@ class BinaBlokRaporTestleri(unittest.TestCase):
         first_text = "\n".join(cell.text for row in tables[0].rows for cell in row.cells)
         self.assertIn("Bina Bilgileri", first_text)
         self.assertIn("A Blok", first_text)
-        self.assertIn("Temel Tipi", first_text)
-        self.assertIn("Radye", first_text)
+        self.assertIn("Bodrum Kat Adedi / Toplam Kat Adedi", first_text)
+        self.assertIn("1 / 5", first_text)
+        self.assertIn("Temel Alanı / Toplam İnşaat Alanı", first_text)
+        self.assertIn("300 m² / 1800 m²", first_text)
+        self.assertIn("250 m² / 1200 m²", first_text)
+        self.assertNotIn("Temel Tipi", first_text)
+        self.assertNotIn("Radye", first_text)
+        self.assertNotIn("Yerel Zemin Sınıfı", first_text)
         self.assertIn("Binadan Temel Zeminine Aktarılan En Yükler", first_text)
         self.assertIn("Ortalama", first_text)
         self.assertIn("B Blok", first_text)
-        self.assertIn("Mütemadi", first_text)
+        self.assertNotIn("Mütemadi", first_text)
         gqe_row = tables[0].rows[-2]
         self.assertEqual([gqe_row.cells[i].text for i in range(1, 7)], ["10", "11", "12", "8", "9", "10"])
 
-    def test_tek_bina_temel_tipi_ve_yerel_zemin_rapora_yazilir(self):
+    def test_tek_bina_birlesik_satirlari_yazilir_gizli_alanlar_yazilmaz(self):
         from docx import Document
 
-        bina = {"kul": "Konut", "tem": "Radye", "ysinif": "ZC"}
+        bina = {
+            "kul": "Konut",
+            "bod": "1",
+            "kat": "6",
+            "temel_alan": "300",
+            "ins": "1800",
+            "tem": "Radye",
+            "ysinif": "ZC",
+        }
         doc = Document()
         tables = bina_bilgileri_tablolari_olustur(doc, bina)
         text = "\n".join(cell.text for row in tables[0].rows for cell in row.cells)
-        self.assertIn("Temel Tipi", text)
-        self.assertIn("Radye", text)
-        self.assertIn("Yerel Zemin Sınıfı", text)
-        self.assertIn("ZC", text)
+        self.assertIn("Bodrum Kat Adedi / Toplam Kat Adedi", text)
+        self.assertIn("1 / 6", text)
+        self.assertIn("Temel Alanı / Toplam İnşaat Alanı", text)
+        self.assertIn("300 m² / 1800 m²", text)
+        self.assertNotIn("Temel Tipi", text)
+        self.assertNotIn("Radye", text)
+        self.assertNotIn("Yerel Zemin Sınıfı", text)
+        self.assertNotIn("ZC", text)
 
     def test_tablo_baslik_tekrari_kapatilabilir(self):
         from docx import Document

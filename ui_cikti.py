@@ -8,6 +8,14 @@ from tkinter import Toplevel, filedialog, messagebox, ttk
 import matplotlib.pyplot as plt
 
 from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
+from geoteknik_teslim import (
+    etkin_jeofizik_serimleri,
+    ham_veri_kaynaklari,
+    ham_verileri_kopyala,
+    jeofizik_parametre_paketi_olustur,
+    sondaj_teslim_ozeti,
+    sondaj_veri_paketi_olustur,
+)
 from kalite_kontrol import build_preflight_report
 from motor import GeoEngine
 from performans import perf_tracked
@@ -45,7 +53,41 @@ CIKTI_GRUPLARI = (
     ("report_images", "04", "Rapor Görselleri", "Yerbuldurur, TKGM, PGA ve MJH görselleri"),
     ("taahhutnameler", "05", "Taahhütnameler", "Jeoloji ve jeofizik mühendisi taahhütnameleri"),
     ("ekler", "06", "Tutanak ve Ekler", "Otomatik tutanak ile birleştirilmiş Ekler PDF"),
+    ("sondaj_data", "07", "Sondaj Veri Paketi", "Sondaj, litoloji, SPT, PMT, karot ve numune tabloları"),
+    ("geophysics_data", "08", "Jeofizik Parametreleri", "[JEO_PARAMETRE] düzeninde Word ve Excel tabloları"),
+    ("source_files", "09", "Ham Veri ve Evraklar", "Evrak, LAB, jeofizik, presiyometre ve SPT kaynakları"),
 )
+
+CIKTI_PROFILLERI = ("Standart Teslim", "Geoteknik Mühendisine Teslim")
+
+
+def cikti_profili_secimleri(profile):
+    """Teslim profili secildiginde uygulanacak geriye uyumlu grup varsayilanlari."""
+    if profile == "Geoteknik Mühendisine Teslim":
+        return {
+            "report": False,
+            "logs": True,
+            "section": True,
+            "maps": True,
+            "report_images": False,
+            "taahhutnameler": False,
+            "ekler": False,
+            "sondaj_data": True,
+            "geophysics_data": True,
+            "source_files": True,
+        }
+    return {
+        "report": True,
+        "logs": True,
+        "section": True,
+        "maps": True,
+        "report_images": True,
+        "taahhutnameler": True,
+        "ekler": True,
+        "sondaj_data": False,
+        "geophysics_data": False,
+        "source_files": False,
+    }
 
 
 def cikti_merkezi_hazirlik_durumlari(veri, paths=None, preflight=None):
@@ -114,6 +156,31 @@ def cikti_merkezi_hazirlik_durumlari(veri, paths=None, preflight=None):
         if sondajlar
         else "Tutanak için sondaj kaydı gerekli"
     )
+
+    sondaj_summary = sondaj_teslim_ozeti(veri)
+    if not sondajlar:
+        sondaj_data_state, sondaj_data_detail = "danger", "Sondaj veri paketi için kayıt yok"
+    else:
+        complete_count = sum(
+            bool(item.get("no")) and (sayi_veya_none(item.get("der")) or 0) > 0 and bool(item.get("litoloji"))
+            for item in sondajlar
+        )
+        sondaj_data_state = "success" if complete_count == len(sondajlar) else "warning"
+        sondaj_data_detail = (
+            f"{len(sondajlar)} sondaj · {sondaj_summary['spt']} SPT · "
+            f"{sondaj_summary['pmt']} PMT · {sondaj_summary['kaya']} karot"
+        )
+
+    jeofizik_serimleri = etkin_jeofizik_serimleri(veri)
+    if jeofizik_serimleri:
+        geophysics_state = "success"
+        geophysics_detail = f"{len(jeofizik_serimleri)} serim Word ve Excel için hazır"
+    else:
+        geophysics_state, geophysics_detail = "danger", "Parametreli sismik serim bulunamadı"
+
+    source_paths = list(paths.get("source_files", []) or [])
+    source_state = "success" if source_paths else "warning"
+    source_detail = f"{len(source_paths)} kaynak veya klasör bulundu" if source_paths else "Bağlı ham kaynak bulunamadı"
     return {
         "report": (report_state, report_detail),
         "logs": (log_state, log_detail),
@@ -122,6 +189,9 @@ def cikti_merkezi_hazirlik_durumlari(veri, paths=None, preflight=None):
         "report_images": (image_state, image_detail),
         "taahhutnameler": (taahhut_state, taahhut_detail),
         "ekler": (ek_state, ek_detail),
+        "sondaj_data": (sondaj_data_state, sondaj_data_detail),
+        "geophysics_data": (geophysics_state, geophysics_detail),
+        "source_files": (source_state, source_detail),
     }
 
 
@@ -144,6 +214,12 @@ def cikti_merkezi_tahmini_dosya_sayisi(veri, selections, map_count=2, image_coun
         total += 2
     if selections.get("ekler"):
         total += 2
+    if selections.get("sondaj_data"):
+        total += 2
+    if selections.get("geophysics_data"):
+        total += 2
+    if selections.get("source_files"):
+        total += 1
     return total
 
 
@@ -169,11 +245,16 @@ class CiktiMerkeziMixin:
             fmt_default = "JPG"
         fmt_var = tk.StringVar(value=fmt_default)
         dpi_var = tk.StringVar(value=str(ayarlar.get("cikti_merkezi_dpi", "300") or "300"))
+        profile_default = str(ayarlar.get("cikti_merkezi_profili", CIKTI_PROFILLERI[0]) or CIKTI_PROFILLERI[0])
+        if profile_default not in CIKTI_PROFILLERI:
+            profile_default = CIKTI_PROFILLERI[0]
+        profile_var = tk.StringVar(value=profile_default)
+        profile_defaults = cikti_profili_secimleri(profile_default)
         saved_selections = ayarlar.get("cikti_merkezi_secimler", {})
         if not isinstance(saved_selections, dict):
             saved_selections = {}
         selection_vars = {
-            key: tk.BooleanVar(value=bool(saved_selections.get(key, True)))
+            key: tk.BooleanVar(value=bool(saved_selections.get(key, profile_defaults.get(key, False))))
             for key, _number, _title, _description in CIKTI_GRUPLARI
         }
         taahhut_format_default = str(ayarlar.get("cikti_taahhut_format", "Excel") or "Excel")
@@ -247,6 +328,21 @@ class CiktiMerkeziMixin:
         quick_settings.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(SPACE_MD, 0))
         tk.Label(
             quick_settings,
+            text="Teslim profili",
+            bg=COLOR_SURFACE,
+            fg=COLOR_TEXT,
+            font=FONT_UI_BODY,
+        ).pack(side="left")
+        profile_combo = ttk.Combobox(
+            quick_settings,
+            textvariable=profile_var,
+            values=CIKTI_PROFILLERI,
+            width=27,
+            state="readonly",
+        )
+        profile_combo.pack(side="left", padx=(SPACE_SM, SPACE_LG))
+        tk.Label(
+            quick_settings,
             text="Çizim formatı",
             bg=COLOR_SURFACE,
             fg=COLOR_TEXT,
@@ -281,6 +377,14 @@ class CiktiMerkeziMixin:
             width=8,
             state="readonly",
         ).pack(side="left", padx=(SPACE_SM, 0))
+
+        def apply_profile(event=None):
+            defaults = cikti_profili_secimleri(profile_var.get())
+            for key, var in selection_vars.items():
+                var.set(bool(defaults.get(key, False)))
+            update_selection_summary()
+
+        profile_combo.bind("<<ComboboxSelected>>", apply_profile)
 
         section_header = ttk.Frame(page)
         section_header.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_SM))
@@ -417,6 +521,7 @@ class CiktiMerkeziMixin:
                 "base_folder": base_folder,
                 "format": fmt_var.get().strip().lower(),
                 "dpi": dpi,
+                "profile": profile_var.get(),
                 **selections,
                 "taahhut_format": taahhut_format_var.get(),
             }
@@ -425,6 +530,7 @@ class CiktiMerkeziMixin:
             ayarlar["cikti_merkezi_klasor"] = base_folder
             ayarlar["cikti_merkezi_format"] = fmt_var.get().strip().upper()
             ayarlar["cikti_merkezi_dpi"] = str(dpi)
+            ayarlar["cikti_merkezi_profili"] = profile_var.get()
             ayarlar["cikti_taahhut_format"] = taahhut_format_var.get()
             ayarlar["cikti_merkezi_secimler"] = selections
             if not ayarlar.get("varsayilan_cikti_klasor"):
@@ -455,6 +561,7 @@ class CiktiMerkeziMixin:
             return {
                 "maps": [source for _label, source in self.cikti_merkezi_harita_kaynaklari()],
                 "report_images": [source for _label, source in self.cikti_merkezi_rapor_gorselleri()],
+                "source_files": ham_veri_kaynaklari(self.veri, getattr(self, "aktif_dosya_yolu", "") or ""),
             }
 
         def refresh_readiness():
@@ -514,6 +621,8 @@ class CiktiMerkeziMixin:
         config["veri_snapshot"] = copy.deepcopy(self.veri)
         config["map_sources"] = list(self.cikti_merkezi_harita_kaynaklari())
         config["report_image_sources"] = list(self.cikti_merkezi_rapor_gorselleri())
+        config["project_file"] = getattr(self, "aktif_dosya_yolu", "") or ""
+        config["raw_sources"] = ham_veri_kaynaklari(config["veri_snapshot"], config["project_file"])
         total = 0
         if config.get("report"):
             total += 1
@@ -528,6 +637,12 @@ class CiktiMerkeziMixin:
         if config.get("taahhutnameler"):
             total += 1
         if config.get("ekler"):
+            total += 1
+        if config.get("sondaj_data"):
+            total += 1
+        if config.get("geophysics_data"):
+            total += 1
+        if config.get("source_files"):
             total += 1
         total = max(total, 1)
 
@@ -804,6 +919,9 @@ class CiktiMerkeziMixin:
                 "report_images": os.path.join(base_folder, "04_Rapor_Gorselleri"),
                 "taahhutnameler": os.path.join(base_folder, "05_Taahhutnameler"),
                 "ekler": os.path.join(base_folder, "06_Ekler"),
+                "sondaj_data": os.path.join(base_folder, "07_Sondaj_Verileri"),
+                "geophysics_data": os.path.join(base_folder, "08_Jeofizik_Parametreleri"),
+                "source_files": os.path.join(base_folder, "09_Ham_Veriler"),
             }
             os.makedirs(base_folder, exist_ok=True)
             selected_folders = {
@@ -814,6 +932,9 @@ class CiktiMerkeziMixin:
                 "report_images": config.get("report_images"),
                 "taahhutnameler": config.get("taahhutnameler"),
                 "ekler": config.get("ekler"),
+                "sondaj_data": config.get("sondaj_data"),
+                "geophysics_data": config.get("geophysics_data"),
+                "source_files": config.get("source_files"),
             }
             for key, enabled in selected_folders.items():
                 if enabled:
@@ -951,7 +1072,55 @@ class CiktiMerkeziMixin:
                 done += 1
                 self.cikti_merkezi_progress(progress, done, "Ekler adımı tamamlandı")
 
-            quality_report = cikti_dosyalari_denetle(saved_files, veri=veri_snapshot)
+            if config.get("sondaj_data") and not is_cancelled():
+                self.cikti_merkezi_progress(progress, done, "Sondaj Word ve Excel tabloları hazırlanıyor...")
+                try:
+                    saved_files.extend(sondaj_veri_paketi_olustur(veri_snapshot, folders["sondaj_data"]))
+                except Exception as exc:
+                    errors.append(f"Sondaj Veri Paketi: {exc}")
+                done += 1
+                self.cikti_merkezi_progress(progress, done, "Sondaj veri paketi adımı tamamlandı")
+
+            if config.get("geophysics_data") and not is_cancelled():
+                self.cikti_merkezi_progress(progress, done, "Jeofizik Word ve Excel tabloları hazırlanıyor...")
+                try:
+                    saved_files.extend(
+                        jeofizik_parametre_paketi_olustur(veri_snapshot, folders["geophysics_data"])
+                    )
+                except Exception as exc:
+                    errors.append(f"Jeofizik Parametreleri: {exc}")
+                done += 1
+                self.cikti_merkezi_progress(progress, done, "Jeofizik parametre adımı tamamlandı")
+
+            if config.get("source_files") and not is_cancelled():
+                self.cikti_merkezi_progress(progress, done, "Ham veri ve evraklar kopyalanıyor...")
+                try:
+                    copied, copy_warnings = ham_verileri_kopyala(
+                        config.get("raw_sources", []), folders["source_files"]
+                    )
+                    saved_files.extend(copied)
+                    errors.extend(f"Ham Veri: {warning}" for warning in copy_warnings)
+                    if not copied:
+                        errors.append("Ham Veri: kopyalanabilecek kaynak dosya bulunamadı")
+                except Exception as exc:
+                    errors.append(f"Ham Veri ve Evraklar: {exc}")
+                done += 1
+                self.cikti_merkezi_progress(progress, done, "Ham veri adımı tamamlandı")
+
+            quality_files = list(saved_files)
+            if config.get("source_files"):
+                raw_root = os.path.normcase(os.path.abspath(folders["source_files"]))
+                filtered = []
+                for path in quality_files:
+                    try:
+                        candidate = os.path.normcase(os.path.abspath(path))
+                        if os.path.commonpath([candidate, raw_root]) == raw_root:
+                            continue
+                    except (OSError, TypeError, ValueError):
+                        pass
+                    filtered.append(path)
+                quality_files = filtered
+            quality_report = cikti_dosyalari_denetle(quality_files, veri=veri_snapshot)
             quality_manifest = os.path.join(base_folder, "RaporPro_Cikti_Kalite.json")
             kalite_manifestosu_yaz(quality_manifest, quality_report, veri=veri_snapshot)
             self.last_output_quality_report = quality_report

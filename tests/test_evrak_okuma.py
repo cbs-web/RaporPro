@@ -11,7 +11,36 @@ from evrak_okuma import (
     evrak_pdflerini_bul,
 )
 from proje_sema import proje_verisini_migre_et, varsayilan_proje_verisi
-from ui_evrak_okuma import _deger_anahtari
+from ui_evrak_okuma import EvrakOkumaMixin, _deger_anahtari
+
+
+class _BoolVar:
+    def __init__(self, value=False):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = bool(value)
+
+
+class _EvrakUiStub(EvrakOkumaMixin):
+    def __init__(self):
+        self.veri = {"bina": {}}
+        self.bina_blok_data = []
+        self.bina_blok_rows = self.bina_blok_data
+        self.bina_coklu_blok_var = _BoolVar(False)
+
+    def _bina_blok_secili_kaydet(self):
+        return None
+
+    def bina_blok_kolonlari(self):
+        return [
+            ("Blok", "blok_adi", 12),
+            ("Kat", "kat", 8),
+            ("Temel Alanı", "temel_alan", 11),
+        ]
 
 
 def _pdf_olustur(path, text):
@@ -128,3 +157,27 @@ def test_evrak_aktarim_kaydi_proje_migrasyonunda_korunur():
     migrated, _info = proje_verisini_migre_et(project)
 
     assert migrated["evrak_aktarimi"] == project["evrak_aktarimi"]
+
+
+def test_geoteknik_blok_alanlari_ayni_blok_kaydinda_birlestirilir():
+    app = _EvrakUiStub()
+
+    assert app._evrak_blok_alani_uygula(
+        {"blok_adi": "A Blok", "anahtar": "kat"},
+        "9",
+    )
+    assert app._evrak_blok_alani_uygula(
+        {"blok_adi": "A Blok", "anahtar": "temel_alan"},
+        "1.938,63",
+    )
+    assert app._evrak_blok_alani_uygula(
+        {"blok_adi": "B Blok", "anahtar": "kat"},
+        "7",
+    )
+
+    assert app.bina_coklu_blok_var.get()
+    assert app.veri["bina"]["coklu_blok"] is True
+    assert app.bina_blok_data == [
+        {"blok_adi": "A Blok", "kat": "9", "temel_alan": "1.938,63"},
+        {"blok_adi": "B Blok", "kat": "7", "temel_alan": ""},
+    ]

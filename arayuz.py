@@ -86,15 +86,11 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.task_status_var = tk.StringVar(value="İşlem: hazır")
         self.task_engine = TkTaskEngine(
             self.root,
-            status_callback=self.set_status,
+            status_callback=self._task_status_bildir,
             state_callback=self._task_engine_state_changed,
             max_workers=3,
         )
         self._startup_yonetmelik_error = None
-        try:
-            varsayilan_yonetmelikleri_hazirla()
-        except Exception as exc:
-            self._startup_yonetmelik_error = exc
         self.recent_projects = self.recent_projects_yukle()
         
         self.root.bind_all("<Button-1>", self.track_focus, add="+")
@@ -118,6 +114,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.kurtarma_durumu_bildir()
         self.root.protocol("WM_DELETE_WINDOW", self.uygulamayi_kapat)
         self.start_autosave()
+        self.root.after(300, self._varsayilan_yonetmelikleri_arka_planda_hazirla)
 
     def _tk_exception_handler(self, exc_type, exc_value, exc_tb):
         log_exception("tk.callback", exc_type, exc_value, exc_tb)
@@ -125,6 +122,25 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             self.set_status(f"Hata gunlugune yazildi: {exc_value}", level="error")
         except Exception:
             pass
+
+    def _varsayilan_yonetmelikleri_arka_planda_hazirla(self):
+        """Yerleşik yönetmelikleri ilk ekran çizildikten sonra hazırla."""
+        if getattr(self, "_closing", False):
+            return
+
+        def failed(exc):
+            self._startup_yonetmelik_error = exc
+
+        self.arka_plan_gorevi_baslat(
+            "Yerleşik yönetmelikleri hazırla",
+            varsayilan_yonetmelikleri_hazirla,
+            resource="yonetmelik",
+            cancellable=False,
+            status_start="Yerleşik yönetmelikler arka planda hazırlanıyor.",
+            status_success="Yerleşik yönetmelikler hazır.",
+            status_error="Yerleşik yönetmelikler hazırlanamadı: {error}",
+            on_error=failed,
+        )
 
     def track_focus(self, event):
         w = event.widget
@@ -457,10 +473,12 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         main_splitter.pack(fill="both", expand=True)
         top_frame = ttk.Frame(main_splitter)
         top_frame.grid_rowconfigure(0, weight=1)
+        top_frame.grid_rowconfigure(1, weight=0)
         top_frame.grid_columnconfigure(1, weight=1)
         nb = ttk.Notebook(top_frame, style="Main.TNotebook")
         self.nb = nb
         nb.grid(row=0, column=1, sticky="nsew")
+        self.bildirim_seridi_kur(top_frame, row=1, column=0, columnspan=2)
         main_splitter.add(top_frame, height=750)
         
         self.tab_ozet=ttk.Frame(nb); nb.add(self.tab_ozet, text="0. Özet"); self.p_ozet(self.tab_ozet)
@@ -875,6 +893,16 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.bina_durum_var = tk.StringVar(value="Bina bilgileri bekleniyor")
         self.bina_durum_label = ttk.Label(title_area, textvariable=self.bina_durum_var, style="Muted.TLabel")
         self.bina_durum_label.pack(anchor="w", pady=(2, 0))
+        self.bina_geoteknik_button = self.modern_button(
+            header,
+            "Geoteknik Rapordan Oku",
+            command=self.geoteknik_rapordan_veri_oku,
+            role="neutral",
+            outline=True,
+            padx=10,
+            pady=5,
+        )
+        self.bina_geoteknik_button.grid(row=0, column=1, sticky="e", padx=(0, SPACE_XS))
         self.modern_button(
             header,
             "Uygula",
@@ -882,7 +910,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             role="success",
             padx=10,
             pady=5,
-        ).grid(row=0, column=1, sticky="e")
+        ).grid(row=0, column=2, sticky="e")
         ttk.Separator(page).grid(row=1, column=0, sticky="ew", pady=(0, SPACE_SM))
 
         self.bina_notebook = ttk.Notebook(page)

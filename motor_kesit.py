@@ -27,6 +27,7 @@ from performans import log_exception
 
 from motor_interaktif import GeoInteractiveTool
 from kesit_korelasyon import (
+    build_bounded_pinch_runs,
     build_semantic_lens_tracks,
     build_section_correlations,
     normalize_section_layers,
@@ -106,6 +107,8 @@ class GeoEngineKesitMixin:
         lens_max_thickness = safe_float(options.get("lens_max_thickness", 2.0)) or 2.0
         lens_closure_ratio = safe_float(options.get("lens_closure_ratio", 0.58)) or 0.58
         lens_closure_ratio = max(0.20, min(0.90, lens_closure_ratio))
+        pinch_closure_ratio = safe_float(options.get("pinch_closure_ratio", 0.82)) or 0.82
+        pinch_closure_ratio = max(0.50, min(1.0, pinch_closure_ratio))
         manual_edits = options.get("manual_edits") or options.get("manual_polygons") or {}
         if not isinstance(manual_edits, dict):
             manual_edits = {}
@@ -464,8 +467,18 @@ class GeoEngineKesitMixin:
                 sondajlar = sorted(projected, key=lambda item: (item.get("_station", 0.0), item.get("no", "")))
                 for i, s in enumerate(sondajlar):
                     if i < len(sondajlar) - 1:
-                        s["_true_dist"] = abs(sondajlar[i+1].get("_station", 0.0) - s.get("_station", 0.0))
+                        s_next = sondajlar[i + 1]
+                        station_dist = abs(s_next.get("_station", 0.0) - s.get("_station", 0.0))
+                        s["_station_dist"] = station_dist
+                        if has_coords(s) and has_coords(s_next):
+                            y1, x1 = get_coords(s)
+                            y2, x2 = get_coords(s_next)
+                            true_dist = haversine_distance(y1, x1, y2, x2)
+                            s["_true_dist"] = true_dist if true_dist > 0 else station_dist
+                        else:
+                            s["_true_dist"] = station_dist
                     else:
+                        s["_station_dist"] = 0.0
                         s["_true_dist"] = 0.0
             else:
                 cumulative_dist = 0.0
@@ -1501,6 +1514,76 @@ class GeoEngineKesitMixin:
             matches_s1, matches_s2 = link["matches_s1"], link["matches_s2"]
             facies_s1, facies_s2 = link["facies_s1"], link["facies_s2"]
 
+            left_pinch_plans = {}
+            right_pinch_plans = {}
+            match_top_breaks = {}
+            bounded_pinch_plans = build_bounded_pinch_runs(
+                layers1,
+                layers2,
+                matches_s1,
+                matches_s2,
+                facies_s1,
+                facies_s2,
+            )
+
+            # Ayni iki sinir arasinda her iki kuyuda da fazladan tabaka varsa
+            # jeolojik iliski belirsizdir; bu durumda mevcut korumaci cizim kalir.
+            plan_counts = {}
+            for plan in bounded_pinch_plans:
+                bounds_key = (tuple(plan["upper_pair"]), tuple(plan["lower_pair"]))
+                plan_counts[bounds_key] = plan_counts.get(bounds_key, 0) + 1
+
+            def pinch_layer_is_reserved(layer_key):
+                return (
+                    layer_key in semantic_lens_layer_keys
+                    or layer_key in lens_layer_keys
+                    or layer_key in half_lens_layer_keys
+                    or layer_key in lens_host_skip_keys
+                )
+
+            for plan in bounded_pinch_plans:
+                bounds_key = (tuple(plan["upper_pair"]), tuple(plan["lower_pair"]))
+                if plan_counts.get(bounds_key) != 1:
+                    continue
+
+                source_side = plan["source_side"]
+                if source_side == "left":
+                    source_well_idx = i
+                    source_layers, target_layers = layers1, layers2
+                    source_s, target_s = s1, s2
+                    source_x, target_x = x1, x2
+                else:
+                    source_well_idx = i + 1
+                    source_layers, target_layers = layers2, layers1
+                    source_s, target_s = s2, s1
+                    source_x, target_x = x2, x1
+
+                source_keys = [
+                    (source_well_idx, int(layer_idx))
+                    for layer_idx in plan["source_indices"]
+                ]
+                boundary_keys = [
+                    (i, int(plan["upper_pair"][0])),
+                    (i + 1, int(plan["upper_pair"][1])),
+                    (i, int(plan["lower_pair"][0])),
+                    (i + 1, int(plan["lower_pair"][1])),
+                ]
+                if any(pinch_layer_is_reserved(key) for key in source_keys + boundary_keys):
+                    continue
+
+                upper_source = source_layers[int(plan["upper_source_index"])]
+                upper_target = target_layers[int(plan["upper_target_index"])]
+                source_y = source_s["_kot"] - safe_float(upper_source.get("bot"))
+                target_y = target_s["_kot"] - safe_float(upper_target.get("bot"))
+                tip_x = source_x + (target_x - source_x) * pinch_closure_ratio
+                tip_y = source_y + (target_y - source_y) * pinch_closure_ratio
+                prepared_plan = {**plan, "tip": (tip_x, tip_y)}
+
+                target_map = left_pinch_plans if source_side == "left" else right_pinch_plans
+                for layer_idx in plan["source_indices"]:
+                    target_map[int(layer_idx)] = prepared_plan
+                match_top_breaks.setdefault(tuple(plan["lower_pair"]), []).append((tip_x, tip_y))
+
             for idx1, idx2 in matches_s1.items():
                 if (
                     (i, idx1) in semantic_lens_layer_keys
@@ -1511,8 +1594,19 @@ class GeoEngineKesitMixin:
                     continue
                 l1, l2 = layers1[idx1], layers2[idx2]
                 stil = next((item for item in LEJANTLAR if item["kod"] == l1['code']), LEJANTLAR[-1])
-                verts = [(x1, s1["_kot"] - l1['top']), (x2, s2["_kot"] - l2['top']), (x2, s2["_kot"] - l2['bot']), (x1, s1["_kot"] - l1['bot'])]
+                top_breaks = sorted(
+                    match_top_breaks.get((idx1, idx2), []),
+                    key=lambda point: point[0],
+                )
+                verts = (
+                    [(x1, s1["_kot"] - l1['top'])]
+                    + top_breaks
+                    + [(x2, s2["_kot"] - l2['top'])]
+                    + [(x2, s2["_kot"] - l2['bot']), (x1, s1["_kot"] - l1['bot'])]
+                )
                 poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.6, zorder=10)
+                if top_breaks:
+                    poly._geo_priority_role = "host"
                 edit_id = f"match:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{idx2}:{l1['code']}"
                 register_geo_poly(
                     poly,
@@ -1588,8 +1682,20 @@ class GeoEngineKesitMixin:
                 if idx1 not in matches_s1 and idx1 not in facies_s1:
                     stil = next((item for item in LEJANTLAR if item["kod"] == l1['code']), LEJANTLAR[-1])
                     y1t, y1b = s1["_kot"] - l1['top'], s1["_kot"] - l1['bot']
-                    verts = [(x1, y1t), (x2, (y1t+y1b)/2), (x1, y1b)]
-                    poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.45, zorder=8)
+                    pinch_plan = left_pinch_plans.get(idx1)
+                    tip = pinch_plan.get("tip") if pinch_plan else (x2, (y1t + y1b) / 2)
+                    verts = [(x1, y1t), tip, (x1, y1b)]
+                    poly = mpatches.Polygon(
+                        verts,
+                        closed=True,
+                        facecolor=stil["zemin"],
+                        edgecolor='gray',
+                        alpha=1.0 if pinch_plan else 0.45,
+                        zorder=10.2 if pinch_plan else 8,
+                    )
+                    if pinch_plan:
+                        poly._geo_pinch_tip = tuple(tip)
+                        poly._geo_priority_role = "pinch"
                     edit_id = f"pinch-left:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx1}:{l1['code']}"
                     register_geo_poly(
                         poly,
@@ -1611,8 +1717,20 @@ class GeoEngineKesitMixin:
                 if idx2 not in matches_s2 and idx2 not in facies_s2:
                     stil = next((item for item in LEJANTLAR if item["kod"] == l2['code']), LEJANTLAR[-1])
                     y2t, y2b = s2["_kot"] - l2['top'], s2["_kot"] - l2['bot']
-                    verts = [(x2, y2t), (x1, (y2t+y2b)/2), (x2, y2b)]
-                    poly = mpatches.Polygon(verts, closed=True, facecolor=stil["zemin"], edgecolor='gray', alpha=0.45, zorder=8)
+                    pinch_plan = right_pinch_plans.get(idx2)
+                    tip = pinch_plan.get("tip") if pinch_plan else (x1, (y2t + y2b) / 2)
+                    verts = [(x2, y2t), tip, (x2, y2b)]
+                    poly = mpatches.Polygon(
+                        verts,
+                        closed=True,
+                        facecolor=stil["zemin"],
+                        edgecolor='gray',
+                        alpha=1.0 if pinch_plan else 0.45,
+                        zorder=10.2 if pinch_plan else 8,
+                    )
+                    if pinch_plan:
+                        poly._geo_pinch_tip = tuple(tip)
+                        poly._geo_priority_role = "pinch"
                     edit_id = f"pinch-right:{s1.get('no','SK')}:{s2.get('no','SK')}:{idx2}:{l2['code']}"
                     register_geo_poly(
                         poly,

@@ -18,6 +18,7 @@ from spt_gorsel import (
 )
 from spt_okuma_motoru import (
     SPTKaydi,
+    _json_liste_ayikla,
     _path_unique_key,
     _select_spt_records_for_batch,
     fotograflardan_spt_oku,
@@ -30,6 +31,13 @@ from ui_spt_okuma_kuyruk import SPTFotografKuyrugu
 
 
 class SPTMerkeziGuvenilirlikTestleri(unittest.TestCase):
+    def test_yeni_json_items_zarfi_ve_eski_liste_bicimi_okunur(self):
+        wrapped = _json_liste_ayikla('{"items":[{"derinlik":"1.50","spt":"2-3-4"}]}')
+        legacy = _json_liste_ayikla('[{"derinlik":"3.00","spt":"4-5-6"}]')
+
+        self.assertEqual(wrapped[0]["derinlik"], "1.50")
+        self.assertEqual(legacy[0]["derinlik"], "3.00")
+
     def test_tek_fotograftan_yalnizca_bir_aday_secilir(self):
         path = r"C:\tmp\DSCF0001.JPG"
         records = [
@@ -215,7 +223,7 @@ class SPTMerkeziGuvenilirlikTestleri(unittest.TestCase):
                 "derinlik": "1.50",
                 "spt": "2-3-4",
                 "guven": 60,
-                "_motor": "openai",
+                "_motor": "gemini",
             }]
             with patch.object(
                 motor,
@@ -225,14 +233,16 @@ class SPTMerkeziGuvenilirlikTestleri(unittest.TestCase):
                 result = fotograflardan_spt_oku(
                     [path],
                     ayarlar={
-                        "aktif_motor": "openai",
-                        "gemini_api_key": "test",
+                        "aktif_motor": "gemini",
+                        "gemini_api_key": "gemini-test",
+                        "openai_api_key": "openai-test",
                     },
                     auto_pro=True,
                     guven_esigi=80,
                 )
 
         self.assertEqual(reader.call_count, 2)
+        self.assertEqual(reader.call_args_list[1].kwargs["motor_zorla"], "openai")
         self.assertEqual(len(result.kayitlar), 1)
         self.assertEqual(result.kayitlar[0].n30, "7")
         self.assertTrue(result.kayitlar[0].raw["_pro_sonucu_kullanilmadi"])
@@ -255,8 +265,9 @@ class SPTMerkeziGuvenilirlikTestleri(unittest.TestCase):
                 result = fotograflardan_spt_oku(
                     [path],
                     ayarlar={
-                        "aktif_motor": "openai",
-                        "gemini_api_key": "test",
+                        "aktif_motor": "gemini",
+                        "gemini_api_key": "gemini-test",
+                        "openai_api_key": "openai-test",
                     },
                     auto_pro=True,
                     guven_esigi=50,
@@ -274,7 +285,7 @@ class SPTMerkeziGuvenilirlikTestleri(unittest.TestCase):
                 "derinlik": "1.50",
                 "spt": "2-3-4",
                 "guven": 95,
-                "_motor": "gemini_pro",
+                "_motor": "openai",
             }]
             with patch.object(
                 motor,
@@ -284,16 +295,54 @@ class SPTMerkeziGuvenilirlikTestleri(unittest.TestCase):
                 result = fotograflardan_spt_oku(
                     [path],
                     ayarlar={
-                        "aktif_motor": "openai",
-                        "gemini_api_key": "test",
+                        "aktif_motor": "gemini",
+                        "gemini_api_key": "gemini-test",
+                        "openai_api_key": "openai-test",
                     },
                     auto_pro=True,
                     guven_esigi=80,
                 )
 
         self.assertEqual(reader.call_count, 2)
+        self.assertEqual(reader.call_args_list[1].kwargs["motor_zorla"], "openai")
         self.assertEqual(len(result.kayitlar), 1)
         self.assertEqual(result.kayitlar[0].n30, "7")
+
+    def test_openai_ana_motorunda_ikinci_okuma_terra_ile_yapilir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "SK-1_test.jpg")
+            Path(path).write_bytes(b"test")
+            first = [{
+                "sondaj_no": "SK-1",
+                "derinlik": "1.50",
+                "spt": "2-3-4",
+                "guven": 50,
+                "_motor": "openai",
+            }]
+            second = [{
+                "sondaj_no": "SK-1",
+                "derinlik": "1.50",
+                "spt": "2-3-4",
+                "guven": 95,
+                "_motor": "openai_pro",
+            }]
+            with patch.object(
+                motor,
+                "yapay_zeka_ile_spt_oku",
+                side_effect=[first, second],
+            ) as reader:
+                result = fotograflardan_spt_oku(
+                    [path],
+                    ayarlar={
+                        "aktif_motor": "openai",
+                        "openai_api_key": "openai-test",
+                    },
+                    auto_pro=True,
+                    guven_esigi=80,
+                )
+
+        self.assertEqual(reader.call_args_list[1].kwargs["motor_zorla"], "openai_pro")
+        self.assertEqual(result.kayitlar[0].raw["_motor"], "openai_pro")
 
     def test_gecici_api_hatasi_yeniden_denenir(self):
         class Response:

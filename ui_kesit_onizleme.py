@@ -1121,6 +1121,7 @@ class KesitOnizlemeMixin:
                 ("Kuyu genişliği", "well_width", "2.0"),
                 ("Mercek max. kalınlık", "lens_max_thickness", "2.0"),
                 ("Mercek kapanma", "lens_closure_ratio", "0.58"),
+                ("Kamalanma kapanma", "pinch_closure_ratio", "0.82"),
                 ("Genel tarama", "section_pattern_density", "10.0"),
                 ("Kil tarama", "clay_pattern_density", ""),
                 ("Silt tarama", "silt_pattern_density", ""),

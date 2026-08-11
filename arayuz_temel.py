@@ -453,6 +453,197 @@ class ArayuzTemelMixin:
             kwargs["compound"] = "left"
         return self._attach_button_icon(tk.Button(parent, text=text, command=command, **kwargs), image)
 
+    def bildirim_seridi_kur(self, parent, row=1, column=0, columnspan=2):
+        """Ana pencere içinde modal olmayan ortak bildirim şeridini oluştur."""
+        self._bildirim_after_id = None
+        self._bildirim_action = None
+        self._bildirim_title_var = tk.StringVar(value="")
+        self._bildirim_message_var = tk.StringVar(value="")
+
+        frame = tk.Frame(
+            parent,
+            bg=COLOR_ACCENT_SOFT,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=COLOR_ACCENT,
+            height=38,
+        )
+        frame.grid(row=row, column=column, columnspan=columnspan, sticky="ew")
+        frame.grid_columnconfigure(2, weight=1)
+        frame.grid_propagate(False)
+        self._bildirim_frame = frame
+
+        self._bildirim_indicator = tk.Frame(frame, width=5, bg=COLOR_ACCENT)
+        self._bildirim_indicator.grid(row=0, column=0, sticky="ns")
+        self._bildirim_indicator.grid_propagate(False)
+        self._bildirim_title = tk.Label(
+            frame,
+            textvariable=self._bildirim_title_var,
+            bg=COLOR_ACCENT_SOFT,
+            fg=COLOR_PRIMARY,
+            font=FONT_UI_BODY_BOLD,
+            anchor="w",
+        )
+        self._bildirim_title.grid(row=0, column=1, sticky="w", padx=(10, 8))
+        self._bildirim_message = tk.Label(
+            frame,
+            textvariable=self._bildirim_message_var,
+            bg=COLOR_ACCENT_SOFT,
+            fg=COLOR_TEXT,
+            font=FONT_UI_BODY,
+            anchor="w",
+            width=1,
+        )
+        self._bildirim_message.grid(row=0, column=2, sticky="ew", pady=6)
+        self._bildirim_action_button = tk.Button(
+            frame,
+            text="",
+            command=self._bildirim_action_calistir,
+            bg=COLOR_ACCENT_SOFT,
+            fg=COLOR_PRIMARY,
+            activebackground=COLOR_SURFACE,
+            activeforeground=COLOR_PRIMARY,
+            relief="flat",
+            bd=0,
+            font=FONT_UI_BODY_BOLD,
+            cursor="hand2",
+        )
+        self._bildirim_action_button.grid(row=0, column=3, padx=(8, 2), pady=3)
+        self._bildirim_action_button.grid_remove()
+        close_button = tk.Button(
+            frame,
+            text="×",
+            command=self.bildirim_gizle,
+            bg=COLOR_ACCENT_SOFT,
+            fg=COLOR_TEXT_MUTED,
+            activebackground=COLOR_SURFACE,
+            activeforeground=COLOR_PRIMARY,
+            relief="flat",
+            bd=0,
+            width=3,
+            font=("Segoe UI", 12),
+            cursor="hand2",
+        )
+        close_button.grid(row=0, column=4, padx=(2, 4), pady=2)
+        self._bildirim_close_button = close_button
+        self.tooltip_ekle(close_button, "Bildirimi kapat")
+        frame.grid_remove()
+
+    def _bildirim_action_calistir(self):
+        action = getattr(self, "_bildirim_action", None)
+        self.bildirim_gizle()
+        if callable(action):
+            try:
+                action()
+            except Exception as exc:
+                self.set_status(f"Bildirim işlemi çalıştırılamadı: {exc}", level="error")
+
+    def bildirim_gizle(self):
+        after_id = getattr(self, "_bildirim_after_id", None)
+        if after_id:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+        self._bildirim_after_id = None
+        self._bildirim_action = None
+        frame = getattr(self, "_bildirim_frame", None)
+        if frame is not None:
+            try:
+                frame.grid_remove()
+            except Exception:
+                pass
+
+    def bildirim_goster(
+        self,
+        message,
+        level="info",
+        title=None,
+        duration=None,
+        action_text=None,
+        action=None,
+        log=True,
+    ):
+        """Kullanıcıya akışı kesmeden ortak bildirim şeridinde geri bildirim ver."""
+        if getattr(self, "_closing", False):
+            return
+        if threading.current_thread() is not threading.main_thread():
+            try:
+                self.root.after(
+                    0,
+                    lambda: self.bildirim_goster(
+                        message,
+                        level=level,
+                        title=title,
+                        duration=duration,
+                        action_text=action_text,
+                        action=action,
+                        log=log,
+                    ),
+                )
+            except Exception:
+                pass
+            return
+
+        text = " ".join(str(message or "").split())
+        if len(text) > 240:
+            text = text[:237].rstrip() + "..."
+        if log:
+            self.set_status(text, level=level)
+
+        frame = getattr(self, "_bildirim_frame", None)
+        if frame is None:
+            return
+        palette = {
+            "success": ("Tamamlandı", COLOR_SUCCESS, COLOR_SUCCESS_SOFT),
+            "warning": ("Dikkat", COLOR_WARNING, COLOR_WARNING_SOFT),
+            "error": ("Hata", COLOR_DANGER, COLOR_DANGER_SOFT),
+            "info": ("Bilgi", COLOR_ACCENT, COLOR_ACCENT_SOFT),
+        }
+        default_title, color, background = palette.get(level, palette["info"])
+        self._bildirim_title_var.set(title or default_title)
+        self._bildirim_message_var.set(text)
+        frame.configure(bg=background, highlightbackground=color)
+        self._bildirim_indicator.configure(bg=color)
+        self._bildirim_title.configure(bg=background, fg=color)
+        self._bildirim_message.configure(bg=background)
+        self._bildirim_action_button.configure(bg=background, activebackground=COLOR_SURFACE)
+        self._bildirim_close_button.configure(bg=background, activebackground=COLOR_SURFACE)
+        self._bildirim_action = action if callable(action) else None
+        if self._bildirim_action and action_text:
+            self._bildirim_action_button.configure(text=str(action_text))
+            self._bildirim_action_button.grid()
+        else:
+            self._bildirim_action_button.grid_remove()
+        frame.grid()
+        frame.lift()
+
+        old_after = getattr(self, "_bildirim_after_id", None)
+        if old_after:
+            try:
+                self.root.after_cancel(old_after)
+            except Exception:
+                pass
+        if duration is None:
+            duration = 8000 if level in {"warning", "error"} else 5000
+        self._bildirim_after_id = (
+            self.root.after(max(1000, int(duration)), self.bildirim_gizle)
+            if duration and int(duration) > 0
+            else None
+        )
+
+    def _task_status_bildir(self, message, level="info"):
+        """Görev motoru durumunu günlüğe ve gerekli olduğunda bildirim şeridine aktar."""
+        self.set_status(message, level=level)
+        if level == "error":
+            self.bildirim_goster(
+                message,
+                level=level,
+                action_text="Görevleri Aç",
+                action=self.gorev_merkezi_penceresi,
+                log=False,
+            )
+
     def set_status(self, msg, level="info"):
         if getattr(self, "_closing", False):
             return
@@ -505,7 +696,13 @@ class ArayuzTemelMixin:
                 detail = ""
                 if first is not None:
                     if getattr(first, "total", 0):
-                        detail = f" · {first.name} {first.completed:g}/{first.total:g}"
+                        percent = getattr(first, "progress_percent", None)
+                        percent_text = (
+                            f"%{percent:.0f}"
+                            if percent is not None
+                            else f"{first.completed:g}/{first.total:g}"
+                        )
+                        detail = f" · {first.name} {percent_text}"
                     else:
                         detail = f" · {first.name}"
                 self.task_status_var.set(f"İşlem: {active} görev{detail}")

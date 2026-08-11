@@ -1283,7 +1283,11 @@ class SondajMixin:
                 fmt = ext.lstrip(".").lower() or "jpg"
                 fmt = "jpg" if fmt in ("jpeg", "jpe") else fmt
                 for i, fg in enumerate(figs): save_path = f"{base}_Sayfa{i+1}{ext}" if len(figs)>1 else path; fg.savefig(save_path, dpi=DEFAULT_EXPORT_DPI, bbox_inches='tight', format=fmt)
-                messagebox.showinfo("Başarılı", "Log kaydedildi.")
+                self.bildirim_goster(
+                    f"{len(figs)} log sayfası kaydedildi: {os.path.basename(path)}",
+                    level="success",
+                    title="Sondaj Logu",
+                )
         tk.Button(top_bar, text="Bu Logu Kaydet", bg=COLOR_WARNING, fg="white", font=FONT_BOLD, command=save_this_log).pack(pady=5)
 
     def _guvenli_dosya_adi(self, value, fallback="dosya"):
@@ -1473,7 +1477,12 @@ class SondajMixin:
             except Exception:
                 pass
             if level == "success":
-                messagebox.showinfo("Toplu Log Kaydet", message)
+                self.bildirim_goster(
+                    message,
+                    level="success",
+                    title="Toplu Log Kaydet",
+                    log=False,
+                )
             elif level == "warning":
                 messagebox.showwarning("Toplu Log Kaydet", message)
             else:

@@ -1,5 +1,5 @@
 # Dosya: RaporPro/ui_evrak_okuma.py
-"""İmar ve zemin durum belgelerinden kontrollü veri aktarımı arayüzü."""
+"""İmar, zemin durum ve geoteknik raporlardan kontrollü veri aktarımı arayüzü."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from evrak_okuma import EvrakOkumaHatasi, evrak_klasorunu_oku
+from geoteknik_rapor_okuma import GeoteknikRaporOkumaHatasi, geoteknik_raporu_oku
 from jeoloji_raporu import (
     DURUM_ALUVYON,
     JEOLOJI_BIRIM_KATALOGU,
@@ -27,7 +28,7 @@ def _deger_anahtari(value):
 
 
 class EvrakOkumaMixin:
-    """Evrak klasörünü tarar, bulunan değerleri onayla birlikte uygular."""
+    """Belgeleri tarar, bulunan değerleri kullanıcı onayıyla projeye uygular."""
 
     def _evrak_baslangic_klasoru(self):
         saved = (
@@ -101,9 +102,86 @@ class EvrakOkumaMixin:
             resource="evrak_ocr",
         )
 
+    def geoteknik_rapordan_veri_oku(self):
+        """Geoteknik PDF/DOCX raporundan onaylanabilir yapı bilgileri çıkar."""
+        saved = self.veri.get("geoteknik_rapor_aktarimi", {}).get("son_dosya", "")
+        initial_dir = (
+            os.path.dirname(saved)
+            if saved and os.path.isfile(saved)
+            else self._evrak_baslangic_klasoru()
+        )
+        path = filedialog.askopenfilename(
+            title="Geoteknik Raporu Seçin",
+            initialdir=initial_dir,
+            filetypes=(
+                ("Geoteknik rapor", "*.pdf *.docx"),
+                ("PDF", "*.pdf"),
+                ("Word", "*.docx"),
+                ("Tüm dosyalar", "*.*"),
+            ),
+        )
+        if not path:
+            return
+
+        button = getattr(self, "bina_geoteknik_button", None)
+        if button is not None:
+            try:
+                button.configure(state="disabled")
+            except tk.TclError:
+                pass
+
+        def restore_button():
+            if button is not None:
+                try:
+                    button.configure(state="normal")
+                except tk.TclError:
+                    pass
+
+        def show_error(error):
+            if isinstance(error, GeoteknikRaporOkumaHatasi):
+                messagebox.showwarning(
+                    "Geoteknik Rapordan Oku",
+                    str(error),
+                    parent=self.root,
+                )
+            else:
+                messagebox.showerror(
+                    "Geoteknik Rapordan Oku",
+                    f"Rapor okunurken beklenmeyen bir hata oluştu:\n\n{error}",
+                    parent=self.root,
+                )
+
+        self.arka_plan_gorevi_baslat(
+            "Geoteknik rapordan yapı bilgilerini oku",
+            geoteknik_raporu_oku,
+            path,
+            on_success=self.evrak_okuma_sonuc_penceresi,
+            on_error=show_error,
+            on_done=restore_button,
+            status_start="Geoteknik rapordaki yapı bilgileri okunuyor...",
+            status_success="Geoteknik rapor okundu; aktarılacak alanları seçin.",
+            status_error="Geoteknik rapor okunamadı: {error}",
+            with_context=True,
+            cancellable=True,
+            resource="evrak_ocr",
+        )
+
+    def _evrak_blok_indeksi(self, block_name):
+        expected = _deger_anahtari(block_name)
+        for index, block in enumerate(getattr(self, "bina_blok_data", [])):
+            if _deger_anahtari(block.get("blok_adi", "")) == expected:
+                return index
+        return None
+
     def _evrak_mevcut_deger(self, field):
         section = field.get("bolum", "")
         key = field.get("anahtar", "")
+        if section == "bina_blok":
+            self._bina_blok_secili_kaydet()
+            index = self._evrak_blok_indeksi(field.get("blok_adi", ""))
+            if index is None:
+                return ""
+            return str(self.bina_blok_data[index].get(key, "") or "").strip()
         stores = {
             "kunye": getattr(self, "e_kunye", {}),
             "bina": getattr(self, "e_bina", {}),
@@ -155,12 +233,36 @@ class EvrakOkumaMixin:
         )
         return True
 
+    def _evrak_blok_alani_uygula(self, field, value):
+        block_name = str(field.get("blok_adi", "") or "").strip()
+        key = str(field.get("anahtar", "") or "").strip()
+        if not block_name or not key:
+            return False
+
+        index = self._evrak_blok_indeksi(block_name)
+        if index is None:
+            allowed_keys = [item[1] for item in self.bina_blok_kolonlari()]
+            block = {item: "" for item in allowed_keys}
+            block["blok_adi"] = block_name
+            self.bina_blok_data.append(block)
+            self.bina_blok_rows = self.bina_blok_data
+            index = len(self.bina_blok_data) - 1
+        current = str(self.bina_blok_data[index].get(key, "") or "").strip()
+        if current and _deger_anahtari(current) == _deger_anahtari(value):
+            return False
+        self.bina_blok_data[index][key] = value
+        self.bina_coklu_blok_var.set(True)
+        self.veri.setdefault("bina", {})["coklu_blok"] = True
+        return True
+
     def _evrak_alani_uygula(self, field):
         section = field.get("bolum", "")
         key = field.get("anahtar", "")
         value = str(field.get("deger", "") or "").strip()
         if not section or not key or not value:
             return False
+        if section == "bina_blok":
+            return self._evrak_blok_alani_uygula(field, value)
         if section == "jeoloji":
             return self._evrak_jeoloji_birimi_ekle(key)
         self._evrak_widgete_yaz(section, key, value)
@@ -168,15 +270,18 @@ class EvrakOkumaMixin:
         return True
 
     def _evrak_secimleri_uygula(self, window, result, selections):
+        dialog_title = result.get("pencere_basligi", "Evraklardan Veri Aktar")
         selected = [field for variable, field in selections if variable.get()]
         if not selected:
             messagebox.showinfo(
-                "Evraklardan Veri Aktar",
+                dialog_title,
                 "Aktarılacak bir alan seçilmedi.",
                 parent=window,
             )
             return
 
+        if any(field.get("bolum") == "bina_blok" for field in selected):
+            self._bina_blok_secili_kaydet()
         applied = []
         for field in selected:
             if self._evrak_alani_uygula(field):
@@ -184,15 +289,24 @@ class EvrakOkumaMixin:
 
         if not applied:
             messagebox.showinfo(
-                "Evraklardan Veri Aktar",
+                dialog_title,
                 "Seçilen bilgiler projede zaten aynı değerlerle bulunuyor.",
                 parent=window,
             )
             return
 
+        block_fields_applied = any(field.get("bolum") == "bina_blok" for field in applied)
+        if block_fields_applied:
+            self.bina_blok_secili_idx = None
+            self._bina_blok_listesi_yenile()
+            if self.bina_blok_data:
+                self.bina_blok_satir_sec(0)
+            self.bina_blok_modu_guncelle(create_default=False)
         self.guncelle_veri_objesi(silent=True)
-        self.veri["evrak_aktarimi"] = {
+        transfer_key = result.get("aktarim_anahtari", "evrak_aktarimi")
+        self.veri[transfer_key] = {
             "son_klasor": result.get("klasor", ""),
+            "son_dosya": result.get("dosya", ""),
             "son_tarih": datetime.datetime.now().isoformat(timespec="seconds"),
             "belgeler": result.get("belgeler", []),
             "uygulanan_alanlar": [
@@ -213,13 +327,20 @@ class EvrakOkumaMixin:
             self.jeolojik_birimler_kaydedildi()
         elif hasattr(self, "ozet_yenile"):
             self.ozet_yenile(collect=False)
+        if block_fields_applied and hasattr(self, "bina_notebook"):
+            self.bina_notebook.select(self.bina_blocks_tab)
+        source_label = (
+            "Geoteknik rapordan"
+            if transfer_key == "geoteknik_rapor_aktarimi"
+            else "Evraklardan"
+        )
         self.set_status(
-            f"Evraklardan {len(applied)} alan projeye aktarıldı.",
+            f"{source_label} {len(applied)} alan projeye aktarıldı.",
             level="success",
         )
         window.destroy()
         messagebox.showinfo(
-            "Evraklardan Veri Aktar",
+            dialog_title,
             f"{len(applied)} alan projeye aktarıldı.\n\n"
             "Dolu ve farklı alanlar yalnızca özellikle seçildiyse değiştirildi.",
             parent=self.root,
@@ -227,9 +348,10 @@ class EvrakOkumaMixin:
 
     def evrak_okuma_sonuc_penceresi(self, result):
         fields = result.get("alanlar", [])
+        dialog_title = result.get("pencere_basligi", "Evraklardan Veri Aktar")
         if not fields:
             messagebox.showwarning(
-                "Evraklardan Veri Oku",
+                dialog_title,
                 "Belgelerde aktarılabilecek bir alan bulunamadı.",
                 parent=self.root,
             )
@@ -238,7 +360,7 @@ class EvrakOkumaMixin:
         window = tk.Toplevel(self.root)
         self.pencere_hazirla(
             window,
-            "Evraklardan Veri Aktar",
+            dialog_title,
             "1220x760",
             (860, 560),
             modal=True,
@@ -251,7 +373,7 @@ class EvrakOkumaMixin:
         header.columnconfigure(0, weight=1)
         ttk.Label(
             header,
-            text="İmar ve Zemin Durum Belgesi Sonuçları",
+            text=result.get("sonuc_basligi", "İmar ve Zemin Durum Belgesi Sonuçları"),
             style="PageTitle.TLabel",
         ).grid(row=0, column=0, sticky="w")
         document_names = ", ".join(
@@ -296,10 +418,11 @@ class EvrakOkumaMixin:
             proposed = str(field.get("deger", "") or "").strip()
             same = bool(current) and _deger_anahtari(current) == _deger_anahtari(proposed)
             conflict = bool(current) and not same
-            variable = tk.BooleanVar(value=not current)
+            source_warning = bool(field.get("uyari") or field.get("alternatifler"))
+            variable = tk.BooleanVar(value=not current and not source_warning)
             selections.append((variable, field))
 
-            background = "#FFF4E5" if conflict else ("#F3F6F7" if same else "#EDF8F1")
+            background = "#FFF4E5" if conflict or source_warning else ("#F3F6F7" if same else "#EDF8F1")
             row_frame = tk.Frame(inner, bg=background, bd=0)
             row_frame.grid(
                 row=row,
@@ -345,6 +468,8 @@ class EvrakOkumaMixin:
             alternatives = field.get("alternatifler", []) or []
             if alternatives:
                 alternative_text = f"\nDiğer okuma: {', '.join(alternatives)}"
+            if field.get("uyari"):
+                alternative_text += f"\nKontrol: {field['uyari']}"
             tk.Label(
                 row_frame,
                 text=proposed + alternative_text,
@@ -375,13 +500,14 @@ class EvrakOkumaMixin:
         footer.columnconfigure(0, weight=1)
         ttk.Label(
             footer,
-            text="Yeşil satırlar boş alanları, turuncu satırlar mevcut değerle farkı gösterir.",
+            text="Yeşil satırlar boş alanları; turuncu satırlar mevcut değer farkını veya kaynak çelişkisini gösterir.",
             style="Muted.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
         def select_empty():
             for variable, field in selections:
-                variable.set(not bool(self._evrak_mevcut_deger(field)))
+                source_warning = bool(field.get("uyari") or field.get("alternatifler"))
+                variable.set(not bool(self._evrak_mevcut_deger(field)) and not source_warning)
 
         def select_all():
             for variable, _field in selections:

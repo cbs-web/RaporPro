@@ -12,7 +12,13 @@ from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
 from jeofizik_sheet_motoru import jeofizik_sheet_rapora_hazir_mi
 from rapor_metin_revizyon import metin_revizyon_analiz_et, metin_revizyonlari_uygula
 from rapor_revizyon import revizyonlu_rapor_olustur
-from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
+from rapor_sablonu import (
+    RAPOR_SABLON_PROFILI_DARDANOS_CINARLI,
+    RAPOR_SABLON_PROFILI_GENEL,
+    etkin_rapor_sablonu_yolu,
+    proje_rapor_sablon_profili,
+    rapor_sablonu_durumu,
+)
 from sabitler import (
     COLOR_BG,
     COLOR_BORDER,
@@ -70,6 +76,10 @@ from ui_rapor_bilgileri import RaporBilgileriMixin
 
 
 class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
+    def rapor_sablon_profili(self):
+        """Açık projede seçili dahili rapor şablonu profilini döndür."""
+        return proje_rapor_sablon_profili(getattr(self, "veri", {}))
+
     def dis_ai_veri_aktarim_onayi(self, motor, veri_turu, parent=None):
         """Dış AI kullanımında sağlayıcı ve gönderilecek veriyi bir kez açıkla."""
         selected = str(motor or "otomatik").strip().lower()
@@ -89,7 +99,6 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
             "openai": "OpenAI",
             "gemini": "Google Gemini",
             "gemini_pro": "Google Gemini",
-            "groq": "Groq",
         }
         provider_label = provider_labels.get(provider, provider)
         approval_key = (provider, str(veri_turu))
@@ -132,7 +141,12 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
         def file_ready(path):
             return bool(path and os.path.isfile(path))
 
-        template_ready = bool(rapor_sablonu_durumu(getattr(self, "word_path", None)).get("ready"))
+        template_ready = bool(
+            rapor_sablonu_durumu(
+                getattr(self, "word_path", None),
+                self.rapor_sablon_profili(),
+            ).get("ready")
+        )
         lab_rows = self.veri.get("lab_sheet", {}).get("rows", []) if isinstance(getattr(self, "veri", None), dict) else []
         lab_sheet_ready = any(any(str(cell).strip() for cell in row) for row in lab_rows or [])
         lab_ready = lab_sheet_ready or file_ready(getattr(self, "lab_excel_path", None))
@@ -201,7 +215,10 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
 
     def rapor_sablon_etiketini_guncelle(self):
         """Etkin rapor şablonunu arayüzde kaynak türüyle birlikte göster."""
-        info = rapor_sablonu_durumu(getattr(self, "word_path", None))
+        info = rapor_sablonu_durumu(
+            getattr(self, "word_path", None),
+            self.rapor_sablon_profili(),
+        )
         if hasattr(self, "lbl_sab"):
             text = info.get("label", "Dahili şablon bulunamadı")
             if info.get("fallback"):
@@ -212,19 +229,30 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
             self.rapor_durum_guncelle()
         return info
 
-    def dahili_rapor_sablonunu_kullan(self):
-        """Projedeki özel şablon seçimini kaldırıp dahili şablona dön."""
+    def rapor_sablon_profilini_kullan(self, profil):
+        """Özel şablonu kaldırıp seçilen dahili şablon profilini projeye kaydet."""
         self.word_path = None
         self.veri.setdefault("dosyalar", {})["word_path"] = None
-        self.veri.setdefault("ayarlar", {})["varsayilan_word_path"] = ""
+        ayarlar = self.veri.setdefault("ayarlar", {})
+        ayarlar["varsayilan_word_path"] = ""
+        ayarlar["rapor_sablon_profili"] = profil
         info = self.rapor_sablon_etiketini_guncelle()
         if hasattr(self, "ozet_yenile"):
             self.ozet_yenile(collect=False)
         if info.get("ready"):
-            self.set_status("Dahili rapor şablonu kullanılacak.", level="success")
+            label = str(info.get("label") or "Dahili rapor şablonu").removesuffix(" hazır")
+            self.set_status(f"{label} kullanılacak.", level="success")
         else:
             self.set_status("Dahili rapor şablonu bulunamadı.", level="error")
         self.rapor_etiketlerini_guncelle()
+
+    def dahili_rapor_sablonunu_kullan(self):
+        """Projedeki özel şablon seçimini kaldırıp genel dahili şablona dön."""
+        self.rapor_sablon_profilini_kullan(RAPOR_SABLON_PROFILI_GENEL)
+
+    def dardanos_cinarli_rapor_sablonunu_kullan(self):
+        """Onaylı rapora dayanan Dardanos-Çınarlı şablonunu projede etkinleştir."""
+        self.rapor_sablon_profilini_kullan(RAPOR_SABLON_PROFILI_DARDANOS_CINARLI)
 
     def p_rapor(self, p):
         page = ttk.Frame(p, padding=(16, 12))
@@ -428,7 +456,8 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
             "Dahili şablon hazırlanıyor",
             [
                 ("Özel Seç", self.sablon_sec, "secondary", True),
-                ("Dahili Kullan", self.dahili_rapor_sablonunu_kullan, "accent", True),
+                ("Genel", self.dahili_rapor_sablonunu_kullan, "accent", True),
+                ("Dardanos-Çınarlı", self.dardanos_cinarli_rapor_sablonunu_kullan, "accent", True),
             ],
         )
         source_row(
@@ -1167,7 +1196,12 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
             status_start="Grafik dışa aktarımı arka planda başlatıldı.",
             status_success="Grafik dışa aktarımı tamamlandı.",
             status_error="Grafik dışa aktarımı tamamlanamadı: {error}",
-            on_success=lambda path: messagebox.showinfo("Başarılı", f"Tüm grafikler kaydedildi:\n{path}"),
+            on_success=lambda path: self.bildirim_goster(
+                f"Tüm grafikler kaydedildi: {path}",
+                level="success",
+                title="Grafik Dışa Aktarımı",
+                log=False,
+            ),
             on_error=lambda exc: messagebox.showerror("Hata", str(exc)),
         )
 
@@ -2821,7 +2855,10 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
     def rapor_arka_plan_context(self):
         return rapor_baglami_olustur(
             self,
-            word_path=etkin_rapor_sablonu_yolu(self.word_path),
+            word_path=etkin_rapor_sablonu_yolu(
+                self.word_path,
+                self.rapor_sablon_profili(),
+            ),
         )
 
     @perf_tracked("report.generate.engine")

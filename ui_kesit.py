@@ -125,6 +125,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             norm(options.get("two_well_lens", True)),
             norm_float(options.get("lens_max_thickness", 2.0)),
             norm_float(options.get("lens_closure_ratio", 0.58)),
+            norm_float(options.get("pinch_closure_ratio", 0.82)),
             norm(options.get("show_topography_profile", False)),
             norm(options.get("conform_layers_to_topography", True)),
             norm(options.get("topography_source", "sondaj")),
@@ -403,6 +404,8 @@ class KesitCizimMixin(KesitOnizlemeMixin):
         e_lens_max = ttk.Entry(opt, width=12); e_lens_max.insert(0, saved_kesit.get("lens_max_thickness", "2.0")); e_lens_max.grid(row=13, column=1, sticky="w", padx=5, pady=4)
         ttk.Label(opt, text="Mercek kapanma oranı").grid(row=14, column=0, sticky="e", padx=5, pady=4)
         e_lens_ratio = ttk.Entry(opt, width=12); e_lens_ratio.insert(0, saved_kesit.get("lens_closure_ratio", "0.58")); e_lens_ratio.grid(row=14, column=1, sticky="w", padx=5, pady=4)
+        ttk.Label(opt, text="Kamalanma kapanma oranı").grid(row=15, column=0, sticky="e", padx=5, pady=4)
+        e_pinch_ratio = ttk.Entry(opt, width=12); e_pinch_ratio.insert(0, saved_kesit.get("pinch_closure_ratio", "0.82")); e_pinch_ratio.grid(row=15, column=1, sticky="w", padx=5, pady=4)
         show_station_var = tk.BooleanVar(value=saved_kesit.get("show_station_offset_labels", True))
         show_elevation_var = tk.BooleanVar(value=saved_kesit.get("show_well_elevation_labels", True))
         show_depth_var = tk.BooleanVar(value=saved_kesit.get("show_layer_depth_labels", True))
@@ -432,19 +435,19 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             opt,
             text="Birim adlarını göster",
             variable=show_detailed_lithology_var,
-        ).grid(row=16, column=2, sticky="w", padx=5)
+        ).grid(row=17, column=2, sticky="w", padx=5)
 
         kesit_presets = {
-            "Strater": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58"},
-            "Strater - Sık Etiket": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "4.0", "dx_default": "25.0", "max_offset": "15.0", "show_consistency_labels": True, "consistency_label_min_height": "0.45", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58"},
-            "Sade Kesit": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": False, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": False, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58"},
-            "Gerçek Mesafe": {"mode": "true_distance", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58"},
-            "Şematik": {"mode": "schematic", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "30.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58"},
+            "Strater": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58", "pinch_closure_ratio": "0.82"},
+            "Strater - Sık Etiket": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "4.0", "dx_default": "25.0", "max_offset": "15.0", "show_consistency_labels": True, "consistency_label_min_height": "0.45", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58", "pinch_closure_ratio": "0.82"},
+            "Sade Kesit": {"mode": "line_projection", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": False, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": False, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58", "pinch_closure_ratio": "0.82"},
+            "Gerçek Mesafe": {"mode": "true_distance", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "25.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58", "pinch_closure_ratio": "0.82"},
+            "Şematik": {"mode": "schematic", "vertical_exaggeration": "1.0", "corr_tolerance": "3.0", "dx_default": "30.0", "max_offset": "10.0", "show_consistency_labels": True, "consistency_label_min_height": "0.9", "show_yass": True, "show_yass_labels": True, "auto_lens": True, "two_well_lens": True, "lens_max_thickness": "2.0", "lens_closure_ratio": "0.58", "pinch_closure_ratio": "0.82"},
         }
         preset_var = tk.StringVar(value=saved_kesit.get("preset", "Strater"))
-        ttk.Label(opt, text="Ayar sablonu").grid(row=15, column=0, sticky="e", padx=5, pady=4)
+        ttk.Label(opt, text="Ayar sablonu").grid(row=16, column=0, sticky="e", padx=5, pady=4)
         cmb_preset = ttk.Combobox(opt, textvariable=preset_var, values=list(kesit_presets.keys()), width=22, state="readonly")
-        cmb_preset.grid(row=15, column=1, sticky="w", padx=5, pady=4)
+        cmb_preset.grid(row=16, column=1, sticky="w", padx=5, pady=4)
 
         def set_entry(entry, value):
             entry.delete(0, tk.END)
@@ -471,6 +474,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             set_entry(e_legend_pattern, preset.get("legend_pattern_density", "6.0"))
             set_entry(e_lens_max, preset.get("lens_max_thickness", "2.0"))
             set_entry(e_lens_ratio, preset.get("lens_closure_ratio", "0.58"))
+            set_entry(e_pinch_ratio, preset.get("pinch_closure_ratio", "0.82"))
             title_mode_var.set(preset.get("title_mode", "full"))
             show_consistency_var.set(bool(preset["show_consistency_labels"]))
             show_yass_var.set(bool(preset.get("show_yass", True)))
@@ -479,7 +483,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
             auto_lens_var.set(bool(preset.get("auto_lens", True)))
             two_well_lens_var.set(bool(preset.get("two_well_lens", True)))
 
-        tk.Button(opt, text="Uygula", command=apply_kesit_preset, bg="#D6EAF8").grid(row=15, column=2, sticky="w", padx=5, pady=4)
+        tk.Button(opt, text="Uygula", command=apply_kesit_preset, bg="#D6EAF8").grid(row=16, column=2, sticky="w", padx=5, pady=4)
         cmb_preset.bind("<<ComboboxSelected>>", apply_kesit_preset)
 
         line_opt = ttk.LabelFrame(tab_hat, text="Kesit Hattı", padding=10)
@@ -885,6 +889,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
                 "two_well_lens": two_well_lens_var.get(),
                 "lens_max_thickness": e_lens_max.get(),
                 "lens_closure_ratio": e_lens_ratio.get(),
+                "pinch_closure_ratio": e_pinch_ratio.get(),
                 "export_dpi": e_export_dpi.get(),
                 "title_mode": title_mode_var.get(),
                 "show_station_offset_labels": show_station_var.get(),

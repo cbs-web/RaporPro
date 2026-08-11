@@ -20,7 +20,7 @@ from rapor_parsel_bilgileri import (
     rapor_bilgileri_eksikleri,
 )
 from rapor_etiketleri import DUZELTME_ETIKET_ADLARI
-from rapor_sablonu import etkin_rapor_sablonu_yolu
+from rapor_sablonu import etkin_rapor_sablonu_yolu, proje_rapor_sablon_profili
 
 
 KNOWN_TAGS = {
@@ -539,7 +539,10 @@ def build_preflight_report(app_instance):
         )
 
     tags = []
-    word_path = etkin_rapor_sablonu_yolu(getattr(app_instance, "word_path", None))
+    word_path = etkin_rapor_sablonu_yolu(
+        getattr(app_instance, "word_path", None),
+        proje_rapor_sablon_profili(getattr(app_instance, "veri", {})),
+    )
     if word_path and os.path.isfile(word_path):
         try:
             tags = read_word_tags(word_path)

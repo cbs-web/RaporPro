@@ -8,7 +8,7 @@ from rapor_etiketleri import DUZELTME_ETIKET_ADLARI
 from spt_okuma_motoru import openai_model_sec, spt_ayarlarini_yukle
 
 
-AI_MOTOR_ADLARI = ("otomatik", "openai", "gemini", "gemini_pro", "groq", "kural")
+AI_MOTOR_ADLARI = ("otomatik", "openai", "gemini", "gemini_pro", "kural")
 
 DUZELTME_ETIKET_KURALLARI = [
     {
@@ -584,8 +584,6 @@ def _api_key_kontrol(aktif, ayarlar):
         raise RuntimeError("OpenAI API anahtarı bulunamadı.")
     if aktif in ("gemini", "gemini_pro") and not ayarlar.get("gemini_api_key"):
         raise RuntimeError("Gemini API anahtarı bulunamadı.")
-    if aktif == "groq" and not ayarlar.get("groq_api_key"):
-        raise RuntimeError("Groq API anahtarı bulunamadı.")
 
 
 def _ai_ile_analiz_et(text, ayarlar=None, motor=None, timeout=45):
@@ -596,23 +594,22 @@ def _ai_ile_analiz_et(text, ayarlar=None, motor=None, timeout=45):
 
     ayarlar = ayarlar or spt_ayarlarini_yukle()
     aktif = _aktif_motor_sec(ayarlar, motor)
-    if aktif not in ("openai", "gemini", "gemini_pro", "groq", "kural"):
+    if aktif not in ("openai", "gemini", "gemini_pro", "kural"):
         raise RuntimeError(f"Desteklenmeyen AI motoru: {aktif}")
     if aktif == "kural":
         return duzeltme_metnini_kural_ile_analiz_et(text)
     _api_key_kontrol(aktif, ayarlar)
 
     prompt = _prompt_olustur(text)
-    if aktif in ("openai", "groq"):
-        is_openai = aktif == "openai"
-        url = "https://api.openai.com/v1/chat/completions" if is_openai else "https://api.groq.com/openai/v1/chat/completions"
-        api_key = ayarlar["openai_api_key"] if is_openai else ayarlar["groq_api_key"]
-        model_name = openai_model_sec(ayarlar, "revizyon") if is_openai else "meta-llama/llama-4-scout-17b-16e-instruct"
+    if aktif == "openai":
+        url = "https://api.openai.com/v1/chat/completions"
+        api_key = ayarlar["openai_api_key"]
+        model_name = openai_model_sec(ayarlar, "revizyon")
         payload = {
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
-            "response_format": {"type": "json_object"} if is_openai else None,
+            "response_format": {"type": "json_object"},
         }
         payload = {key: value for key, value in payload.items() if value is not None}
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}

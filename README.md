@@ -33,7 +33,7 @@ ve çıktı dosyaları ise kullanıcının seçtiği konumda kalır.
 
 ## Dış yapay zekâ servisleri
 
-`OpenAI`, `Google Gemini` veya `Groq` seçildiğinde ilgili not ya da rapor metni
+`OpenAI` veya `Google Gemini` seçildiğinde ilgili not ya da rapor metni
 dış hizmete gönderilebilir. Arayüz aktarım öncesinde kullanıcı onayı ister.
 Veriyi cihaz dışına çıkarmadan çalışmak için `kural` motoru seçilmelidir.
 API anahtarları ve hassas alanlar günlük kayıtlarında maskelenir.

@@ -37,7 +37,7 @@ from jeoloji_raporu import (
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_ss_koordinatlarini_koru
 from performans import log_exception, perf_log, perf_timer
 from rapor_etiketleri import DUZELTME_ETIKET_ADLARI, DUZELTME_ETIKET_GRUPLARI
-from rapor_sablonu import rapor_sablonu_durumu
+from rapor_sablonu import proje_rapor_sablon_profili, rapor_sablonu_durumu
 from rapor_revizyon import revizyon_isaretleri_ekle
 from raporlama_deger import clean_val, fmt_jeo, jeofizik_vp_layers_sadelestir, read_table_file
 from raporlama_arazi import arazi_deney_rapor_verileri, arazi_deney_word_bolumlerini_uygula
@@ -326,17 +326,30 @@ BINA_FIELDS_MAP = [
     ("Bina Kullanım Sınıfı", "sinif"),
     ("Bina Önem Katsayısı", "onem"),
     ("Yapı Malzemesi", "malz"),
-    ("Bodrum Kat Adedi", "bod"),
-    ("Toplam Kat Adedi", "kat"),
+    ("Bodrum Kat Adedi / Toplam Kat Adedi", ("bod", "kat")),
     ("Plan Boyutları", "plan"),
     ("Yapı Yüksekliği (Hn)", "yukseklik"),
     ("Bina Yükseklik Sınıfı", "yukseklik_sinif"),
-    ("Temel Alanı", "temel_alan"),
-    ("Toplam İnşaat Alanı", "ins"),
+    ("Temel Alanı / Toplam İnşaat Alanı", ("temel_alan", "ins")),
     ("Olası Kazı Derinliği", "der"),
-    ("Temel Tipi", "tem"),
-    ("Yerel Zemin Sınıfı", "ysinif"),
 ]
+
+
+def bina_bilgisi_tablo_degeri(blok, key):
+    """Birleşik bina satırlarını soldaki başlık sırasıyla biçimlendir."""
+    if not isinstance(key, tuple):
+        return clean_val(blok.get(key, ""))
+
+    values = [clean_val(blok.get(item, "")) for item in key]
+    if key == ("temel_alan", "ins"):
+        values = [
+            value if value == "-" or "m²" in value or re.search(r"\bm\s*2\b", value, re.I)
+            else f"{value} m²"
+            for value in values
+        ]
+        values = [re.sub(r"\bm\s*2\b", "m²", value, flags=re.I) for value in values]
+    return " / ".join(values)
+
 
 def bina_bloklari_rapor(bina):
     if not isinstance(bina, dict) or not bina.get("coklu_blok"):
@@ -383,7 +396,7 @@ def bina_bilgileri_dikey_tablo_olustur(doc, bina):
         set_cell_text_clean(row.cells[0], label, bold=True)
         for block_idx, (_, blok) in enumerate(kayitlar):
             cell = merge_block_cells(row, block_idx)
-            set_cell_text_clean(cell, clean_val(blok.get(key, "")), bold=False)
+            set_cell_text_clean(cell, bina_bilgisi_tablo_degeri(blok, key), bold=False)
             set_vertical_cell_alignment(cell, "center")
 
     header_row = table.add_row()
@@ -688,7 +701,10 @@ def _doc_perf_stats(doc):
         return ""
 
 def raporla(app_instance, final_path=None, autosave=True):
-    template_info = rapor_sablonu_durumu(getattr(app_instance, "word_path", None))
+    template_info = rapor_sablonu_durumu(
+        getattr(app_instance, "word_path", None),
+        proje_rapor_sablon_profili(getattr(app_instance, "veri", {})),
+    )
     template_path = template_info.get("path", "")
     if not template_path:
         return False, "Dahili rapor şablonu bulunamadı. Geçerli bir özel Word şablonu seçin."

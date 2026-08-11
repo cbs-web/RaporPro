@@ -786,9 +786,10 @@ class HaritalarSekmesiMixin:
             steps = ["vaziyet", "jeoloji", "yerbuldurur", "tkgm"]
 
         if getattr(self, "_harita_yenileme_aktif", False):
-            messagebox.showinfo(
-                "Rapor Haritalarını Yenile",
+            self.bildirim_goster(
                 "Harita yenileme akışı zaten devam ediyor.",
+                level="warning",
+                title="Rapor Haritaları",
             )
             return
 
@@ -818,9 +819,11 @@ class HaritalarSekmesiMixin:
                 f"Harita yenileme tamamlandı: {completed}/{total} adım.",
                 level="success" if completed == total else "warning",
             )
-            messagebox.showinfo(
-                "Rapor Haritalarını Yenile",
-                f"Harita yenileme akışı tamamlandı.\n\nTamamlanan: {completed}/{total}",
+            self.bildirim_goster(
+                f"Harita yenileme akışı tamamlandı. Tamamlanan: {completed}/{total}",
+                level="success" if completed == total else "warning",
+                title="Rapor Haritaları",
+                log=False,
             )
             return
 
@@ -950,7 +953,12 @@ class HaritalarSekmesiMixin:
         if hasattr(self, "otomatik_kaydet"):
             self.otomatik_kaydet()
         self.set_status(f"TKGM KML bağlandı: {os.path.basename(path)}", level="success")
-        messagebox.showinfo("TKGM KML", f"KML oluşturuldu ve projeye bağlandı:\n{path}")
+        self.bildirim_goster(
+            f"KML oluşturuldu ve projeye bağlandı: {os.path.basename(path)}",
+            level="success",
+            title="TKGM KML",
+            log=False,
+        )
 
     def tkgm_ada_gorseli_al(self):
         self.guncelle_veri_objesi()
@@ -1035,11 +1043,15 @@ class HaritalarSekmesiMixin:
                 f"TKGM ada görseli hazır: {result.get('parcel_count', 0)} parsel",
                 level="success",
             )
-            messagebox.showinfo(
-                "TKGM Ada Görseli",
-                f"{result.get('ada', '')} adasında {result.get('parcel_count', 0)} parsel çizildi.\n"
-                f"Kaynak yöntemi: {source_text}\n"
-                f"Rapor etiketi: RESIM:TKGM\n\n{path}{fallback_text}{limit_text}",
+            notice_level = "warning" if fallback_text or limit_text else "success"
+            notice_extra = " Görseli kontrol edin." if notice_level == "warning" else ""
+            self.bildirim_goster(
+                f"{result.get('ada', '')} adasında {result.get('parcel_count', 0)} parsel çizildi. "
+                f"Kaynak: {source_text}. RESIM:TKGM etiketine bağlandı.{notice_extra}",
+                level=notice_level,
+                title="TKGM Ada Görseli",
+                duration=8000,
+                log=False,
             )
             self._harita_toplu_adim_bitti("tkgm", success=True)
 

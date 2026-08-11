@@ -6,6 +6,11 @@ from tkinter import Toplevel, filedialog, messagebox, ttk
 from sabitler import COLOR_DANGER, COLOR_SUCCESS, FONT_BOLD
 from spt_gorsel import dogal_siralama_anahtari
 from spt_okuma_motoru import (
+    DEFAULT_REVIZYON_OPENAI_MODEL,
+    DEFAULT_SPT_GEMINI_MODEL,
+    DEFAULT_SPT_OPENAI_MODEL,
+    DEFAULT_SPT_PRO_OPENAI_MODEL,
+    DEFAULT_SPT_UST_OPENAI_MODEL,
     SPT_AYARLAR_PATH,
     fotograflardan_spt_oku,
     spt_ayarlarini_kaydet,
@@ -400,7 +405,7 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
     ayarlar = spt_ayarlarini_yukle()
     project = app.veri.setdefault("ayarlar", {})
     popup = Toplevel(parent)
-    app.pencere_hazirla(popup, "SPT Okuma Ayarları", "560x520", (520, 480), modal=True)
+    app.pencere_hazirla(popup, "SPT Okuma Ayarları", "680x640", (600, 560), modal=True)
     try:
         popup.transient(parent)
     except Exception:
@@ -408,13 +413,12 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
     body = ttk.Frame(popup, padding=12)
     body.pack(fill="both", expand=True)
     ttk.Label(body, text="Aktif Motor", font=FONT_BOLD).grid(row=0, column=0, sticky="w", pady=5)
-    motor_var = tk.StringVar(value=ayarlar.get("aktif_motor", "openai"))
-    ttk.Combobox(body, textvariable=motor_var, values=["openai", "gemini", "gemini_pro", "groq"], state="readonly", width=22).grid(row=0, column=1, sticky="ew", pady=5)
+    motor_var = tk.StringVar(value=ayarlar.get("aktif_motor", "gemini"))
+    ttk.Combobox(body, textvariable=motor_var, values=["gemini", "openai"], state="readonly", width=22).grid(row=0, column=1, sticky="ew", pady=5)
     key_entries = {}
     for row, (label, key) in enumerate([
         ("OpenAI API Key", "openai_api_key"),
         ("Gemini API Key", "gemini_api_key"),
-        ("Groq API Key", "groq_api_key"),
     ], start=1):
         ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=5)
         ent = ttk.Entry(body, show="*")
@@ -423,27 +427,30 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
         key_entries[key] = ent
     model_entries = {}
     for row, (label, key, default) in enumerate([
-        ("OpenAI SPT Modeli", "openai_model", "gpt-4o-mini"),
-        ("Rapor Revizyon Modeli", "revizyon_openai_model", "gpt-5.5"),
-    ], start=4):
+        ("Gemini Ana Okuma Modeli", "spt_gemini_model", DEFAULT_SPT_GEMINI_MODEL),
+        ("OpenAI İkinci Okuma Modeli", "openai_model", DEFAULT_SPT_OPENAI_MODEL),
+        ("OpenAI Pro Modeli", "spt_pro_openai_model", DEFAULT_SPT_PRO_OPENAI_MODEL),
+        ("OpenAI En Güçlü Model", "spt_ust_openai_model", DEFAULT_SPT_UST_OPENAI_MODEL),
+        ("Rapor Revizyon Modeli", "revizyon_openai_model", DEFAULT_REVIZYON_OPENAI_MODEL),
+    ], start=3):
         ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=5)
         ent = ttk.Entry(body)
         ent.insert(0, ayarlar.get(key, default) or default)
         ent.grid(row=row, column=1, sticky="ew", pady=5)
         model_entries[key] = ent
-    ttk.Label(body, text="Düşük Güven Eşiği").grid(row=6, column=0, sticky="w", pady=5)
+    ttk.Label(body, text="Düşük Güven Eşiği").grid(row=8, column=0, sticky="w", pady=5)
     guven_entry = ttk.Entry(body, width=10)
     guven_entry.insert(0, project.get("spt_guven_esigi", "90"))
-    guven_entry.grid(row=6, column=1, sticky="w", pady=5)
+    guven_entry.grid(row=8, column=1, sticky="w", pady=5)
     popup_auto_pro_var = tk.BooleanVar(value=bool(auto_pro_var.get()))
-    ttk.Checkbutton(body, text="Düşük güvende Gemini Pro ile tekrar oku", variable=popup_auto_pro_var).grid(row=7, column=0, columnspan=2, sticky="w", pady=8)
+    ttk.Checkbutton(body, text="Düşük güvende OpenAI Luna ile ikinci okuma yap", variable=popup_auto_pro_var).grid(row=9, column=0, columnspan=2, sticky="w", pady=8)
     path_text = f"Ayar dosyası: {SPT_AYARLAR_PATH}"
-    ttk.Label(body, text=path_text, foreground="#555555", wraplength=500).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 2))
+    ttk.Label(body, text=path_text, foreground="#555555", wraplength=620).grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 2))
     state_text = "Anahtar durumu: " + ", ".join(
         f"{name} {'var' if ayarlar.get(key) else 'yok'}"
-        for name, key in [("OpenAI", "openai_api_key"), ("Gemini", "gemini_api_key"), ("Groq", "groq_api_key")]
+        for name, key in [("OpenAI", "openai_api_key"), ("Gemini", "gemini_api_key")]
     )
-    ttk.Label(body, text=state_text, foreground="#1F618D", wraplength=500).grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 8))
+    ttk.Label(body, text=state_text, foreground="#1F618D", wraplength=620).grid(row=11, column=0, columnspan=2, sticky="w", pady=(2, 8))
     body.columnconfigure(1, weight=1)
 
     def save_settings():
@@ -458,10 +465,12 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
         new_settings = {
             "aktif_motor": motor_var.get().strip(),
             "openai_api_key": key_entries["openai_api_key"].get().strip(),
-            "openai_model": model_entries["openai_model"].get().strip() or "gpt-4o-mini",
-            "revizyon_openai_model": model_entries["revizyon_openai_model"].get().strip() or "gpt-5.5",
+            "openai_model": model_entries["openai_model"].get().strip() or DEFAULT_SPT_OPENAI_MODEL,
+            "spt_pro_openai_model": model_entries["spt_pro_openai_model"].get().strip() or DEFAULT_SPT_PRO_OPENAI_MODEL,
+            "spt_ust_openai_model": model_entries["spt_ust_openai_model"].get().strip() or DEFAULT_SPT_UST_OPENAI_MODEL,
+            "revizyon_openai_model": model_entries["revizyon_openai_model"].get().strip() or DEFAULT_REVIZYON_OPENAI_MODEL,
             "gemini_api_key": key_entries["gemini_api_key"].get().strip(),
-            "groq_api_key": key_entries["groq_api_key"].get().strip(),
+            "spt_gemini_model": model_entries["spt_gemini_model"].get().strip() or DEFAULT_SPT_GEMINI_MODEL,
         }
         try:
             spt_ayarlarini_kaydet(new_settings)
@@ -477,22 +486,26 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
         popup.destroy()
 
     def check_settings():
-        motor = motor_var.get().strip() or "openai"
+        motor = motor_var.get().strip() or "gemini"
         key_by_motor = {
             "openai": ("OpenAI", key_entries["openai_api_key"].get().strip()),
             "gemini": ("Gemini", key_entries["gemini_api_key"].get().strip()),
-            "gemini_pro": ("Gemini", key_entries["gemini_api_key"].get().strip()),
-            "groq": ("Groq", key_entries["groq_api_key"].get().strip()),
         }
         name, api_key = key_by_motor.get(motor, ("Motor", ""))
         problems = []
         if not api_key:
             problems.append(f"{name} API anahtarı boş.")
-        if motor == "openai":
-            if not model_entries["openai_model"].get().strip():
-                problems.append("OpenAI SPT modeli boş.")
-            if not model_entries["revizyon_openai_model"].get().strip():
-                problems.append("Rapor revizyon modeli boş.")
+        for label, key in (
+            ("Gemini ana okuma modeli", "spt_gemini_model"),
+            ("OpenAI ikinci okuma modeli", "openai_model"),
+            ("OpenAI Pro modeli", "spt_pro_openai_model"),
+            ("OpenAI en güçlü model", "spt_ust_openai_model"),
+            ("Rapor revizyon modeli", "revizyon_openai_model"),
+        ):
+            if not model_entries[key].get().strip():
+                problems.append(f"{label} boş.")
+        if popup_auto_pro_var.get() and not key_entries["openai_api_key"].get().strip():
+            problems.append("Otomatik ikinci okuma için OpenAI API anahtarı boş.")
         try:
             import requests  # noqa: F401
         except Exception as exc:
@@ -511,7 +524,7 @@ def open_spt_settings_dialog(app, parent, auto_pro_var, refresh_tree, status_var
             )
 
     btns = ttk.Frame(body)
-    btns.grid(row=10, column=0, columnspan=2, sticky="e", pady=(16, 0))
+    btns.grid(row=12, column=0, columnspan=2, sticky="e", pady=(16, 0))
     tk.Button(btns, text="Kaydet", command=save_settings, bg=COLOR_SUCCESS, fg="white", font=FONT_BOLD).pack(side="right", padx=4)
     tk.Button(btns, text="Ayar Kontrolü", command=check_settings, bg="#D6EAF8", fg="#111", font=FONT_BOLD).pack(side="right", padx=4)
     tk.Button(btns, text="Kapat", command=popup.destroy, bg="#7F8C8D", fg="white", font=FONT_BOLD).pack(side="right", padx=4)

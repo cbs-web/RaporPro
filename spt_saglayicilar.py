@@ -57,7 +57,8 @@ def spt_ai_metin_iste(
     mime_type,
     timeout,
     stop_event=None,
-    openai_model="gpt-4o-mini",
+    openai_model="gpt-5.6-luna",
+    gemini_model="gemini-3.6-flash",
 ):
     """Secili saglayiciya SPT gorsel istegini gonder ve ham metni dondur."""
     try:
@@ -65,22 +66,35 @@ def spt_ai_metin_iste(
     except Exception as exc:
         raise RuntimeError(f"requests yüklenemedi: {exc}") from exc
 
-    if aktif in ("openai", "groq"):
-        is_openai = aktif == "openai"
-        url = "https://api.openai.com/v1/chat/completions" if is_openai else "https://api.groq.com/openai/v1/chat/completions"
-        api_key = ayarlar["openai_api_key"] if is_openai else ayarlar["groq_api_key"]
-        model_name = openai_model if is_openai else "meta-llama/llama-4-scout-17b-16e-instruct"
+    if aktif in ("openai", "openai_pro", "openai_ust"):
+        url = "https://api.openai.com/v1/chat/completions"
+        api_key = ayarlar["openai_api_key"]
+        model_name = openai_model
         payload = {
             "model": model_name,
             "messages": [{
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_b64}",
+                            "detail": "original",
+                        },
+                    },
                 ],
             }],
-            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
         }
+        if str(model_name).lower().startswith("gpt-5.6"):
+            payload["reasoning_effort"] = {
+                "openai": "none",
+                "openai_pro": "low",
+                "openai_ust": "medium",
+            }.get(aktif, "none")
+        else:
+            payload["temperature"] = 0.1
         response = http_post_with_retry(
             requests,
             url,
@@ -98,12 +112,18 @@ def spt_ai_metin_iste(
             raise RuntimeError(f"{aktif.upper()} yaniti beklenen bicimde degil.") from exc
         return text_response, model_name
 
-    model_name = "gemini-2.5-pro" if aktif == "gemini_pro" else "gemini-2.5-flash"
+    if aktif != "gemini":
+        raise RuntimeError(f"Desteklenmeyen SPT sağlayıcısı: {aktif}")
+    model_name = gemini_model or "gemini-3.6-flash"
     api_key = ayarlar["gemini_api_key"]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": image_b64}}]}],
-        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
+        "generationConfig": {
+            "thinkingConfig": {"thinkingLevel": "low"},
+            "mediaResolution": "MEDIA_RESOLUTION_HIGH",
+            "responseMimeType": "application/json",
+        },
     }
     response = http_post_with_retry(
         requests,

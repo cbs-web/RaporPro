@@ -9,7 +9,13 @@ from performans import perf_tracked
 from harita_motoru import DEFAULT_TILE_SERVER, TopluHarita
 from harita_referans import ss_harita_etiketi
 from kalite_kontrol import analyze_word_template, format_template_analysis, get_supported_tags
-from rapor_sablonu import etkin_rapor_sablonu_yolu, rapor_sablonu_durumu
+from rapor_sablonu import (
+    RAPOR_SABLON_PROFILI_DARDANOS_CINARLI,
+    RAPOR_SABLON_PROFILI_GENEL,
+    etkin_rapor_sablonu_yolu,
+    proje_rapor_sablon_profili,
+    rapor_sablonu_durumu,
+)
 
 
 class ArayuzAraclarMixin:
@@ -349,7 +355,12 @@ class ArayuzAraclarMixin:
 
         top = ttk.Frame(tab_template, padding=8)
         top.pack(fill="x")
-        selected_path = tk.StringVar(value=etkin_rapor_sablonu_yolu(self.word_path))
+        selected_path = tk.StringVar(
+            value=etkin_rapor_sablonu_yolu(
+                self.word_path,
+                proje_rapor_sablon_profili(self.veri),
+            )
+        )
         ttk.Label(top, text="Şablon").pack(side="left", padx=(0, 6))
         path_entry = ttk.Entry(top, textvariable=selected_path)
         path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
@@ -386,10 +397,14 @@ class ArayuzAraclarMixin:
             if not path or not os.path.exists(path):
                 messagebox.showwarning("Word", "Varsayılan yapmak için önce geçerli bir Word şablonu seçin.")
                 return
-            builtin_path = etkin_rapor_sablonu_yolu(None)
-            if builtin_path and os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(builtin_path)):
-                use_builtin_template()
-                return
+            for profil in (
+                RAPOR_SABLON_PROFILI_GENEL,
+                RAPOR_SABLON_PROFILI_DARDANOS_CINARLI,
+            ):
+                builtin_path = etkin_rapor_sablonu_yolu(None, profil)
+                if builtin_path and os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(builtin_path)):
+                    use_builtin_template(profil)
+                    return
             self.word_path = path
             self.veri.setdefault("dosyalar", {})["word_path"] = path
             self.veri.setdefault("ayarlar", {})["varsayilan_word_path"] = path
@@ -397,14 +412,18 @@ class ArayuzAraclarMixin:
                 self.rapor_sablon_etiketini_guncelle()
             self.set_status(f"Varsayılan Word şablonu ayarlandı: {os.path.basename(path)}", level="success")
 
-        def use_builtin_template():
-            if hasattr(self, "dahili_rapor_sablonunu_kullan"):
+        def use_builtin_template(profil=RAPOR_SABLON_PROFILI_GENEL):
+            if hasattr(self, "rapor_sablon_profilini_kullan"):
+                self.rapor_sablon_profilini_kullan(profil)
+            elif hasattr(self, "dahili_rapor_sablonunu_kullan"):
                 self.dahili_rapor_sablonunu_kullan()
             else:
                 self.word_path = None
                 self.veri.setdefault("dosyalar", {})["word_path"] = None
-                self.veri.setdefault("ayarlar", {})["varsayilan_word_path"] = ""
-            info = rapor_sablonu_durumu(None)
+                ayarlar = self.veri.setdefault("ayarlar", {})
+                ayarlar["varsayilan_word_path"] = ""
+                ayarlar["rapor_sablon_profili"] = profil
+            info = rapor_sablonu_durumu(None, profil)
             selected_path.set(info.get("path", ""))
             if info.get("path"):
                 show_analysis(info["path"])
@@ -412,7 +431,18 @@ class ArayuzAraclarMixin:
         tk.Button(top, text="Tara", command=lambda: show_analysis(selected_path.get()), bg=COLOR_PRIMARY, fg="white").pack(side="left", padx=3)
         tk.Button(top, text="Word Seç", command=choose_and_scan, bg="#ECF0F1").pack(side="left", padx=3)
         tk.Button(top, text="Varsayılan Yap", command=set_default_template, bg="#D6EAF8").pack(side="left", padx=3)
-        tk.Button(top, text="Dahili Kullan", command=use_builtin_template, bg="#D5F5E3").pack(side="left", padx=3)
+        builtin_button = ttk.Menubutton(top, text="Dahili Şablon")
+        builtin_menu = tk.Menu(builtin_button, tearoff=False)
+        builtin_menu.add_command(
+            label="Genel",
+            command=lambda: use_builtin_template(RAPOR_SABLON_PROFILI_GENEL),
+        )
+        builtin_menu.add_command(
+            label="Dardanos/Çınarlı",
+            command=lambda: use_builtin_template(RAPOR_SABLON_PROFILI_DARDANOS_CINARLI),
+        )
+        builtin_button["menu"] = builtin_menu
+        builtin_button.pack(side="left", padx=3)
 
         if selected_path.get():
             show_analysis(selected_path.get())

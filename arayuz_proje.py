@@ -33,7 +33,7 @@ from proje_paketi import (
     proje_paketi_olustur,
 )
 from proje_klasorleri import proje_alt_klasorlerini_olustur
-from rapor_sablonu import etkin_rapor_sablonu_yolu
+from rapor_sablonu import etkin_rapor_sablonu_yolu, proje_rapor_sablon_profili
 from kalite_kontrol import backup_project_file
 from workbook_motoru import (
     WORKBOOK_SHEET_DEFS,
@@ -959,7 +959,10 @@ class ArayuzProjeMixin:
 
     def _dosya_map(self):
         return {
-            "word_path": etkin_rapor_sablonu_yolu(self.word_path),
+            "word_path": etkin_rapor_sablonu_yolu(
+                self.word_path,
+                proje_rapor_sablon_profili(self.veri),
+            ),
             "lab_excel_path": self.lab_excel_path,
             "jeo_excel_path": self.jeo_excel_path,
             "kml_path": self.kml_path,
