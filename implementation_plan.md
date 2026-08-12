@@ -4,7 +4,7 @@
 
 Projeniz son 1 haftada **çok ciddi bir mimari refaktör** geçirmiş. Tebrik ederim — yapılan işler gerçekten büyük:
 
-### ✅ Yapılan İyi İşler
+### Yapılan İyi İşler
 
 | Değişiklik | Etki |
 |---|---|
@@ -17,7 +17,7 @@ Projeniz son 1 haftada **çok ciddi bir mimari refaktör** geçirmiş. Tebrik ed
 | Litoloji Dağılım Motoru | `raporlama.py`'de otomatik paragraf üretimi |
 | Drag & Drop | `tkinterdnd2` desteği eklendi |
 
-### 📊 Güncel Proje Metrikleri
+### Güncel Proje Metrikleri
 
 ```
 Toplam Kod:  ~12,500+ satır  (~710 KB)
@@ -28,7 +28,7 @@ Bağımlılık: 12 paket (sürüm sabitlenmemiş)
 
 ---
 
-## 🔴 Öncelik 1 — Acil Teknik Borç Temizliği
+## Öncelik 1 - Acil Teknik Borç Temizliği
 
 ### 1.1 UndoRedoEntry Tekrarı (3 kopya)
 
@@ -61,10 +61,10 @@ Diğer 3 dosyada `from widgets import UndoRedoEntry` kullan.
 
 **Çözüm:** Her bare except'i uygun exception tipiyle değiştir:
 ```python
-# ❌ Yanlış
+# Yanlış
 except: pass
 
-# ✅ Doğru
+# Doğru
 except (ValueError, TypeError, AttributeError):
     pass  # veya log_exception(...)
 ```
@@ -107,7 +107,7 @@ tkinterdnd2>=0.3,<1.0
 
 ---
 
-## 🟡 Öncelik 2 — Orta Vadeli Fonksiyonel İyileştirmeler
+## Öncelik 2 - Orta Vadeli Fonksiyonel İyileştirmeler
 
 ### 2.1 Büyük Modülleri Daha Fazla Parçalama
 
@@ -180,7 +180,7 @@ Geçersiz girişte kırmızı border + tooltip uyarısı.
 
 ---
 
-## 🟢 Öncelik 3 — Uzun Vadeli Stratejik Hedefler
+## Öncelik 3 - Uzun Vadeli Stratejik Hedefler
 
 ### 3.1 Test Altyapısı
 
@@ -255,6 +255,6 @@ Hafta 6+: 3.1 (testler) + 3.2 (EXE) + diğerleri
 
 ## Açık Sorular
 
-1. Hangi iyileştirme grubundan başlamak istersiniz? (🔴 Acil / 🟡 Orta / 🟢 Uzun)
+1. Hangi iyileştirme grubundan başlamak istersiniz? (Acil / Orta / Uzun)
 2. Hesaplama modülünde TBDY 2018 uyumlu deprem hesapları da olsun mu?
 3. EXE dağıtım öncelikli mi?

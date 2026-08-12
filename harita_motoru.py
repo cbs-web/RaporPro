@@ -9,6 +9,8 @@ import os
 from harita_ayarlari import hgm_ortofoto_url_yukle
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, valid_latlon
 from performans import log_exception
+from sabitler import COLOR_ACCENT, COLOR_PRIMARY
+from ui_motion import toplevel_hareketi_hazirla
 
 DEFAULT_TILE_SERVER = "Google Uydu"
 GOOGLE_SATELLITE_TILE_URL = "https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"
@@ -71,6 +73,7 @@ class TopluHarita(tk.Toplevel):
         tile_server_callback=None,
     ):
         super().__init__(master)
+        toplevel_hareketi_hazirla(self, master)
         self.title("CBS - Toplu Koordinat ve Serim Seçimi")
         self.geometry("1300x800")
         self.after_idle(lambda: pencereyi_tam_ekran_yap(self))
@@ -195,22 +198,22 @@ class TopluHarita(tk.Toplevel):
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
         self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
 
-        self.tree.insert('', 'end', 'node_alan', text='📍 ÇALIŞMA ALANI', open=True)
+        self.tree.insert('', 'end', 'node_alan', text='ÇALIŞMA ALANI', open=True)
         self.tree.insert('node_alan', 'end', 'alan_0', text='Merkez Koordinat')
 
-        self.tree.insert('', 'end', 'node_sondaj', text='🔴 SONDAJLAR', open=True)
+        self.tree.insert('', 'end', 'node_sondaj', text='SONDAJLAR', open=True)
         for i, no in enumerate(self.map_data.get("sondaj", [])):
             self.tree.insert('node_sondaj', 'end', f'sondaj_{i}', text=no)
 
-        self.tree.insert('', 'end', 'node_ss', text='🟦 SİSMİK SERİMLER', open=True)
+        self.tree.insert('', 'end', 'node_ss', text='SİSMİK SERİMLER', open=True)
         for i, ad in enumerate(self.map_data.get("ss", [])):
             self.tree.insert('node_ss', 'end', f'ss_{i}', text=ad)
 
-        self.tree.insert('', 'end', 'node_mt', text='🟩 MİKROTREMÖR', open=True)
+        self.tree.insert('', 'end', 'node_mt', text='MİKROTREMÖR', open=True)
         for i, no in enumerate(self.map_data.get("mt", [])):
             self.tree.insert('node_mt', 'end', f'mt_{i}', text=no)
 
-        btn_kaydet = tk.Button(right_frame, text="💾 KAYDET VE AKTAR", bg="#27AE60", fg="white", font=("Arial", 12, "bold"), pady=10, command=self.kaydet_ve_kapat)
+        btn_kaydet = tk.Button(right_frame, text="Kaydet ve Aktar", bg=COLOR_ACCENT, fg="white", activebackground=COLOR_PRIMARY, activeforeground="white", font=("Segoe UI", 11, "bold"), pady=10, command=self.kaydet_ve_kapat)
         btn_kaydet.pack(fill="x", padx=5, pady=10)
 
     def altlik_uygula(self, name, show_status=True):

@@ -568,6 +568,7 @@ class KesitCizimMixin(KesitOnizlemeMixin):
 
             mode_var.set("line_projection")
             dialog = Toplevel(win)
+            self.ui_motion_prepare_window(dialog)
             dialog.title("Haritadan Kesit Hattı Çiz")
             dialog.geometry("1180x760")
             dialog.transient(win)

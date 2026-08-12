@@ -13,9 +13,18 @@ from harita_etiket import harita_etiketlerini_ayir
 from harita_referans import affine_from_refs, coord_to_pixel, valid_latlon
 from harita_resim_cache import display_image_read
 from performans import log_exception, perf_timer
-from sabitler import DEFAULT_EXPORT_DPI, HARITA_PAFTA_LAYOUT
+from sabitler import (
+    COLOR_ACCENT,
+    COLOR_DANGER,
+    COLOR_PRIMARY,
+    COLOR_SURFACE_ALT,
+    COLOR_TEXT,
+    DEFAULT_EXPORT_DPI,
+    HARITA_PAFTA_LAYOUT,
+)
 from resim_pafta import ResimPaftaMixin
 from resim_georef import ResimGeorefMixin
+from ui_motion import toplevel_hareketi_hazirla
 
 
 class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
@@ -55,6 +64,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         self.close_callback = close_callback
         self._exported = False
         self.protocol("WM_DELETE_WINDOW", self.kapat)
+        toplevel_hareketi_hazirla(self, master, close_callback=self.kapat)
         
         self.active_id = None
         self.active_mod = None
@@ -155,16 +165,16 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
             scale_combo.pack(side="left", fill="x", expand=True)
             scale_combo.bind("<<ComboboxSelected>>", self.olcek_guncelle)
 
-        btn_sil = tk.Button(action_frame, text="🗑️ Seçileni Temizle", bg="#E74C3C", fg="white", font=("Arial", 10, "bold"), command=self.secileni_sil)
+        btn_sil = tk.Button(action_frame, text="Seçileni Temizle", bg=COLOR_DANGER, fg="white", font=("Segoe UI", 9, "bold"), command=self.secileni_sil)
         btn_sil.pack(fill="x", padx=5, pady=2)
 
-        btn_save = tk.Button(action_frame, text="💾 ÇİZİMİ PROJEYE KAYDET", bg="#F39C12", fg="white", font=("Arial", 10, "bold"), pady=5, command=self.trigger_save_state)
+        btn_save = tk.Button(action_frame, text="Çizimi Projeye Kaydet", bg=COLOR_PRIMARY, fg="white", font=("Segoe UI", 9, "bold"), pady=5, command=self.trigger_save_state)
         btn_save.pack(fill="x", padx=5, pady=2)
 
-        btn_word = tk.Button(action_frame, text="📄 WORD İÇİN AYIR VE AKTAR", bg="#8E44AD", fg="white", font=("Arial", 11, "bold"), pady=9, command=self.export_for_word)
+        btn_word = tk.Button(action_frame, text="Word İçin Ayır ve Aktar", bg=COLOR_SURFACE_ALT, fg=COLOR_TEXT, font=("Segoe UI", 9, "bold"), pady=9, command=self.export_for_word)
         btn_word.pack(fill="x", padx=5, pady=4)
 
-        btn_kaydet = tk.Button(action_frame, text="🖨️ PAFTA ÇIKTISI AL (A4)", bg="#27AE60", fg="white", font=("Arial", 11, "bold"), pady=9, command=self.export_image)
+        btn_kaydet = tk.Button(action_frame, text="A4 Pafta Çıktısı Al", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 9, "bold"), pady=9, command=self.export_image)
         btn_kaydet.pack(fill="x", padx=5, pady=(4, 2))
 
         scroll_wrap = ttk.Frame(right_frame)
@@ -201,20 +211,20 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         tree_scroll.pack(side="right", fill="y")
         self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
 
-        self.tree.insert('', 'end', 'node_sondaj', text='🔵 SONDAJLAR (Mavi Nokta)', open=True)
+        self.tree.insert('', 'end', 'node_sondaj', text='SONDAJLAR (Mavi Nokta)', open=True)
         for i, s_dict in enumerate(self.map_data.get("sondaj", [])):
             self.tree.insert('node_sondaj', 'end', f'sondaj_{i}', text=s_dict["no"])
 
-        self.tree.insert('', 'end', 'node_ss', text='🔴 SİSMİK SERİMLER (Kesikli Çizgi)', open=True)
+        self.tree.insert('', 'end', 'node_ss', text='SİSMİK SERİMLER (Kesikli Çizgi)', open=True)
         for i, ss_dict in enumerate(self.map_data.get("ss", [])):
             self.tree.insert('node_ss', 'end', f'ss_{i}', text=ss_dict["ad"])
 
-        self.tree.insert('', 'end', 'node_mt', text='🟥 MİKROTREMÖR (Kırmızı Kare)', open=True)
+        self.tree.insert('', 'end', 'node_mt', text='MİKROTREMÖR (Kırmızı Kare)', open=True)
         for i, mt_dict in enumerate(self.map_data.get("mt", [])):
             self.tree.insert('node_mt', 'end', f'mt_{i}', text=mt_dict["no"])
 
         if self.harita_tipi == "jeoloji" and self.formasyon:
-            self.tree.insert('', 'end', 'node_formasyon', text=f'🟡 FORMASYON YAZISI ({self.formasyon})', open=True)
+            self.tree.insert('', 'end', 'node_formasyon', text=f'FORMASYON YAZISI ({self.formasyon})', open=True)
             for i in range(5):
                 self.tree.insert('node_formasyon', 'end', f'formasyon_{i}', text=f'{self.formasyon} Yazısı {i+1}')
 
@@ -852,6 +862,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
 
     def edit_text_format(self, txt_obj):
         win = tk.Toplevel(self); win.title("Yazı Formatı Düzenle"); win.geometry("250x250"); win.attributes('-topmost', True)
+        toplevel_hareketi_hazirla(win, self)
         ttk.Label(win, text="Metin İçeriği:").pack(pady=5); e_text = ttk.Entry(win, width=25); e_text.insert(0, txt_obj.get_text()); e_text.pack()
         ttk.Label(win, text="Punto (Büyüklük):").pack(pady=5); e_size = ttk.Spinbox(win, from_=6, to=48, width=23); e_size.set(int(txt_obj.get_fontsize())); e_size.pack()
         ttk.Label(win, text="Renk:").pack(pady=5); e_color = ttk.Combobox(win, values=["blue", "red", "darkred", "black", "green", "purple"], width=23); e_color.set(txt_obj.get_color()); e_color.pack()

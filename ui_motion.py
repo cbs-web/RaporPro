@@ -325,11 +325,37 @@ class UIMotionMixin:
             scheduler=window,
         )
 
-    def ui_motion_prepare_window(self, window):
+    def ui_motion_prepare_window(self, window, close_callback=None):
+        if getattr(window, "_ui_motion_prepared", False):
+            return window
+        window._ui_motion_prepared = True
         window._ui_motion_controller = self
+        original_destroy = getattr(window, "destroy", None)
+        window._ui_motion_original_destroy = original_destroy
         self.ui_motion_window_enter(window)
-        close = lambda: self.ui_motion_window_close(window)
+
+        def finish_close():
+            if callable(close_callback):
+                close_callback()
+            elif callable(original_destroy):
+                original_destroy()
+
+        def close():
+            self.ui_motion_window_close(window, callback=finish_close)
+
+        def animated_destroy():
+            if getattr(window, "_ui_motion_closing", False):
+                if callable(original_destroy):
+                    return original_destroy()
+                return None
+            return close()
+
         window._ui_motion_close = close
+        if callable(original_destroy):
+            try:
+                window.destroy = animated_destroy
+            except Exception:
+                pass
         try:
             window.protocol("WM_DELETE_WINDOW", close)
         except tk.TclError:
@@ -374,6 +400,27 @@ class UIMotionMixin:
         return widget
 
 
+def ui_motion_controller_bul(widget):
+    """Widget ust zincirindeki ortak hareket denetleyicisini bulur."""
+    current = widget
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        controller = getattr(current, "_ui_motion_controller", None)
+        if controller is not None:
+            return controller
+        current = getattr(current, "master", None)
+    return None
+
+
+def toplevel_hareketi_hazirla(window, parent=None, close_callback=None):
+    """Mixin disindaki Toplevel penceresini ust uygulamanin gecisine baglar."""
+    controller = ui_motion_controller_bul(parent or getattr(window, "master", None))
+    if controller is not None:
+        controller.ui_motion_prepare_window(window, close_callback=close_callback)
+    return window
+
+
 __all__ = [
     "MOTION_FAST_MS",
     "MOTION_NORMAL_MS",
@@ -383,4 +430,6 @@ __all__ = [
     "clamp01",
     "ease_in_out_cubic",
     "ease_out_cubic",
+    "toplevel_hareketi_hazirla",
+    "ui_motion_controller_bul",
 ]

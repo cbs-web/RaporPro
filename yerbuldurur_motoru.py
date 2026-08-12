@@ -6,6 +6,9 @@ import xml.etree.ElementTree as ET
 from PIL import ImageGrab
 import os
 
+from sabitler import COLOR_ACCENT, COLOR_PRIMARY
+from ui_motion import toplevel_hareketi_hazirla
+
 class YerbuldururMotoru(tk.Toplevel):
     def __init__(
         self,
@@ -24,6 +27,7 @@ class YerbuldururMotoru(tk.Toplevel):
         self.close_callback = close_callback
         self._exported = False
         self.protocol("WM_DELETE_WINDOW", self._kapat)
+        toplevel_hareketi_hazirla(self, master, close_callback=self._kapat)
         
         self.setup_ui()
         self.load_kml_and_state()
@@ -33,7 +37,7 @@ class YerbuldururMotoru(tk.Toplevel):
         top_frame = tk.Frame(self, bg="#2C3E50", height=50)
         top_frame.pack(fill="x")
         
-        lbl_zoom = tk.Label(top_frame, text="🔍 Hassas Zoom:", fg="white", bg="#2C3E50", font=("Arial", 11, "bold"))
+        lbl_zoom = tk.Label(top_frame, text="Hassas Zoom", fg="white", bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"))
         lbl_zoom.pack(side="left", padx=(15, 5), pady=15)
         
         # HASSAS ZOOM ÇUBUĞU (SLIDER)
@@ -47,7 +51,7 @@ class YerbuldururMotoru(tk.Toplevel):
         lbl_info = tk.Label(top_frame, text="(Fare tekerleği veya kaydırma çubuğunu kullanın)", fg="#BDC3C7", bg="#2C3E50", font=("Arial", 9))
         lbl_info.pack(side="left", padx=10, pady=15)
         
-        btn_save = tk.Button(top_frame, text="📸 EKRANI KAYDET VE WORD'E AKTAR", bg="#27AE60", fg="white", font=("Arial", 11, "bold"), command=self.save_and_export)
+        btn_save = tk.Button(top_frame, text="Ekranı Kaydet ve Word'e Aktar", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 10, "bold"), command=self.save_and_export)
         btn_save.pack(side="right", padx=15, pady=10)
         
         # Harita Widget'ı

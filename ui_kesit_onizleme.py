@@ -355,6 +355,7 @@ class KesitOnizlemeMixin:
         def open_edit_list():
             rows = []
             dialog = Toplevel(win)
+            self.ui_motion_prepare_window(dialog)
             dialog.title("Kesit Düzenleme Listesi")
             dialog.geometry("680x420")
             dialog.transient(win)
@@ -483,6 +484,7 @@ class KesitOnizlemeMixin:
         def open_lens_controls():
             rows = []
             dialog = Toplevel(win)
+            self.ui_motion_prepare_window(dialog)
             dialog.title("Mercek Kontrolü")
             dialog.geometry("760x430")
             dialog.transient(win)
@@ -1004,6 +1006,7 @@ class KesitOnizlemeMixin:
 
         def open_preview_settings():
             dialog = Toplevel(win)
+            self.ui_motion_prepare_window(dialog)
             dialog.title("Kesit Önizleme Ayarları")
             dialog.transient(win)
             dialog.grab_set()
@@ -1202,6 +1205,7 @@ class KesitOnizlemeMixin:
 
         def export_settings_dialog():
             dialog = Toplevel(win)
+            self.ui_motion_prepare_window(dialog)
             dialog.title("Kesit Kaydetme Ayarları")
             dialog.transient(win)
             dialog.grab_set()

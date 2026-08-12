@@ -279,9 +279,9 @@ def draw_strater_log():
         with Image.open(tmp_png) as img:
             rgb_im = img.convert("RGB")
             rgb_im.save("SONDAJ_LOGU.jpg", "JPEG", quality=95, optimize=True)
-        print("✅ Başarılı: SONDAJ_LOGU.jpg oluşturuldu (Strater Formatı).")
+        print("Başarılı: SONDAJ_LOGU.jpg oluşturuldu (Strater Formatı).")
     except Exception as e:
-        print(f"❌ Hata: {e}")
+        print(f"Hata: {e}")
     finally:
         if os.path.exists(tmp_png):
             os.remove(tmp_png)

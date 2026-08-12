@@ -4,7 +4,14 @@ import tkinter as tk
 
 import pytest
 
-from ui_motion import UIMotionMixin, blend_hex, clamp01, ease_in_out_cubic, ease_out_cubic
+from ui_motion import (
+    UIMotionMixin,
+    blend_hex,
+    clamp01,
+    ease_in_out_cubic,
+    ease_out_cubic,
+    toplevel_hareketi_hazirla,
+)
 
 
 class _FakeScheduler:
@@ -93,3 +100,35 @@ def test_saydamlik_desteklenmezse_pencere_guvenle_kapanir():
     host.ui_motion_window_close(Window(), callback=lambda: finished.append(True))
 
     assert finished == [True]
+
+
+def test_hazirlanan_pencerede_destroy_cikis_gecisini_kullanir():
+    host = _MotionHost(enabled=False)
+
+    class Window:
+        def __init__(self):
+            self.master = host.root
+            self.destroyed = 0
+            self.protocol_callback = None
+
+        def winfo_exists(self):
+            return True
+
+        def attributes(self, *_args):
+            return 1.0
+
+        def after_idle(self, callback):
+            callback()
+
+        def protocol(self, _name, callback):
+            self.protocol_callback = callback
+
+        def destroy(self):
+            self.destroyed += 1
+
+    window = Window()
+    toplevel_hareketi_hazirla(window, host.root)
+    window.destroy()
+
+    assert window.destroyed == 1
+    assert callable(window.protocol_callback)

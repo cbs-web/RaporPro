@@ -6,11 +6,13 @@ import os
 from harita_resim_cache import display_image_read
 from harita_referans import affine_from_refs, coord_to_pixel, kml_koordinatlari_oku, pixel_to_coord, valid_latlon
 from performans import log_exception
+from ui_motion import toplevel_hareketi_hazirla
 
 
 class TopluHaritaGorselBindirme(tk.Toplevel):
     def __init__(self, master, img_path, kml_path, map_data=None, initial_results=None, callback=None):
         super().__init__(master)
+        toplevel_hareketi_hazirla(self, master)
         self.title("Vaziyet Planı Görüntü Bindirme ile Koordinat Seçimi")
         self.geometry("1450x860")
         self.img_path = img_path

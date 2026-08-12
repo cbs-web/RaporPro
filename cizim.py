@@ -8,6 +8,7 @@ from matplotlib.legend_handler import HandlerPatch
 
 from yardimcilar import safe_float, litoloji_cozumle, litoloji_yazim_uyarilari
 from sabitler import LEJANTLAR, COLOR_BG, COLOR_ACCENT, COLOR_SUCCESS, FONT_BOLD, FONT_MAIN
+from ui_motion import toplevel_hareketi_hazirla
 
 class GeoEngineDraw:
     """Cizim yardimci fonksiyonlari"""
@@ -378,6 +379,7 @@ class VeriGirisPenceresi(Toplevel):
         self.title(baslik)
         self.geometry("900x600")
         self.configure(bg=COLOR_BG)
+        toplevel_hareketi_hazirla(self, parent)
         
         self.veri = veri_listesi
         self.kolonlar = kolonlar
@@ -450,8 +452,8 @@ class VeriGirisPenceresi(Toplevel):
         self.lbl_litoloji_uyari.grid(row=0, column=1, sticky="ew", padx=8)
         self.btn_kaydet_kapat = tk.Button(
             btn_f,
-            text="💾 KAYDET VE KAPAT",
-            bg=COLOR_SUCCESS,
+            text="Kaydet ve Kapat",
+            bg=COLOR_ACCENT,
             fg="white",
             font=FONT_BOLD,
             command=self.kaydet,

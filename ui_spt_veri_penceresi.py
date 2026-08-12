@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import Canvas, Toplevel, messagebox, ttk
 
 from performans import log_exception
+from ui_motion import toplevel_hareketi_hazirla
 from yardimcilar import safe_float
 from widgets import UndoRedoEntry
 
@@ -11,6 +12,7 @@ from widgets import UndoRedoEntry
 class SPTVeriPenceresi:
     def __init__(self, parent, title, data_list, source_list=None, on_save=None):
         self.top = Toplevel(parent)
+        toplevel_hareketi_hazirla(self.top, parent)
         self.top.title(title)
         self.top.geometry("820x600")
         self.top.configure(bg="#f4f6f7")
@@ -132,6 +134,7 @@ class SPTVeriPenceresi:
             messagebox.showinfo("SPT Kaynağı", "Bu SPT satırı için kayıtlı kaynak bilgisi yok.", parent=self.top)
             return
         win = Toplevel(self.top)
+        toplevel_hareketi_hazirla(win, self.top)
         win.title("SPT Satır Kaynağı")
         win.geometry("860x700")
         win.minsize(720, 560)
