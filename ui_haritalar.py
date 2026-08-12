@@ -1032,11 +1032,12 @@ class HaritalarSekmesiMixin:
                 self.ozet_yenile(collect=False)
             if hasattr(self, "otomatik_kaydet"):
                 self.otomatik_kaydet()
-            source_text = (
-                "TKGM parsel listesi"
-                if result.get("source") == "parsel_listesi"
-                else "geometrik komşuluk taraması"
-            )
+            source_texts = {
+                "parsel_listesi": "TKGM parsel listesi",
+                "dogrudan_numara_taramasi": "TKGM doğrudan parsel taraması",
+                "komsuluk_taramasi": "geometrik komşuluk taraması",
+            }
+            source_text = source_texts.get(result.get("source"), "TKGM parsel sorgusu")
             fallback_text = "\nHGM altlığı alınamadığı için Google Uydu kullanıldı." if result.get("fallback_used") else ""
             limit_text = "\nParsel güvenlik sınırına ulaşıldı; görseli kontrol edin." if result.get("limit_reached") else ""
             self.set_status(

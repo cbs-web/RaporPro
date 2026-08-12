@@ -23,6 +23,8 @@ from tkgm_kml import (
 
 ADA_PARSEL_LIMITI = 200
 KOMSU_SORGU_ISCISI = 6
+NUMARA_TARAMA_BOSLUK_LIMITI = 12
+NUMARA_TARAMA_AZAMI_NO = 10000
 GOOGLE_UYDU_TILE = "https://mt0.google.com/vt/lyrs=s&hl=tr&x={x}&y={y}&z={z}"
 
 
@@ -103,6 +105,11 @@ def _ayni_ada(record, mahalle_id, ada):
     return record_ada == _ada_parsel_no_temizle(ada, default="") and (
         not record_mahalle or record_mahalle == str(mahalle_id)
     )
+
+
+def _sorgu_limiti_hatasi(exc):
+    text = str(exc or "").casefold()
+    return ("403" in text or "429" in text) and "limit" in text
 
 
 def _ring_noktalari(ring):
@@ -210,7 +217,9 @@ def _dogrudan_parsel_getir(mahalle_id, ada, parsel, timeout, fetcher):
             f"{TKGM_API_BASE}parsel/{mahalle_id}/{ada}/{parsel}",
             timeout=timeout,
         )
-    except Exception:
+    except Exception as exc:
+        if _sorgu_limiti_hatasi(exc):
+            raise
         return None
     return _parsel_kaydi(payload)
 
@@ -237,13 +246,128 @@ def _listedeki_parselleri_getir(numbers, mahalle_id, ada, timeout, fetcher):
     return sorted(records, key=lambda item: _parsel_siralama_anahtari(item.get("parsel")))
 
 
+def _parsel_tam_sayi(value):
+    cleaned = _ada_parsel_no_temizle(value, default="")
+    if not cleaned or not cleaned.isdigit():
+        return None
+    number = int(cleaned)
+    return number if number > 0 else None
+
+
+def _dogrudan_numara_taramasi(
+    seed_records,
+    mahalle_id,
+    ada,
+    timeout,
+    fetcher,
+    gap_limit=NUMARA_TARAMA_BOSLUK_LIMITI,
+):
+    """Liste servisi kapaliysa bilinen numaralardan iki yone kontrollu tarama yap."""
+    records = {
+        _kayit_anahtari(record): record
+        for record in seed_records
+        if _kayit_anahtari(record)
+    }
+    known_numbers = {
+        number
+        for number in (_parsel_tam_sayi(record.get("parsel")) for record in records.values())
+        if number is not None
+    }
+    if not known_numbers:
+        return sorted(
+            records.values(),
+            key=lambda item: _parsel_siralama_anahtari(item.get("parsel")),
+        ), 0, 0
+
+    initial_count = len(records)
+    probed_numbers = set()
+
+    def probe(numbers, retry=False):
+        requested = [
+            number
+            for number in numbers
+            if 0 < number <= NUMARA_TARAMA_AZAMI_NO
+            and (retry or number not in probed_numbers)
+        ]
+        if not requested:
+            return {}
+        probed_numbers.update(requested)
+        fetched = _listedeki_parselleri_getir(
+            [str(number) for number in requested],
+            mahalle_id,
+            ada,
+            timeout,
+            fetcher,
+        )
+        found = {}
+        for record in fetched:
+            number = _parsel_tam_sayi(record.get("parsel"))
+            if number not in requested:
+                continue
+            key = _kayit_anahtari(record)
+            if key:
+                records[key] = record
+                known_numbers.add(number)
+                found[number] = record
+        return found
+
+    def scan(start, direction):
+        current = start
+        consecutive_misses = 0
+        while (
+            0 < current <= NUMARA_TARAMA_AZAMI_NO
+            and consecutive_misses < gap_limit
+            and len(records) < ADA_PARSEL_LIMITI
+        ):
+            batch = []
+            batch_size = min(KOMSU_SORGU_ISCISI, gap_limit - consecutive_misses)
+            for _ in range(batch_size):
+                if not (0 < current <= NUMARA_TARAMA_AZAMI_NO):
+                    break
+                batch.append(current)
+                current += direction
+            found = probe(batch)
+            for number in batch:
+                if number in known_numbers or number in found:
+                    consecutive_misses = 0
+                else:
+                    consecutive_misses += 1
+                if consecutive_misses >= gap_limit:
+                    break
+
+    scan(min(known_numbers) - 1, -1)
+    scan(max(known_numbers) + 1, 1)
+
+    # Aradaki tekil servis hatalarini veya numara bosluklarini bir kez daha dene.
+    if known_numbers:
+        lower = min(known_numbers)
+        upper = max(known_numbers)
+        holes = [
+            number
+            for number in range(lower, upper + 1)
+            if number not in known_numbers
+        ]
+        for index in range(0, len(holes), KOMSU_SORGU_ISCISI):
+            if len(records) >= ADA_PARSEL_LIMITI:
+                break
+            probe(holes[index:index + KOMSU_SORGU_ISCISI], retry=True)
+
+    ordered = sorted(
+        records.values(),
+        key=lambda item: _parsel_siralama_anahtari(item.get("parsel")),
+    )
+    return ordered, max(0, len(records) - initial_count), len(probed_numbers)
+
+
 def _koordinattan_parsel_getir(lat, lon, timeout, fetcher):
     try:
         payload = fetcher(
             f"{TKGM_API_BASE}parsel/{lat:.8f}/{lon:.8f}/",
             timeout=timeout,
         )
-    except Exception:
+    except Exception as exc:
+        if _sorgu_limiti_hatasi(exc):
+            raise
         return None
     return _parsel_kaydi(payload)
 
@@ -326,15 +450,29 @@ def tkgm_ada_parsellerini_getir(kunye, timeout=25, fetcher=_json_getir):
             fetcher,
         )
         source = "parsel_listesi"
+        numeric_scan_used = False
+        numeric_added_count = 0
+        numeric_probe_count = 0
     else:
-        records = _komsulukla_ada_tara(
-            selected,
+        records, numeric_added_count, numeric_probe_count = _dogrudan_numara_taramasi(
+            [selected],
             location["mahalle_id"],
             location["ada"],
             timeout,
             fetcher,
         )
-        source = "komsuluk_taramasi"
+        numeric_scan_used = True
+        if numeric_added_count:
+            source = "dogrudan_numara_taramasi"
+        else:
+            records = _komsulukla_ada_tara(
+                selected,
+                location["mahalle_id"],
+                location["ada"],
+                timeout,
+                fetcher,
+            )
+            source = "komsuluk_taramasi"
 
     selected_key = _kayit_anahtari(selected)
     if selected_key not in {_kayit_anahtari(record) for record in records}:
@@ -346,6 +484,9 @@ def tkgm_ada_parsellerini_getir(kunye, timeout=25, fetcher=_json_getir):
         "records": records,
         "source": source,
         "list_error": list_error,
+        "numeric_scan_used": numeric_scan_used,
+        "numeric_added_count": numeric_added_count,
+        "numeric_probe_count": numeric_probe_count,
         "limit_reached": len(records) >= ADA_PARSEL_LIMITI,
     }
 

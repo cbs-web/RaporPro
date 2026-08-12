@@ -1888,6 +1888,77 @@ class YardimciFonksiyonTestleri(unittest.TestCase):
         self.assertEqual(result["source"], "komsuluk_taramasi")
         self.assertEqual([record["parsel"] for record in result["records"]], ["1", "2"])
 
+    def test_tkgm_liste_servisi_kapaliyken_dogrudan_numarayla_adayi_tamamlar(self):
+        def feature(parsel):
+            offset = int(parsel) * 0.0001
+            return {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [26.0 + offset, 40.0],
+                        [26.00008 + offset, 40.0],
+                        [26.00008 + offset, 40.00008],
+                        [26.0 + offset, 40.00008],
+                        [26.0 + offset, 40.0],
+                    ]],
+                },
+                "properties": {
+                    "adaNo": "118",
+                    "parselNo": str(parsel),
+                    "mahalleId": 3,
+                    "ozet": f"Cinarli-118/{parsel}",
+                },
+            }
+
+        def fake_fetcher(url, timeout=25):
+            del timeout
+            if url.endswith("ilListe.json"):
+                return [{"id": 1, "text": "Canakkale"}]
+            if "ilceListe/1" in url:
+                return [{"id": 2, "text": "Merkez"}]
+            if "mahalleListe/2" in url:
+                return [{"id": 3, "text": "Cinarli"}]
+            if "parselListe/" in url:
+                raise RuntimeError("liste servisi yetki istiyor")
+            if "/parsel/3/118/" in url:
+                number = int(url.rstrip("/").split("/")[-1])
+                if 1 <= number <= 10:
+                    return feature(number)
+                raise RuntimeError("parsel yok")
+            return feature(3)
+
+        result = tkgm_ada_parsellerini_getir(
+            {
+                "il": "Canakkale",
+                "ilce": "Merkez",
+                "mah": "Cinarli",
+                "ada": "118",
+                "par": "3",
+            },
+            fetcher=fake_fetcher,
+        )
+
+        self.assertEqual(result["source"], "dogrudan_numara_taramasi")
+        self.assertEqual(
+            [record["parsel"] for record in result["records"]],
+            [str(number) for number in range(1, 11)],
+        )
+        self.assertEqual(result["numeric_added_count"], 9)
+        self.assertGreater(result["numeric_probe_count"], 0)
+        self.assertLessEqual(result["numeric_probe_count"], 24)
+
+    def test_tkgm_dogrudan_sorgu_limiti_hatasi_yutulmaz(self):
+        from tkgm_ada import _dogrudan_parsel_getir
+        from tkgm_kml import TKGMSorguHatasi
+
+        def limited_fetcher(_url, timeout=25):
+            del timeout
+            raise TKGMSorguHatasi("TKGM servisi 403 hatasi verdi: Gunluk sorgu limiti")
+
+        with self.assertRaises(TKGMSorguHatasi):
+            _dogrudan_parsel_getir("3", "118", "3", 10, limited_fetcher)
+
     def test_tkgm_ada_gorseli_parselleri_uydu_altligina_cizer(self):
         from PIL import Image, ImageDraw
 
