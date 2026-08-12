@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-12T13:36:42Z",
+  "git_commit": "",
+  "git_branch": "",
+  "python": "3.11.9",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "processor": "Intel64 Family 6 Model 158 Stepping 13, GenuineIntel",
+  "standards": {
+    "statistic": "steady-state median; p95 is nearest-rank",
+    "network": "disabled/not used",
+    "correctness": "every sample validates deterministic output invariants",
+    "acceptance": "target case median improves >=10%; unrelated medians regress <=5%"
+  },
+  "results": {
+    "litoloji_korelasyonu": {
+      "samples_ms": [
+        36487.961,
+        36517.287,
+        36488.848
+      ],
+      "median_ms": 36488.848,
+      "min_ms": 36487.961,
+      "p95_ms": 36517.287,
+      "peak_kib": 2402.3,
+      "repeats": 3,
+      "warmups": 1
+    }
+  }
+}

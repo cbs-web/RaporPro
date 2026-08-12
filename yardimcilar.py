@@ -52,6 +52,41 @@ def docx_metadata_nortrle(document):
     return document
 
 
+def _docx_extended_metadata_bellekte_nortrle(document):
+    """Yuklu python-docx paketinin app.xml alanlarini kayittan once temizler."""
+    namespace = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+    value_types_namespace = (
+        "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
+    )
+    ElementTree.register_namespace("", namespace)
+    ElementTree.register_namespace("vt", value_types_namespace)
+    try:
+        parts = document.part.package.parts
+    except (AttributeError, TypeError):
+        return False
+    for part in parts:
+        if str(getattr(part, "partname", "")) != "/docProps/app.xml":
+            continue
+        try:
+            root = ElementTree.fromstring(part.blob)
+            for field_name in ("Company", "Manager"):
+                element = root.find(f"{{{namespace}}}{field_name}")
+                if element is not None:
+                    element.text = ""
+            application = root.find(f"{{{namespace}}}Application")
+            if application is not None:
+                application.text = "RaporPro"
+            part._blob = ElementTree.tostring(
+                root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+            return True
+        except Exception:
+            return False
+    return False
+
+
 def docx_paket_metadata_nortrle(path):
     """DOCX ZIP içindeki Company/Manager gibi extended alanları temizle."""
 
@@ -111,12 +146,15 @@ def atomic_docx_save(document, path):
     fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", suffix=suffix, dir=folder)
     os.close(fd)
     try:
+        extended_metadata_ready = False
         if hasattr(document, "core_properties"):
             docx_metadata_nortrle(document)
+            extended_metadata_ready = _docx_extended_metadata_bellekte_nortrle(document)
         document.save(tmp_path)
         if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
             raise OSError("Geçici Word dosyası oluşturulamadı.")
-        docx_paket_metadata_nortrle(tmp_path)
+        if not extended_metadata_ready:
+            docx_paket_metadata_nortrle(tmp_path)
         os.replace(tmp_path, target)
     finally:
         if os.path.exists(tmp_path):

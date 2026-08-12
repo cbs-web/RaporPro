@@ -352,24 +352,29 @@ def excelden_spt_oku(path, default_sondaj_no=""):
     except Exception as exc:
         raise RuntimeError(f"openpyxl yüklenemedi: {exc}") from exc
 
-    wb = load_workbook(path, data_only=True)
+    # Dosya yalnızca okunuyor; read_only büyük saha tablolarını hücre nesneleri
+    # olarak belleğe almadan satır satır işler.
+    wb = load_workbook(path, data_only=True, read_only=True)
     genel_sonuc = SPTImportSonucu()
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        raw_rows = []
-        for row in ws.iter_rows(values_only=True):
-            cells = ["" if cell is None else str(cell) for cell in row]
-            if any(cell.strip() for cell in cells):
-                raw_rows.append(cells)
-        if not raw_rows:
-            continue
-        sheet_result = _rows_to_records(raw_rows, default_sondaj_no, kaynak=sheet_name)
-        for kayit in sheet_result.kayitlar:
-            kayit.kaynak_yolu = str(path)
-            kayit.raw["kaynak_yolu"] = str(path)
-            kayit.kaynak = f"{Path(path).name} / {kayit.kaynak}" if kayit.kaynak else Path(path).name
-        genel_sonuc.kayitlar.extend(sheet_result.kayitlar)
-        genel_sonuc.uyarilar.extend([f"{sheet_name}: {msg}" for msg in sheet_result.uyarilar])
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            raw_rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = ["" if cell is None else str(cell) for cell in row]
+                if any(cell.strip() for cell in cells):
+                    raw_rows.append(cells)
+            if not raw_rows:
+                continue
+            sheet_result = _rows_to_records(raw_rows, default_sondaj_no, kaynak=sheet_name)
+            for kayit in sheet_result.kayitlar:
+                kayit.kaynak_yolu = str(path)
+                kayit.raw["kaynak_yolu"] = str(path)
+                kayit.kaynak = f"{Path(path).name} / {kayit.kaynak}" if kayit.kaynak else Path(path).name
+            genel_sonuc.kayitlar.extend(sheet_result.kayitlar)
+            genel_sonuc.uyarilar.extend([f"{sheet_name}: {msg}" for msg in sheet_result.uyarilar])
+    finally:
+        wb.close()
 
     genel_sonuc.kayitlar.sort(key=lambda item: (item.sondaj_no, safe_float(item.derinlik), item.kaynak))
     return genel_sonuc
@@ -719,8 +724,14 @@ def _select_best_for_expected_depth(records, expected_depth):
     return min(records, key=rank)
 
 
-def _select_spt_records_for_batch(records_by_path, paths):
-    path_order = [_path_unique_key(path) for path in paths]
+def _select_spt_records_for_batch(records_by_path, paths, path_order=None):
+    if path_order is None:
+        path_order = [_path_unique_key(path) for path in paths]
+    else:
+        path_order = list(path_order)
+    path_index = {}
+    for index, key in enumerate(path_order):
+        path_index.setdefault(key, index)
     has_multirow_photo = any(len(records) > 1 for _, records in records_by_path)
     selected = []
     removed_by_sequence = 0
@@ -738,10 +749,8 @@ def _select_spt_records_for_batch(records_by_path, paths):
             continue
         chosen = None
         if use_sequence and len(records) > 1:
-            try:
-                expected_idx = offset + path_order.index(key)
-            except ValueError:
-                expected_idx = -1
+            order_index = path_index.get(key)
+            expected_idx = offset + order_index if order_index is not None else -1
             if 0 <= expected_idx < len(HEDEF_DERINLIKLER):
                 chosen = _single_photo_candidate(records, HEDEF_DERINLIKLER[expected_idx])
         if chosen is None:
@@ -970,7 +979,11 @@ def fotograflardan_spt_oku(
         if progress_callback:
             progress_callback(idx, total, name, "tamam")
 
-    selected_records, removed_by_sequence, merged_cross_photo_rows = _select_spt_records_for_batch(records_by_path, paths)
+    selected_records, removed_by_sequence, merged_cross_photo_rows = _select_spt_records_for_batch(
+        records_by_path,
+        paths,
+        path_order=(key for key, _records in records_by_path),
+    )
     sonuc.kayitlar[:] = selected_records
     if merged_duplicate_rows:
         sonuc.uyarilar.append(f"{merged_duplicate_rows} tekrar SPT satırı aynı fotoğraf/derinlik olduğu için birleştirildi.")

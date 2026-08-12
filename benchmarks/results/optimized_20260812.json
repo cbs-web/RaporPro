@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-12T13:59:33Z",
+  "git_commit": "6a0140dc67ea50385474e3eaa14bc4b776c45a24",
+  "git_branch": "codex/section-engine-v2",
+  "python": "3.11.9",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "processor": "Intel64 Family 6 Model 158 Stepping 13, GenuineIntel",
+  "standards": {
+    "statistic": "steady-state median; p95 is nearest-rank",
+    "network": "disabled/not used",
+    "correctness": "every sample validates deterministic output invariants",
+    "acceptance": "target case median improves >=10%; unrelated medians regress <=5%"
+  },
+  "results": {
+    "startup_import": {
+      "samples_ms": [
+        2076.479,
+        2107.87,
+        2488.151,
+        2113.166,
+        2132.929
+      ],
+      "median_ms": 2113.166,
+      "min_ms": 2076.479,
+      "p95_ms": 2488.151,
+      "peak_kib": null,
+      "repeats": 5,
+      "warmups": 1
+    },
+    "dependency_preflight": {
+      "samples_ms": [
+        73.254,
+        76.991,
+        77.166,
+        74.634,
+        74.681
+      ],
+      "median_ms": 74.681,
+      "min_ms": 73.254,
+      "p95_ms": 77.166,
+      "peak_kib": null,
+      "repeats": 5,
+      "warmups": 1
+    },
+    "litoloji_korelasyonu": {
+      "samples_ms": [
+        695.904,
+        695.895,
+        695.827,
+        665.223,
+        665.066
+      ],
+      "median_ms": 695.827,
+      "min_ms": 665.066,
+      "p95_ms": 695.904,
+      "peak_kib": 2361.5,
+      "repeats": 5,
+      "warmups": 1
+    },
+    "spt_excel_okuma": {
+      "samples_ms": [
+        513.097,
+        515.683,
+        501.813,
+        497.227,
+        499.427
+      ],
+      "median_ms": 501.813,
+      "min_ms": 497.227,
+      "p95_ms": 515.683,
+      "peak_kib": 7876.4,
+      "repeats": 5,
+      "warmups": 1
+    },
+    "proje_saglik_ozeti": {
+      "samples_ms": [
+        2.796,
+        2.805,
+        2.707,
+        2.775,
+        2.793,
+        2.783,
+        2.707,
+        2.838,
+        2.787,
+        2.727,
+        2.714,
+        2.871,
+        2.871,
+        3.889,
+        2.725,
+        2.778,
+        2.749,
+        2.723,
+        2.681,
+        2.725
+      ],
+      "median_ms": 2.776,
+      "min_ms": 2.681,
+      "p95_ms": 2.871,
+      "peak_kib": 19.4,
+      "repeats": 20,
+      "warmups": 2
+    },
+    "rapor_uretimi": {
+      "samples_ms": [
+        3956.265,
+        3900.425,
+        3866.517
+      ],
+      "median_ms": 3900.425,
+      "min_ms": 3866.517,
+      "p95_ms": 3956.265,
+      "peak_kib": 42408.9,
+      "repeats": 3,
+      "warmups": 1
+    }
+  }
+}

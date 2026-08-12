@@ -2,6 +2,7 @@ import copy
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from litoloji_korelasyon import (
     KIVAM_SIRASI,
@@ -204,6 +205,69 @@ class KorelasyonMotoruTestleri(unittest.TestCase):
         }
         self.assertIn("lab_onayli", statuses)
         self.assertIn("korelasyonla_onerildi", statuses)
+
+    def test_esit_puanli_adaylarda_ilk_lab_kaydi_secili_kalir(self):
+        veri = {
+            "lab_sheet": {
+                "rows": [
+                    ["Sondaj No", "Numune", "Derinlik (m)", "USCS"],
+                    ["SK-1", "UD-1", "0.0-1.5", "saClL"],
+                    ["SK-2", "UD-2", "0.0-1.5", "ClH"],
+                ]
+            },
+            "sondaj": [
+                {"no": "SK-1", "der": "3", "k": "100", "spt": []},
+                {"no": "SK-2", "der": "3", "k": "100", "spt": []},
+                {"no": "SK-3", "der": "3", "k": "100", "spt": []},
+            ],
+        }
+
+        result = coklu_sondaj_onerileri_olustur(veri)
+        first_target = result["sondajlar"][2]["hucreler"][0]
+
+        self.assertEqual(first_target["sinif"], "saClL")
+        self.assertIn("Korelasyon: SK-1", first_target["kaynaklar"][0])
+
+    def test_kaynak_lab_rengi_cielaba_yalniz_bir_kez_cevrilir(self):
+        source_rgb = [12, 34, 56]
+        profiles = {
+            "SK-1": [
+                {"top": 0.0, "bottom": 1.5, "rgb": [70, 80, 90]},
+                {"top": 1.5, "bottom": 3.0, "rgb": source_rgb},
+            ],
+            "SK-2": [{"top": 0.0, "bottom": 3.0, "rgb": [110, 120, 130]}],
+            "SK-3": [{"top": 0.0, "bottom": 3.0, "rgb": [140, 150, 160]}],
+        }
+        veri = {
+            "lab_sheet": {
+                "rows": [
+                    ["Sondaj No", "Numune", "Derinlik (m)", "USCS"],
+                    ["SK-1", "UD-1", "1.5-3.0", "saClL"],
+                ]
+            },
+            "sondaj": [
+                {
+                    "no": key,
+                    "der": "3",
+                    "k": "100",
+                    "spt": [],
+                    "litoloji_fotografi": {"renk_profili": profile},
+                }
+                for key, profile in profiles.items()
+            ],
+        }
+        from litoloji_renk_motoru import renk_lab_degeri as original
+
+        converted = []
+
+        def counted(rgb):
+            converted.append(tuple(rgb))
+            return original(rgb)
+
+        with patch("litoloji_renk_motoru.renk_lab_degeri", side_effect=counted):
+            coklu_sondaj_onerileri_olustur(veri)
+
+        self.assertEqual(converted.count(tuple(source_rgb)), 1)
 
 
 class ManuelLabIsaretlemeTestleri(unittest.TestCase):

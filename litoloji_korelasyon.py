@@ -17,6 +17,9 @@ from karot_motoru import derinlik_araligi_coz
 from ui_lab_sheet import laboratuvar_baslik_bilgisi
 
 
+_ONHESAP_YOK = object()
+
+
 KIVAM_SIRASI = (
     "Çok yumuşak",
     "Yumuşak",
@@ -638,6 +641,28 @@ def _rgb_similarity(first, second):
         return None
 
 
+def _rgb_lab_degeri(rgb):
+    if not rgb:
+        return None
+    try:
+        from litoloji_renk_motoru import renk_lab_degeri
+
+        return renk_lab_degeri(rgb)
+    except Exception:
+        return None
+
+
+def _rgb_similarity_from_lab(first_rgb, first_lab, second_rgb, second_lab):
+    if not first_rgb or not second_rgb:
+        return None
+    try:
+        from litoloji_renk_motoru import lab_benzerligi
+
+        return lab_benzerligi(first_lab, second_lab)
+    except Exception:
+        return None
+
+
 def _gap_to_interval(depth, record):
     if record["top"] <= depth <= record["bottom"]:
         return 0.0
@@ -666,12 +691,24 @@ def _candidate_score(
     source_well,
     record,
     same_well,
+    target_color_lab=_ONHESAP_YOK,
+    source_color_record=_ONHESAP_YOK,
+    source_color_lab=_ONHESAP_YOK,
 ):
-    source_mid = (record["top"] + record["bottom"]) / 2
-    source_color_record = _profil_kaydi(source_well, source_mid)
-    color_similarity = _rgb_similarity(
-        (target_color or {}).get("rgb"),
-        (source_color_record or {}).get("rgb"),
+    target_rgb = (target_color or {}).get("rgb")
+    if source_color_record is _ONHESAP_YOK:
+        source_mid = (record["top"] + record["bottom"]) / 2
+        source_color_record = _profil_kaydi(source_well, source_mid)
+    source_rgb = (source_color_record or {}).get("rgb")
+    if target_color_lab is _ONHESAP_YOK:
+        target_color_lab = _rgb_lab_degeri(target_rgb)
+    if source_color_lab is _ONHESAP_YOK:
+        source_color_lab = _rgb_lab_degeri(source_rgb)
+    color_similarity = _rgb_similarity_from_lab(
+        target_rgb,
+        target_color_lab,
+        source_rgb,
+        source_color_lab,
     )
     if same_well:
         distance = _gap_to_interval(target_depth, record)
@@ -1060,6 +1097,21 @@ def coklu_sondaj_onerileri_olustur(
         for item in sondajlar
         if sondaj_anahtari(item.get("no"))
     }
+    source_color_cache = {}
+    for source_key, records in lab_by_well.items():
+        source_well = well_map.get(source_key)
+        if not source_well:
+            continue
+        for record in records:
+            if not record["parsed"].get("biliniyor"):
+                continue
+            source_mid = (record["top"] + record["bottom"]) / 2
+            source_color_record = _profil_kaydi(source_well, source_mid)
+            source_rgb = (source_color_record or {}).get("rgb")
+            source_color_cache[id(record)] = (
+                source_color_record,
+                _rgb_lab_degeri(source_rgb),
+            )
     spt_map = {
         key: sondaj_spt_kayitlari(well)
         for key, well in well_map.items()
@@ -1104,7 +1156,8 @@ def coklu_sondaj_onerileri_olustur(
                 confidence = 1.0
                 class_value = lab_record["sinif"]
             else:
-                candidates = []
+                target_color_lab = _rgb_lab_degeri((target_color or {}).get("rgb"))
+                best_candidate = None
                 for source_key, records in lab_by_well.items():
                     source_well = well_map.get(source_key)
                     if not source_well:
@@ -1112,6 +1165,7 @@ def coklu_sondaj_onerileri_olustur(
                     for record in records:
                         if not record["parsed"].get("biliniyor"):
                             continue
+                        source_color_record, source_color_lab = source_color_cache[id(record)]
                         scored = _candidate_score(
                             well,
                             mid,
@@ -1119,14 +1173,18 @@ def coklu_sondaj_onerileri_olustur(
                             source_well,
                             record,
                             same_well=(source_key == key),
+                            target_color_lab=target_color_lab,
+                            source_color_record=source_color_record,
+                            source_color_lab=source_color_lab,
                         )
                         if scored is None:
                             continue
-                        candidates.append((scored["score"], record, scored))
+                        candidate = (scored["score"], record, scored)
+                        if best_candidate is None or candidate[0] > best_candidate[0]:
+                            best_candidate = candidate
 
-                if candidates:
-                    candidates.sort(key=lambda item: item[0], reverse=True)
-                    score, best, detail = candidates[0]
+                if best_candidate is not None:
+                    score, best, detail = best_candidate
                     parsed = best["parsed"]
                     class_value = best["sinif"]
                     similarity = detail.get("color_similarity")

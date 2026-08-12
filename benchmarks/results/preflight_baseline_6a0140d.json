@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-08-12T13:44:00Z",
+  "git_commit": "6a0140dc67ea50385474e3eaa14bc4b776c45a24",
+  "git_branch": "codex/section-engine-v2",
+  "python": "3.11.9",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "processor": "Intel64 Family 6 Model 158 Stepping 13, GenuineIntel",
+  "standards": {
+    "statistic": "fresh-process median; p95 is nearest-rank",
+    "network": "disabled/not used",
+    "correctness": "every sample requires an empty required-dependency list"
+  },
+  "results": {
+    "dependency_preflight": {
+      "samples_ms": [
+        1072.006,
+        1074.943,
+        1123.110,
+        1133.641,
+        1156.237
+      ],
+      "median_ms": 1123.110,
+      "min_ms": 1072.006,
+      "p95_ms": 1156.237,
+      "peak_kib": null,
+      "repeats": 5,
+      "warmups": 1
+    }
+  }
+}
