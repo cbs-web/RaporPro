@@ -4,12 +4,17 @@ import os
 from pathlib import Path
 
 from gizli_depo import gizli_deger_coz, gizli_deger_sakla
-from uygulama_yollari import kullanici_yolu
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 from yardimcilar import atomic_json_dump
 
 
 HGM_URL_ENV = "RAPORPRO_HGM_ORTOFOTO_URL"
-HARITA_AYARLARI_PATH = Path(kullanici_yolu("harita_ayarlar.json"))
+HARITA_AYARLARI_PATH = Path(
+    kullanici_yolu(
+        "harita_ayarlar.json",
+        legacy=SOURCE_DIR / "harita_ayarlar.json",
+    )
+)
 
 
 def hgm_ortofoto_url_yukle(path=None):

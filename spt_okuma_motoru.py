@@ -35,7 +35,12 @@ HEDEF_DERINLIK_ARALIKLARI = [
 SPT_OKUMA_KLASORU = Path.home() / "Desktop" / "SPT Okuma"
 LEGACY_SPT_AYARLAR_PATH = SPT_OKUMA_KLASORU / "ayarlar.json"
 RAPORPRO_CONFIG_DIR = kullanici_veri_dizini()
-SPT_AYARLAR_PATH = RAPORPRO_CONFIG_DIR / "ayarlar.json"
+SPT_AYARLAR_PATH = Path(
+    kullanici_yolu(
+        "ayarlar.json",
+        legacy=SOURCE_DIR / "ayarlar.json",
+    )
+)
 SPT_LOG_DIR = Path(kullanici_yolu("logs"))
 SPT_GECMIS_PATH = Path(
     kullanici_yolu(

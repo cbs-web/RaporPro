@@ -7,7 +7,12 @@ from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
 
 APP_DIR = str(SOURCE_DIR)
-MAP_EXPORT_DIR = str(kullanici_yolu("harita_ciktilari"))
+MAP_EXPORT_DIR = str(
+    kullanici_yolu(
+        "harita_ciktilari",
+        legacy=SOURCE_DIR / "harita_ciktilari",
+    )
+)
 LEGACY_SHARED_MAP_NAMES = {"rapor_sondaj.jpg", "rapor_jeofizik.jpg", "rapor_mjh.jpg"}
 
 

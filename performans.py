@@ -12,8 +12,20 @@ from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
 
 APP_DIR = str(SOURCE_DIR)
-PERF_LOG_PATH = str(kullanici_yolu("logs", "performance.log"))
-ERROR_LOG_PATH = str(kullanici_yolu("logs", "error.log"))
+PERF_LOG_PATH = str(
+    kullanici_yolu(
+        "logs",
+        "performance.log",
+        legacy=SOURCE_DIR / "logs" / "performance.log",
+    )
+)
+ERROR_LOG_PATH = str(
+    kullanici_yolu(
+        "logs",
+        "error.log",
+        legacy=SOURCE_DIR / "logs" / "error.log",
+    )
+)
 _PERF_LOCK = threading.Lock()
 _ERROR_LOCK = threading.Lock()
 _GIZLI_BILGI_DESENLERI = (

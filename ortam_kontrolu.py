@@ -1,5 +1,7 @@
 import importlib.util
+from pathlib import Path
 import sys
+from zipfile import is_zipfile
 
 from motor_log_saglik import check_motor_log_bridge
 
@@ -27,6 +29,18 @@ OPTIONAL_DEPENDENCIES = [
 
 
 OPTIONAL_DEPENDENCIES.append(("ttkbootstrap", "ttkbootstrap", "Modern ve duz arayuz temasi"))
+
+RUNTIME_ASSETS = (
+    (Path("sablonlar") / "rapor" / "varsayilan_rapor_sablonu.docx", "Varsayılan Word rapor şablonu"),
+    (Path("sablonlar") / "rapor" / "dardanos_cinarli_rapor_sablonu.docx", "Dardanos-Çınarlı Word rapor şablonu"),
+    (Path("sablonlar") / "ekler" / "EK-Yeni-Sondaj-Tutanakli.docx", "Normal ekler şablonu"),
+    (
+        Path("sablonlar") / "ekler" / "EK-Yeni-Sondaj-Tutanakli-Arazi-Deneyli.docx",
+        "Arazi deneyli ekler şablonu",
+    ),
+    (Path("sablonlar") / "taahhutname_base.xlsx", "Taahhütname Excel şablonu"),
+    (Path("Tutanak Örnek.docx"), "Sondaj tutanağı Word şablonu"),
+)
 
 
 def _is_available(module_name):
@@ -60,6 +74,52 @@ def check_dependencies():
                 "purpose": f"Sondaj logu cizim motoru - {problem}",
             })
     return required_missing, optional_missing
+
+
+def check_runtime_assets(base_dir=None):
+    """Eksik, boş veya bozuk yerleşik şablonları kullanıcı uyarısı için döndür."""
+    root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parent
+    problems = []
+    for relative_path, purpose in RUNTIME_ASSETS:
+        path = root / relative_path
+        reason = ""
+        if not path.is_file():
+            reason = "Dosya bulunamadı."
+        else:
+            try:
+                if path.stat().st_size <= 0:
+                    reason = "Dosya boş."
+                elif path.suffix.lower() in {".docx", ".xlsx"} and not is_zipfile(path):
+                    reason = "Dosya biçimi bozuk veya okunamıyor."
+            except OSError as exc:
+                reason = f"Dosya denetlenemedi: {exc}"
+        if reason:
+            problems.append(
+                {
+                    "path": str(path),
+                    "relative_path": str(relative_path),
+                    "purpose": purpose,
+                    "reason": reason,
+                }
+            )
+    return problems
+
+
+def format_runtime_asset_message(problems):
+    lines = [
+        "Bazı yerleşik program dosyaları eksik veya bozuk.",
+        "Program açık kalacak; ilgili çıktı özellikleri kullanılamayabilir.",
+        "",
+    ]
+    for item in problems:
+        lines.append(f"- {item['purpose']}: {item['relative_path']} ({item['reason']})")
+    lines.extend(
+        [
+            "",
+            "Çözüm: Eksik dosyaları tam RaporPro sürümünden geri yükleyin.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def install_command(python_executable=None):

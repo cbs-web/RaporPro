@@ -42,7 +42,7 @@ from tkgm_ada import tkgm_ada_gorseli_olustur
 from tkgm_kml import tkgm_parsel_kml_olustur
 from tutarlilik_ortak import koordinat_durumu
 from ui_jeoloji_birimleri import JeolojiBirimleriPenceresi
-from uygulama_yollari import kullanici_yolu
+from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 from yerbuldurur_motoru import YerbuldururMotoru
 
 
@@ -925,7 +925,12 @@ class HaritalarSekmesiMixin:
         active_path = getattr(self, "aktif_dosya_yolu", None)
         if active_path:
             return os.path.join(os.path.dirname(active_path), "03_Haritalar")
-        return str(kullanici_yolu("TKGM_KML"))
+        return str(
+            kullanici_yolu(
+                "TKGM_KML",
+                legacy=SOURCE_DIR / "TKGM_KML",
+            )
+        )
 
     def _tkgm_kml_sonuc_isle(self, result):
         path = result.get("path")
