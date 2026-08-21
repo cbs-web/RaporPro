@@ -14,7 +14,7 @@ import unicodedata
 from collections import defaultdict
 
 from karot_motoru import derinlik_araligi_coz
-from ui_lab_sheet import laboratuvar_baslik_bilgisi
+from laboratuvar_motoru import laboratuvar_baslik_bilgisi
 from zemin_davranis import (
     KIVAM_SIRASI,
     SIKILIK_SIRASI,
