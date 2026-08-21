@@ -39,6 +39,7 @@ from kesit_topografya import (
     topografya_yuzey_egrisi,
     yuzeye_uyumlu_tabaka_poligonu,
 )
+from zemin_davranis import n30_kivam_sinifi, n30_sikilik_sinifi
 
 
 class GeoEngineKesitMixin:
@@ -200,27 +201,10 @@ class GeoEngineKesitMixin:
 
         def classify_consistency(code, n30=None, refused=False):
             if code in ("kl", "s"):
-                if refused:
-                    return "Sert"
-                if n30 is None:
-                    return ""
-                if n30 < 2: return "Çok yumuşak"
-                if n30 < 4: return "Yumuşak"
-                if n30 < 8: return "Orta katı"
-                if n30 < 15: return "Katı"
-                if n30 < 30: return "Çok katı"
-                return "Sert"
+                return n30_kivam_sinifi(n30, refused=refused)
 
             if code in ("k", "c"):
-                if refused:
-                    return "Çok sıkı"
-                if n30 is None:
-                    return ""
-                if n30 < 4: return "Çok gevşek"
-                if n30 < 10: return "Gevşek"
-                if n30 < 30: return "Orta sıkı"
-                if n30 < 50: return "Sıkı"
-                return "Çok sıkı"
+                return n30_sikilik_sinifi(n30, refused=refused)
 
             return ""
 

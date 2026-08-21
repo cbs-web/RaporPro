@@ -79,6 +79,12 @@ from raporlama_parsel import (
     rapor_kosullu_bolumlerini_uygula,
     rapor_sabit_tablolarini_uygula,
 )
+from zemin_davranis import (
+    KIVAM_SIRASI,
+    SIKILIK_SIRASI,
+    n30_kivam_sinifi,
+    n30_sikilik_sinifi,
+)
 
 
 def rapor_baglami_olustur(kaynak, *, word_path=None, veri=None, durum_bildir=False):
@@ -1163,21 +1169,19 @@ def raporla(app_instance, final_path=None, autosave=True):
 
                         if spt_source:
                             for val in spt_source:
-                                if is_cohesive:
-                                    if val < 2: found_labels.add("çok yumuşak")
-                                    elif val < 5: found_labels.add("yumuşak")
-                                    elif val < 9: found_labels.add("orta katı")
-                                    elif val < 16: found_labels.add("katı")
-                                    elif val < 31: found_labels.add("çok katı")
-                                    else: found_labels.add("sert")
-                                else:
-                                    if val < 5: found_labels.add("çok gevşek")
-                                    elif val < 11: found_labels.add("gevşek")
-                                    elif val < 31: found_labels.add("orta sıkı")
-                                    elif val < 51: found_labels.add("sıkı")
-                                    else: found_labels.add("çok sıkı")
+                                label = (
+                                    n30_kivam_sinifi(val)
+                                    if is_cohesive
+                                    else n30_sikilik_sinifi(val)
+                                )
+                                if label:
+                                    found_labels.add(label.casefold())
                             
-                            order_map = {"çok yumuşak": 1, "yumuşak": 2, "orta katı": 3, "katı": 4, "çok katı": 5, "sert": 6, "çok gevşek": 1, "gevşek": 2, "orta sıkı": 3, "sıkı": 4, "çok sıkı": 5}
+                            order = KIVAM_SIRASI if is_cohesive else SIKILIK_SIRASI
+                            order_map = {
+                                label.casefold(): index
+                                for index, label in enumerate(order, start=1)
+                            }
                             sorted_labels = sorted(list(found_labels), key=lambda x: order_map.get(x, 99))
                             durum_text = " - ".join(sorted_labels)
                         else:

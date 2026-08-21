@@ -15,27 +15,16 @@ from collections import defaultdict
 
 from karot_motoru import derinlik_araligi_coz
 from ui_lab_sheet import laboratuvar_baslik_bilgisi
+from zemin_davranis import (
+    KIVAM_SIRASI,
+    SIKILIK_SIRASI,
+    n30_kivam_sinifi,
+    n30_sikilik_sinifi,
+)
 
 
 _ONHESAP_YOK = object()
 
-
-KIVAM_SIRASI = (
-    "Çok yumuşak",
-    "Yumuşak",
-    "Orta katı",
-    "Katı",
-    "Çok katı",
-    "Sert",
-)
-
-SIKILIK_SIRASI = (
-    "Çok gevşek",
-    "Gevşek",
-    "Orta sıkı",
-    "Sıkı",
-    "Çok sıkı",
-)
 
 PLASTISITE_SIRASI = ("L", "M", "H")
 
@@ -119,44 +108,6 @@ def _sayi(value):
 def sondaj_anahtari(value):
     """SK-1, SK1 ve sk 1 yazımlarını aynı eşleştirme anahtarına dönüştürür."""
     return _anahtar(value)
-
-
-def n30_kivam_sinifi(n30=None, refused=False):
-    """İnce daneli zemin için kullanıcı tarafından onaylanan N30 tablosu."""
-    if refused:
-        return "Sert"
-    number = _sayi(n30)
-    if number is None or number < 0:
-        return ""
-    if number <= 2:
-        return "Çok yumuşak"
-    if number <= 4:
-        return "Yumuşak"
-    if number <= 8:
-        return "Orta katı"
-    if number <= 15:
-        return "Katı"
-    if number <= 30:
-        return "Çok katı"
-    return "Sert"
-
-
-def n30_sikilik_sinifi(n30=None, refused=False):
-    """İri daneli zemin için log lejantıyla uyumlu N30 sıkılık tablosu."""
-    if refused:
-        return "Çok sıkı"
-    number = _sayi(n30)
-    if number is None or number < 0:
-        return ""
-    if number <= 4:
-        return "Çok gevşek"
-    if number <= 10:
-        return "Gevşek"
-    if number <= 30:
-        return "Orta sıkı"
-    if number <= 50:
-        return "Sıkı"
-    return "Çok sıkı"
 
 
 def siniflar_ardisik_mi(first, second, order):

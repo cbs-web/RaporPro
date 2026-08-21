@@ -22,6 +22,7 @@ from matplotlib.textpath import TextPath
 from sabitler import LEJANTLAR
 from yardimcilar import safe_float, litoloji_cozumle
 from cizim import GeoEngineDraw
+from zemin_davranis import KIVAM_N30_TABLOSU, SIKILIK_N30_TABLOSU
 
 
 @lru_cache(maxsize=4096)
@@ -660,11 +661,11 @@ class GeoEngineLogMixin:
                     footer_cell(x, footer_bottom, footer_w, y0 - footer_bottom, "", fs=3.8)
 
             draw_footer_table(0, [
-                ("Kıvam Durumu (ince daneli)", [("N", ""), ("0-2", "Çok yumuşak"), ("3-4", "Yumuşak"), ("5-8", "Orta katı"), ("9-15", "Katı"), ("16-30", "Çok katı"), (">30", "Sert")]),
+                ("Kıvam Durumu (ince daneli)", KIVAM_N30_TABLOSU),
                 ("Dayanımlılık", [("I", "Çok zayıf"), ("II", "Zayıf"), ("III", "Orta"), ("IV", "Dayanıklı"), ("V", "Çok dayanıklı")]),
             ])
             draw_footer_table(1, [
-                ("Sıkılık (iri daneli)", [("N", ""), ("0-4", "Çok gevşek"), ("5-10", "Gevşek"), ("11-30", "Orta sıkı"), ("31-50", "Sıkı"), (">50", "Çok sıkı")]),
+                ("Sıkılık (iri daneli)", SIKILIK_N30_TABLOSU),
                 ("Ayrışma Derecesi", [("I", "Taze"), ("II", "Az ayrışmış"), ("III", "Orta ayrışmış"), ("IV", "Çok ayrışmış"), ("V", "Tam ayrışmış"), ("VI", "Kalıntı")]),
             ])
             draw_footer_table(2, [
