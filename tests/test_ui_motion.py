@@ -4,6 +4,7 @@ import tkinter as tk
 
 import pytest
 
+from arayuz_temel import ArayuzTemelMixin
 from ui_motion import (
     UIMotionMixin,
     blend_hex,
@@ -37,6 +38,35 @@ class _MotionHost(UIMotionMixin):
     def __init__(self, enabled=True):
         self.root = _FakeScheduler()
         self.ui_motion_setup(enabled=enabled)
+
+
+class _TooltipWidget:
+    def __init__(self):
+        self.bindings = {}
+        self.jobs = {}
+        self.cancelled = []
+        self.counter = 0
+
+    def bind(self, event_name, callback, add=None):
+        self.bindings[event_name] = callback
+
+    def after(self, _delay, callback):
+        self.counter += 1
+        after_id = f"after-{self.counter}"
+        self.jobs[after_id] = callback
+        return after_id
+
+    def after_cancel(self, after_id):
+        self.cancelled.append(after_id)
+        self.jobs.pop(after_id, None)
+
+    def winfo_exists(self):
+        return True
+
+
+class _TooltipEvent:
+    def __init__(self, widget):
+        self.widget = widget
 
 
 def test_motion_easing_sinirlari_korur():
@@ -132,3 +162,35 @@ def test_hazirlanan_pencerede_destroy_cikis_gecisini_kullanir():
 
     assert window.destroyed == 1
     assert callable(window.protocol_callback)
+
+
+def test_tooltip_widget_yok_edilirken_bekleyen_gorev_iptal_edilir():
+    host = ArayuzTemelMixin()
+    widget = _TooltipWidget()
+    host.tooltip_ekle(widget, "Açıklama", delay=550)
+
+    widget.bindings["<Enter>"](_TooltipEvent(widget))
+    after_id = next(iter(widget.jobs))
+    widget.bindings["<Destroy>"](_TooltipEvent(widget))
+
+    assert after_id in widget.cancelled
+    assert widget.jobs == {}
+    assert host._tooltip_cleanups == set()
+
+
+def test_program_kapanirken_tum_tooltip_gorevleri_iptal_edilir():
+    host = ArayuzTemelMixin()
+    first = _TooltipWidget()
+    second = _TooltipWidget()
+    host.tooltip_ekle(first, "Birinci")
+    host.tooltip_ekle(second, "İkinci")
+    first.bindings["<Enter>"](_TooltipEvent(first))
+    second.bindings["<Enter>"](_TooltipEvent(second))
+
+    host.tooltips_temizle()
+
+    assert first.jobs == {}
+    assert second.jobs == {}
+    assert first.cancelled == ["after-1"]
+    assert second.cancelled == ["after-1"]
+    assert host._tooltip_cleanups == set()

@@ -255,7 +255,7 @@ class ResimIsaretleyici(ResimGeorefMixin, ResimPaftaMixin, tk.Toplevel):
         tk.Button(ref_frame, text="Mevcutları Otomatik Yenile", bg="#FDEBD0", font=("Arial", 9, "bold"), command=lambda: self.koordinattan_otomatik_yerlestir(overwrite=True)).pack(fill="x", pady=2)
         tk.Button(ref_frame, text="Referansları Temizle", bg="#FADBD8", font=("Arial", 9, "bold"), command=self.georef_refs_temizle).pack(fill="x", pady=2)
 
-        vis_frame = ttk.LabelFrame(side_content, text="Görünürlük", padding=6)
+        vis_frame = ttk.LabelFrame(side_content, text="Katmanlar", padding=6)
         vis_frame.pack(fill="x", padx=5, pady=(2, 5))
         for text, variable in (
             ("Görsel altlığı göster", self.show_background_var),

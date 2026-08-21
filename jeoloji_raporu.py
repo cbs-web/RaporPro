@@ -361,20 +361,7 @@ def jeoloji_rapor_bloklari(veri):
     muhendislik = _intro_bloklari(records)
 
     if section_records:
-        section_labels = _liste_metni(
-            _durumlu_birim_ifadesi(record)
-            for record in section_records
-        )
-        kesit = [
-            {
-                "tur": "metin",
-                "metin": (
-                    "Jeolojik kesitin oluşturulmasında çalışma alanında tanımlanan "
-                    f"{section_labels} esas alınmıştır."
-                ),
-            }
-        ]
-        kesit.extend(_birim_aciklama_bloklari(section_records))
+        kesit = _birim_aciklama_bloklari(section_records)
     else:
         kesit = [
             {

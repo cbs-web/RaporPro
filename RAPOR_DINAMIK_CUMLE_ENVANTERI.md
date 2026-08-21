@@ -50,7 +50,7 @@ PMT, karot, jeofizik sonuç ve YASS önerisi özel motorlarla dinamik üretilir.
 
 - `İnceleme alanı {KONUM} sınırlarında yer almaktadır.`
 - Koordinatlar varsa:
-  `İnceleme alanı {KONUM} sınırlarında yer almaktadır ve merkez koordinatı Enlem: {ENLEM}, Boylam: {BOYLAM} (WGS84) olarak girilmiştir.`
+  `İnceleme alanı {KONUM} sınırlarında ve Enlem: {ENLEM}, Boylam: {BOYLAM} (WGS84) koordinatlarındadır.`
 - Konum yoksa:
   `İnceleme alanının konum bilgileri proje künyesinde tanımlanmamıştır.`
 - `Parsel alanı yaklaşık {PARSEL_ALANI} m²'dir.`
@@ -59,11 +59,14 @@ PMT, karot, jeofizik sonuç ve YASS önerisi özel motorlarla dinamik üretilir.
 - `Çalışma alanında eğim {EGIM} olarak belirlenmiştir.`
 - `Çalışma alanında eğim yönü {EGIM_YONU} olarak belirlenmiştir.`
 - `Çalışma alanında eğim {EGIM}, eğim yönü {EGIM_YONU} olarak belirlenmiştir.`
-- `Parsel {PARSEL_TIPI} niteliğindedir.`
-- `Parselin yol cepheleri: {YOL_CEPHELERI}.`
-- `Komşu parsel bilgileri: {KOMSU_PARSELLER}.`
-- `Yakın çevredeki mevcut yapılar: {MEVCUT_YAPILAR}.`
-- `Parselin mevcut kullanımı: {MEVCUT_KULLANIM}.`
+- Parsel tipi ve yol bilgileri birleştirilerek doğal bir cümle üretilir:
+  `Parsel, {YOL_CEPHELERI} {PARSEL_TIPI} niteliğinde olup ...`
+- Sayısal komşu bilgisi bağlama göre `9 numaralı parsele komşudur` biçiminde
+  yazılır; tam cümle girilmiş değerler etiket eklenmeden korunur.
+- `Boş` yakın çevre yapısı için `Komşu parsellerde mevcut yapı bulunmamaktadır.`;
+  `Boş` parsel kullanımı için `Parsel hâlihazırda boş durumdadır.` yazılır.
+- Diğer serbest metinler bağlama uygun cümleye dönüştürülür; `Parselin yol
+  cepheleri: ...` gibi mekanik etiketler üretilmez.
 - `Bitki örtüsü: {BITKI_ORTUSU}.`
 - `Altyapı durumu: {ALTYAPI_DURUMU}.`
 - `Drenaj durumu: {DRENAJ_DURUMU}.`
@@ -71,6 +74,11 @@ PMT, karot, jeofizik sonuç ve YASS önerisi özel motorlarla dinamik üretilir.
 - `İnceleme alanı yer bulduru haritası Şekil 1'de verilmiştir.`
 
 `Çevre ek açıklaması` alanındaki metin de bu paragrafın sonuna kullanıcı metni olarak eklenir.
+
+`Parsel çevresi özeti` alanı doluysa parsel tipi, yol cephesi, komşu parsel,
+mevcut yapılar ve mevcut kullanım için ayrı mekanik cümleler yazılmaz; bu alan
+tek bir kullanıcı kontrollü paragraf olarak kullanılır. Alan boşsa eski proje
+davranışı korunur.
 
 ## 4. İmar planı ve imar adası
 
@@ -162,10 +170,10 @@ Kullanıcı `aktif tektonik açıklaması` yazarsa ilk iki otomatik seçenek yer
   `Sondaj çalışmaları TS EN ISO 22475-1 standardı esas alınarak yürütülmüştür.`
 - SPT varsa:
   `SPT deneyleri TS EN ISO 22476-3 standardına göre değerlendirilmiştir.`
-- PMT varsa:
-  `Presiyometre deneyleri ilgili sondaj ve derinliklerde gerçekleştirilmiştir.`
-- Kaya/karot verisi varsa:
-  `Karotlu ilerlemelerde TCR, SCR ve RQD değerleri kaydedilmiştir.`
+- PMT varsa, PMT kaydı bulunan sondajlar doğal sırayla listelenir:
+  `SK-2 ve SK-4 sondajlarında presiyometre deneyi yapılmıştır.`
+- TCR/SCR/RQD genel cümlesi yazılmaz. Gerçek karot yüzdesi açıklaması ve karot
+  tablosu, veri bulunduğunda kendi rapor bölümünde korunur.
 
 ### Sondaj bölümü giriş paragrafı
 
@@ -322,8 +330,8 @@ Bu cümleyi üretebilen birimler:
 
 ### Jeolojik kesit
 
-- Kesitte kullanılacak birim varsa:
-  `Jeolojik kesitin oluşturulmasında çalışma alanında tanımlanan {BIRIMLER} esas alınmıştır.`
+- Kesitte kullanılacak birim varsa, birim başlıkları ve ayrıntılı açıklamaları
+  yazılır; ayrıca otomatik bir “esas alınmıştır” giriş cümlesi eklenmez.
 - Birim yoksa:
   `Jeolojik kesitte kullanılacak literatür birimi proje verilerinde tanımlanmamıştır.`
 
@@ -479,7 +487,7 @@ Otomatik sayısal hidrografya analizi yok sonucu verdiyse:
 
 - `İnceleme alanı {KONUM} sınırlarında yer almaktadır.`
 - Koordinatlar da varsa:
-  `İnceleme alanı {KONUM} sınırlarında yer almaktadır; merkez koordinatı Enlem: {ENLEM}, Boylam: {BOYLAM} (WGS84)'tür.`
+  `İnceleme alanı {KONUM} sınırlarında ve Enlem: {ENLEM}, Boylam: {BOYLAM} (WGS84) koordinatlarındadır.`
 - Konum yoksa:
   `İnceleme alanının konum bilgileri tanımlanmamıştır.`
 

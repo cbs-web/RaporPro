@@ -36,6 +36,7 @@ _DOSYALAR_REFERANSLARI = {
     "word_img_sondaj",
     "word_img_jeofizik",
 }
+_DOSYALAR_LISTE_REFERANSLARI = {"masw_word_paths"}
 _AYAR_REFERANSLARI = {
     "varsayilan_word_path",
     "ek_tutanak_path",
@@ -140,7 +141,13 @@ def _muhtemel_dosya_referansi(path, value):
     top = str(path[0])
     last = str(path[-1]).lower()
     if top == "dosyalar":
-        return len(path) == 2 and last in _DOSYALAR_REFERANSLARI
+        if len(path) == 2:
+            return last in _DOSYALAR_REFERANSLARI
+        return (
+            len(path) == 3
+            and str(path[1]) in _DOSYALAR_LISTE_REFERANSLARI
+            and isinstance(path[2], int)
+        )
     if top == "ek_icerikleri":
         return len(path) >= 4 and isinstance(path[-1], int)
     if top == "harita_cizimleri":

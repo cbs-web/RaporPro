@@ -31,6 +31,7 @@ class GeoteknikRaporAlani:
     blok_adi: str = ""
     alternatifler: tuple[str, ...] = ()
     uyari: str = ""
+    kanit: str = ""
 
 
 _FIELD_LABELS = {
@@ -57,6 +58,39 @@ _FIELD_LABELS = {
 }
 
 _FIELD_ORDER = tuple(_FIELD_LABELS)
+
+_IMAR_FIELD_LABELS = {
+    "imar_alani": "İmar kullanım kararı / alan türü",
+    "parsel_tipi": "Parsel tipi",
+    "yol_cephe_sayisi": "Yol cephesi sayısı",
+    "yol_yonleri": "Yol cephe yönleri",
+    "yol_cepheleri": "Yol ve cephe açıklaması",
+    "komsu_parseller": "Komşu parsel numaraları",
+    "mevcut_yapilar": "Komşu parsellerdeki yapı durumu",
+    "mevcut_kullanim": "Parselin mevcut kullanımı",
+    "yol_kaplama": "Yol kaplama türü",
+    "yaya_trafik": "Yaya trafiğine açıklık",
+    "tasit_trafik": "Taşıt trafiğine açıklık",
+    "ulasim_durumu": "Ulaşım durumu",
+    "altyapi_durumu": "Altyapı durumu",
+    "dogalgaz_hatti": "Doğalgaz hattı",
+    "elektrik_hatti": "Elektrik hattı",
+    "kanalizasyon_hatti": "Kanalizasyon hattı",
+    "temiz_su_hatti": "Temiz/içme suyu hattı",
+    "telekom_hatti": "Telekom hattı",
+    "yagmur_suyu_hatti": "Yağmur suyu hattı",
+    "egim": "Genel eğim",
+    "yon": "Eğim yönü",
+}
+
+_TURKISH_NUMBER_WORDS = {
+    "bir": "1",
+    "iki": "2",
+    "üç": "3",
+    "uc": "3",
+    "dört": "4",
+    "dort": "4",
+}
 
 
 def _ascii_key(value):
@@ -676,6 +710,364 @@ def _pressure_cross_checks(pages, block_data, warnings):
                 )
 
 
+def _page_content(page):
+    """Sayfa metni ile DOCX/PDF tablo hücrelerini tek arama metninde birlestirir."""
+    parts = [_clean_text(page.get("text", ""))]
+    for table in page.get("tables", []) or []:
+        for row in table or []:
+            parts.append(" ".join(_clean_text(cell) for cell in row or []))
+    return _clean_text(" ".join(part for part in parts if part))
+
+
+def _imar_kaynak_siralama(pages):
+    def score(page):
+        key = _ascii_key(_page_content(page))
+        value = 0
+        if "insaat sahasi hakkinda bilgiler" in key:
+            value += 100
+        if "parselin plan fonksiyonu" in key or "imar durum bilgileri" in key:
+            value += 55
+        if "10 2 kazi sevi" in key or "kazi sevi guvenligi" in key:
+            value += 15
+        return value
+
+    return sorted(pages, key=lambda page: (-score(page), page.get("no", 1)))
+
+
+def _imar_bolum_adi(text):
+    key = _ascii_key(text)
+    if "insaat sahasi hakkinda bilgiler" in key:
+        return "2 - İnşaat Sahası Hakkında Bilgiler"
+    if "imar durum bilgileri" in key or "parselin plan fonksiyonu" in key:
+        return "Tablo 1 - İmar Durum Bilgileri"
+    if "kazi sevi guvenligi" in key or "10 2 kazi" in key:
+        return "10.2 - Kazı Şevi Güvenliği"
+    return "Rapor metni"
+
+
+def _imar_kanit(text, match, limit=260):
+    clean = _clean_text(text)
+    start = max(0, match.start() - 90)
+    end = min(len(clean), match.end() + 150)
+    evidence = clean[start:end].strip(" ,;:")
+    if start > 0:
+        evidence = "…" + evidence
+    if end < len(clean):
+        evidence += "…"
+    return evidence[:limit]
+
+
+def _imar_deger_kucult(value):
+    value = _clean_text(value)
+    return value.strip(" .,:;()")
+
+
+def _imar_sayi(value):
+    value = _clean_text(value).casefold()
+    return _TURKISH_NUMBER_WORDS.get(value, _number_text(value))
+
+
+def _imar_parsel_tipi(value):
+    key = _ascii_key(value)
+    if key.startswith("kose parsel"):
+        return "Köşe parsel"
+    if key.startswith("ara parsel"):
+        return "Ara parsel"
+    if key.startswith("ada parsel"):
+        return "Ada parsel"
+    return "Belirtilmedi"
+
+
+def _imar_ayni_deger(key, first, second):
+    """İmar alanlarını türlerine uygun biçimde karşılaştır."""
+    if key == "yol_cephe_sayisi":
+        return _same_value(first, second)
+    if key == "komsu_parseller":
+        left = tuple(re.findall(r"\d+", _clean_text(first)))
+        right = tuple(re.findall(r"\d+", _clean_text(second)))
+        if left and right:
+            return left == right
+    return _ascii_key(first) == _ascii_key(second)
+
+
+def _imar_saha_alanlari(pages, dosya_adi):
+    """Geoteknik raporun saha bolumunden onaylanabilir duz alan adaylari uretir."""
+    records = {}
+    warnings = []
+
+    def add(key, value, page, confidence, match, section=None):
+        value = _imar_deger_kucult(value)
+        if not value:
+            return
+        page = page or 1
+        text = _page_content(page_item_by_no.get(page, {}))
+        section = section or _imar_bolum_adi(text)
+        evidence = _imar_kanit(text, match)
+        current = records.get(key)
+        if current is None:
+            records[key] = {
+                "value": value,
+                "page": page,
+                "confidence": confidence,
+                "alternatives": [],
+                "warning": "",
+                "evidence": evidence,
+                "section": section,
+            }
+            return
+        if _imar_ayni_deger(key, current["value"], value):
+            return
+        alternative = f"{value} (Sayfa {page})"
+        if alternative not in current["alternatives"]:
+            current["alternatives"].append(alternative)
+        current["warning"] = (
+            "Raporda aynı alan için farklı değer bulundu; otomatik seçim yapılmadı."
+        )
+        warning = (
+            f"{_IMAR_FIELD_LABELS.get(key, key)} için {current['value']} "
+            f"(Sayfa {current['page']}) ve {value} (Sayfa {page}) değerleri bulundu."
+        )
+        if warning not in warnings:
+            warnings.append(warning)
+
+    source_pages = _imar_kaynak_siralama(pages)
+    page_item_by_no = {page.get("no", 1): page for page in pages}
+
+    # Plan fonksiyonu / imar alani: tablo satirinin bir sonraki satira kadar olan
+    # degeri alinir; sabit bir "Konut" varsayimi yapilmaz.
+    plan_pattern = re.compile(
+        r"parselin\s+plan\s+fonksiyonu\s+(.+?)(?=\s+(?:yan|arka|ön|on)\s+bahçe\s+çekme\s+mesafesi|\s+eğim\s+durumu|\s+mimari\b|$)",
+        re.I,
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for match in plan_pattern.finditer(text):
+            add("imar_alani", match.group(1), page.get("no", 1), 0.98, match)
+
+    # Parsel tipi yalnız raporda açıkça yazan ibareden alınır. Yol geometrisi
+    # tek başına Ada/Ara/Köşe parsel sonucu üretmez.
+    parcel_pattern = re.compile(r"\b(köşe|kose|ara|ada)\s+parsel\b", re.I)
+    for page in source_pages:
+        text = _page_content(page)
+        for match in parcel_pattern.finditer(text):
+            value = _imar_parsel_tipi(match.group(0))
+            if value != "Belirtilmedi":
+                add("parsel_tipi", value, page.get("no", 1), 0.99, match)
+
+    count_patterns = (
+        re.compile(
+            r"\b(?P<count>\d+|bir|iki|üç|uc|dört|dort)\s+yola\s+cepheli",
+            re.I,
+        ),
+        re.compile(
+            r"\b(?P<count>\d+|bir|iki|üç|uc|dört|dort)\s+tarafı(?:nda)?\s+yol",
+            re.I,
+        ),
+        re.compile(
+            r"\b(?P<count>\d+|bir|iki|üç|uc|dört|dort)\s+cephesi\s+yol",
+            re.I,
+        ),
+        re.compile(
+            r"parselin\s+(?P<count>\d+|bir|iki|üç|uc|dört|dort)\s+cephesi\s+yol",
+            re.I,
+        ),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for pattern in count_patterns:
+            for match in pattern.finditer(text):
+                count = _imar_sayi(match.group("count"))
+                if count:
+                    add("yol_cephe_sayisi", count, page.get("no", 1), 0.96, match)
+                    if "yol_cepheleri" not in records:
+                        count_word = {
+                            "1": "bir",
+                            "2": "iki",
+                            "3": "üç",
+                            "4": "dört",
+                        }.get(count, count)
+                        add(
+                            "yol_cepheleri",
+                            f"{count_word} yola cepheli",
+                            page.get("no", 1),
+                            0.91,
+                            match,
+                        )
+
+    neighbor_patterns = (
+        re.compile(
+            r"(?:komşu|komsu|diğer|diger|cephesinde|cephelerinde|sınırlı|sinirli)"
+            r".{0,130}?\b(?P<numbers>\d+(?:\s*(?:ve|,)\s*\d+)*)\s*nolu\s+"
+            r"(?:boş\s+|bos\s+)?(?:komşu\s+|komsu\s+)?parsel\w*",
+            re.I,
+        ),
+        re.compile(
+            r"\b(?P<numbers>\d+(?:\s*(?:ve|,)\s*\d+)*)\s+nolu\s+"
+            r"(?:boş\s+|bos\s+)?komşu\s+parsel\w*",
+            re.I,
+        ),
+        re.compile(
+            r"\b(?P<numbers>\d+(?:\s*(?:ve|,)\s*\d+)*)\s+nolu\s+"
+            r"parsel\w*\s+(?:ile\s+)?komşu\b",
+            re.I,
+        ),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for pattern in neighbor_patterns:
+            for match in pattern.finditer(text):
+                number_prefix = text[max(0, match.start("numbers") - 35) : match.start("numbers")]
+                if re.search(r"\bada\s*,?\s*$", number_prefix, flags=re.I):
+                    continue
+                numbers = re.sub(r"\s*(?:ve|,)\s*", ", ", match.group("numbers"))
+                add("komsu_parseller", numbers, page.get("no", 1), 0.90, match)
+
+    # Komşu yapı durumu ve mevcut kullanım; rapor açıkça söylemiyorsa alan
+    # oluşturulmaz. "Boş" yalnız komşu parsellerin yapısızlığı açıkça yazılmışsa
+    # kullanılır.
+    neighbor_building_patterns = (
+        re.compile(
+            r"içerisinde\s+oturulan\s+[^.]{0,100}?yapılar\s+ile\s+boş\s+parseller\s+bulunmaktadır",
+            re.I,
+        ),
+        re.compile(r"çevresinde\s+binalar\s+ile\s+boş\s+parseller\s+bulunmaktadır", re.I),
+        re.compile(r"\bnolu\s+boş\s+parsel\s+bulunmaktadır", re.I),
+        re.compile(r"komşu\s+parsellerde\s+mevcut\s+yapı\s+bulunmamaktadır", re.I),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for pattern in neighbor_building_patterns:
+            for match in pattern.finditer(text):
+                value = match.group(0)
+                if (
+                    "bulunmamaktadir" in _ascii_key(value)
+                    or "nolu\\s+boş" in pattern.pattern
+                ):
+                    value = "Boş"
+                add("mevcut_yapilar", value, page.get("no", 1), 0.88, match)
+
+    current_use_patterns = (
+        re.compile(
+            r"(?:taşınmaz(?:ın)?|parsel(?:in)?)\s+hal[iı]\s*haz[ıi]rda\s+"
+            r"arsa\s+vasf[ıi]ndadır",
+            re.I,
+        ),
+        re.compile(
+            r"(?:taşınmaz(?:ın)?|parsel(?:in)?)\s+hal[iı]\s*haz[ıi]rda\s+"
+            r"boş\s+durumdadır",
+            re.I,
+        ),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for pattern in current_use_patterns:
+            for match in pattern.finditer(text):
+                value = "Arsa" if "arsa" in _ascii_key(match.group(0)) else "Boş"
+                add("mevcut_kullanim", value, page.get("no", 1), 0.95, match)
+
+    road_pattern = re.compile(
+        r"(?P<surface>sıcak\s+asfalt|asfalt|kilit\s+parke|stabilize|toprak)"
+        r"(?:\s+ile)?\s+(?:kaplı|kaplamalı|yol)",
+        re.I,
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for match in road_pattern.finditer(text):
+            add("yol_kaplama", match.group("surface"), page.get("no", 1), 0.95, match)
+
+    # Yol yönü yalnız açıkça belirtilen yön/cephe ifadesinden alınır. Parsel
+    # geometrisinden veya KML şeklinden yön çıkarımı yapılmaz.
+    road_direction_pattern = re.compile(
+        r"(?P<direction>"
+        r"(?:ön|on|arka|kuzey|güney|doğu|batı)"
+        r"(?:\s*(?:,|ve|ile|-)+\s*(?:ön|on|arka|kuzey|güney|doğu|batı))*"
+        r")\s+(?:(?:bir|iki|üç|uc|dört|dort|\d+)\s+)?"
+        r"(?:yön(?:ünde|lerinde)?|cephe(?:de|lerinde)?)"
+        r"(?:.{0,45})?\byol\b",
+        re.I,
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for match in road_direction_pattern.finditer(text):
+            direction = _clean_text(match.group("direction"))
+            add("yol_yonleri", direction, page.get("no", 1), 0.90, match)
+
+    traffic_pattern = re.compile(
+        r"yaya\s+ve\s+taşıt\s+trafiğine\s+(?P<status>kısmen\s+)?açık",
+        re.I,
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for match in traffic_pattern.finditer(text):
+            status = "Kısmen açık" if match.group("status") else "Açık"
+            add("yaya_trafik", status, page.get("no", 1), 0.96, match)
+            add("tasit_trafik", status, page.get("no", 1), 0.96, match)
+
+    infrastructure_patterns = (
+        (re.compile(r"(?:alt\s+ve\s+üst|altyapı\s+ve\s+üstyapı)\s+[^.]{0,50}tamamlanmamış", re.I), "Altyapı ve üstyapı çalışmaları tamamlanmamıştır."),
+        (re.compile(r"(?:alt\s+ve\s+üst|altyapı\s+ve\s+üstyapı)\s+[^.]{0,50}tamamlanmış", re.I), "Altyapı ve üstyapı çalışmaları tamamlanmıştır."),
+        (re.compile(r"ulaşım\s+ve\s+altyapı\s+sorunu\s+(?:yoktur|bulunmamaktadır)", re.I), "Yok"),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for pattern, value in infrastructure_patterns:
+            for match in pattern.finditer(text):
+                add("altyapi_durumu", value, page.get("no", 1), 0.93, match)
+                if value == "Yok":
+                    add("ulasim_durumu", "Yok", page.get("no", 1), 0.93, match)
+
+    utility_patterns = (
+        ("dogalgaz_hatti", r"doğal\s*gaz"),
+        ("elektrik_hatti", r"elektrik"),
+        ("kanalizasyon_hatti", r"kanalizasyon"),
+        ("temiz_su_hatti", r"(?:temiz|içme)\s+su"),
+        ("telekom_hatti", r"telekom(?:ünikasyon)?"),
+        ("yagmur_suyu_hatti", r"yağmur\s+suyu"),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for key, term in utility_patterns:
+            for match in re.finditer(term, text, flags=re.I):
+                window = text[match.start() : match.start() + 180]
+                if re.search(r"\bhat\w*\b|\bgeç\w*\b|\bbulun\w*\b", window, flags=re.I):
+                    add(key, "Var", page.get("no", 1), 0.91, match)
+                    break
+
+    slope_patterns = (
+        re.compile(
+            r"eğim(?:\s+durumu)?\s*(?:[:=])?\s*(?:≈|~)?\s*%\s*"
+            r"(?P<slope>\d+(?:[.,]\d+)?(?:\s*[-~]\s*\d+(?:[.,]\d+)?)?)",
+            re.I,
+        ),
+        re.compile(
+            r"(?:≈|~)\s*%\s*(?P<slope>\d+(?:[.,]\d+)?(?:\s*[-~]\s*\d+(?:[.,]\d+)?)?)\s+eğim",
+            re.I,
+        ),
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for pattern in slope_patterns:
+            for match in pattern.finditer(text):
+                add("egim", match.group("slope"), page.get("no", 1), 0.94, match)
+
+    direction_pattern = re.compile(
+        r"\b(?P<first>[A-ZÇĞİÖŞÜ])\s*-\s*(?P<second>[A-ZÇĞİÖŞÜ])\s+doğrultusunda",
+        re.I,
+    )
+    for page in source_pages:
+        text = _page_content(page)
+        for match in direction_pattern.finditer(text):
+            add(
+                "yon",
+                f"{match.group('first').upper()}-{match.group('second').upper()}",
+                page.get("no", 1),
+                0.91,
+                match,
+            )
+
+    return records, warnings
+
+
 def _block_count_warning(pages, block_order):
     if len(block_order) <= 1:
         return ""
@@ -750,6 +1142,26 @@ def geoteknik_sayfalarindan_alanlari_ayikla(pages, dosya_adi="Geoteknik Rapor"):
                     uyari=record.get("warning", ""),
                 )
             )
+    imar_records, imar_warnings = _imar_saha_alanlari(pages, dosya_adi)
+    warnings.extend(imar_warnings)
+    for key, record in imar_records.items():
+        page = record.get("page", 1)
+        section = record.get("section", "Rapor metni")
+        target_section = "arazi" if key in {"imar_alani", "egim", "yon"} else "rapor_bilgileri"
+        fields.append(
+            GeoteknikRaporAlani(
+                bolum=target_section,
+                anahtar=key,
+                etiket=_IMAR_FIELD_LABELS.get(key, key),
+                deger=record["value"],
+                kaynak=f"{dosya_adi} - Sayfa {page}, {section}",
+                belge_turu="Geoteknik Rapor",
+                guven=float(record.get("confidence", 0.8)),
+                alternatifler=tuple(record.get("alternatives", [])),
+                uyari=record.get("warning", ""),
+                kanit=record.get("evidence", ""),
+            )
+        )
     return [asdict(field) for field in fields], warnings, block_order
 
 
@@ -773,7 +1185,7 @@ def geoteknik_raporu_oku(path, task_context=None):
     if not fields:
         detail = "\n".join(warnings)
         raise GeoteknikRaporOkumaHatasi(
-            "Raporda yapı bilgileri tablosuna aktarılabilecek alan bulunamadı."
+            "Raporda yapı veya imar adası bilgilerine aktarılabilecek alan bulunamadı."
             + (f"\n\n{detail}" if detail else "")
         )
 

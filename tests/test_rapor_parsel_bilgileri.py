@@ -10,6 +10,11 @@ from proje_sema import (
     varsayilan_proje_verisi,
 )
 from rapor_parsel_bilgileri import (
+    inceleme_alani_konum_metni,
+    imar_adasi_metni,
+    imar_plani_metni,
+    parsel_cevre_ozeti_metni,
+    parsel_tipi_normalize_et,
     rapor_bilgileri_eksikleri,
     rapor_bilgileri_varsayilanlari,
     rapor_metin_degerleri,
@@ -134,6 +139,89 @@ def test_v3_project_migration_preserves_legacy_identity_and_settings():
     assert migrated["rapor_bilgileri"]["sismik_cihaz"] == "Test Cihazı"
 
 
+def test_v5_project_migration_adds_flat_imar_fields_and_normalizes_parcel_type():
+    legacy = {
+        "schema_version": 5,
+        "rapor_bilgileri": {"parsel_tipi": "ada"},
+        "dosyalar": {"masw_word_paths": []},
+    }
+    migrated, _info = proje_verisini_migre_et(legacy)
+
+    assert migrated["rapor_bilgileri"]["parsel_tipi"] == "Ada parsel"
+    assert "yol_cephe_sayisi" in migrated["rapor_bilgileri"]
+    assert "dogalgaz_hatti" in migrated["rapor_bilgileri"]
+    assert "imar_adasi" not in migrated["rapor_bilgileri"]
+
+
+def test_parsel_tipi_aliases_are_limited_to_canonical_options():
+    assert parsel_tipi_normalize_et("ara") == "Ara parsel"
+    assert parsel_tipi_normalize_et("KÖŞE") == "Köşe parsel"
+    assert parsel_tipi_normalize_et("ada parsel") == "Ada parsel"
+    assert parsel_tipi_normalize_et("üç tarafı yol") == "Belirtilmedi"
+
+
+def test_imar_adasi_metni_is_natural_and_omits_unapproved_empty_fields():
+    veri = varsayilan_proje_verisi()
+    veri["arazi"].update({"imar_alani": "Konut", "egim": "0-1"})
+    veri["rapor_bilgileri"].update(
+        {
+            "parsel_tipi": "Köşe parsel",
+            "yol_cephe_sayisi": "2",
+            "yol_cepheleri": "iki yola cepheli",
+            "komsu_parseller": "2, 4",
+            "mevcut_yapilar": "İçerisinde oturulan iki katlı yapılar ile boş parseller bulunmaktadır",
+            "mevcut_kullanim": "Arsa",
+            "yol_kaplama": "sıcak asfalt",
+            "yaya_trafik": "Açık",
+            "tasit_trafik": "Açık",
+            "kanalizasyon_hatti": "Var",
+            "temiz_su_hatti": "Var",
+        }
+    )
+
+    text = imar_adasi_metni(veri)
+
+    assert "Çalışma alanı 'Konut Alanı' içinde bulunmaktadır." in text
+    assert "iki yola cepheli köşe parsel" in text
+    assert "Komşu parsellerde oturulan iki katlı yapılar ile boş parseller bulunmaktadır." in text
+    assert "kanalizasyon ve temiz su hatları geçmektedir" in text
+    assert "Belirtilmedi" not in text
+    assert "Doğalgaz" not in text
+    assert "Parsel tipi:" not in text
+
+
+def test_imar_plani_metni_combines_absent_disaster_and_building_ban_sentences():
+    veri = varsayilan_proje_verisi()
+    veri["rapor_bilgileri"].update(
+        {
+            "afete_maruz_bolge": "Yok",
+            "yapi_yasagi": "Yok",
+        }
+    )
+
+    text = imar_plani_metni(veri)
+
+    assert text.count("İnceleme alanı için Afete Maruz Bölge kararı ve yapı yasağı yoktur.") == 1
+    assert "bulunmadığı belirtilmiştir" not in text
+    assert "yapı yasağı bulunmadığı belirtilmiştir" not in text
+
+
+def test_imar_plani_metni_keeps_separate_sentences_for_mixed_statuses():
+    veri = varsayilan_proje_verisi()
+    veri["rapor_bilgileri"].update(
+        {
+            "afete_maruz_bolge": "Yok",
+            "yapi_yasagi": "Var",
+        }
+    )
+
+    text = imar_plani_metni(veri)
+
+    assert "İnceleme alanı için Afete Maruz Bölge kararı bulunmadığı belirtilmiştir." in text
+    assert "Proje verilerinde yapı yasağı bulunduğu belirtilmiştir." in text
+    assert "İnceleme alanı için Afete Maruz Bölge kararı ve yapı yasağı yoktur." not in text
+
+
 def test_dynamic_report_texts_use_project_specific_values():
     values = rapor_metin_degerleri(_sample_project())
     assert "Altınkum Konut Projesi" in values["[ETUT_AMAC_KAPSAM]"]
@@ -141,6 +229,134 @@ def test_dynamic_report_texts_use_project_specific_values():
     assert "Kuzey ve doğu" in values["[PARSEL_TANITIM]"]
     assert "10.01.2024" in values["[IMAR_PLANI_ACIKLAMA]"]
     assert "Edremit Belediye Meclisi" in values["[IMAR_PLANI_ACIKLAMA]"]
+
+
+def test_parsel_cevresi_ozeti_mechanical_fields_and_area_unit():
+    veri = _sample_project()
+    veri["rapor_bilgileri"].update(
+        {
+            "parsel_alani_m2": "5.011,97 m2",
+            "parsel_cevresi_ozeti": (
+                "Parsel, üç yola cepheli köşe parsel niteliğinde olup diğer "
+                "cephesinde 9 numaralı boş parsel bulunmaktadır."
+            ),
+        }
+    )
+
+    text = rapor_metin_degerleri(veri)["[PARSEL_TANITIM]"]
+
+    assert (
+        "Parsel, üç yola cepheli köşe parsel niteliğinde olup diğer cephesinde "
+        "9 numaralı boş parsel bulunmaktadır."
+    ) in text
+    assert "Parsel köşe parsel niteliğindedir" not in text
+    assert "Parselin yol cepheleri" not in text
+    assert "Komşu parsel bilgileri" not in text
+    assert "Yakın çevredeki mevcut yapılar" not in text
+    assert "Parselin mevcut kullanımı" not in text
+    assert "5.011,97 m²" in text
+    assert "m2 m²" not in text
+
+
+def test_parsel_cevre_fields_are_rendered_as_natural_text():
+    veri = _sample_project()
+    veri["rapor_bilgileri"].update(
+        {
+            "parsel_tipi": "Köşe parsel",
+            "yol_cepheleri": "Yola cepheli",
+            "komsu_parseller": "9",
+            "mevcut_yapilar": "Boş",
+            "mevcut_kullanim": "Boş",
+        }
+    )
+
+    text = parsel_cevre_ozeti_metni(veri["rapor_bilgileri"])
+
+    assert text == (
+        "Parsel, yola cepheli köşe parsel niteliğinde olup 9 numaralı parsele "
+        "komşudur. Komşu parsellerde mevcut yapı bulunmamakta ve parsel "
+        "hâlihazırda boş durumdadır."
+    )
+    assert "Yakın çevrede mevcut yapı" not in text
+    for label in (
+        "Parselin yol cepheleri",
+        "Komşu parsel bilgileri",
+        "Yakın çevredeki mevcut yapılar",
+        "Parselin mevcut kullanımı",
+    ):
+        assert label not in text
+
+
+def test_parsel_cevre_custom_summary_suppresses_only_automatic_fields():
+    veri = _sample_project()
+    veri["rapor_bilgileri"].update(
+        {
+            "parsel_cevresi_ozeti": "Parsel üç yola cepheli köşe parseldir.",
+            "bitki_ortusu": "Seyrek ot örtüsü",
+        }
+    )
+
+    text = rapor_metin_degerleri(veri)["[PARSEL_TANITIM]"]
+
+    assert "Parsel üç yola cepheli köşe parseldir." in text
+    assert "Parsel köşe parsel niteliğindedir" not in text
+    assert "Parselin yol cepheleri" not in text
+    assert "Komşu parsel bilgileri" not in text
+    assert "Yakın çevredeki mevcut yapılar" not in text
+    assert "Parselin mevcut kullanımı" not in text
+    assert "Bitki örtüsü: Seyrek ot örtüsü." in text
+
+
+def test_parsel_cevre_full_sentences_are_not_relabelled():
+    veri = _sample_project()
+    veri["rapor_bilgileri"].update(
+        {
+            "yol_cepheleri": "Parselin kuzey cephesinde imar yolu bulunmaktadır.",
+            "komsu_parseller": "Batıda 3 numaralı parsele komşudur.",
+            "mevcut_yapilar": "Yakın çevrede konut yapıları bulunmaktadır.",
+            "mevcut_kullanim": "Parsel hâlihazırda tarımsal amaçla kullanılmaktadır.",
+        }
+    )
+
+    text = parsel_cevre_ozeti_metni(veri["rapor_bilgileri"])
+
+    assert "Parselin kuzey cephesinde imar yolu bulunmaktadır." in text
+    assert "Batıda 3 numaralı parsele komşudur." in text
+    assert "Yakın çevrede konut yapıları bulunmaktadır." in text
+    assert "Parsel hâlihazırda tarımsal amaçla kullanılmaktadır." in text
+    assert "Komşu parsel bilgileri:" not in text
+
+
+def test_empty_neighbor_building_fallback_uses_neighbor_parcels_context():
+    data = _sample_project()["rapor_bilgileri"]
+    data.update(
+        {
+            "parsel_tipi": "Belirtilmedi",
+            "yol_cepheleri": "",
+            "komsu_parseller": "",
+            "mevcut_yapilar": "Boş",
+            "mevcut_kullanim": "Tarla",
+        }
+    )
+
+    text = parsel_cevre_ozeti_metni(data)
+
+    assert "Komşu parsellerde mevcut yapı bulunmamaktadır." in text
+    assert "Yakın çevrede mevcut yapı bulunmamaktadır." not in text
+
+
+def test_shared_location_sentence_is_used_for_parcel_and_result():
+    veri = _sample_project()
+    expected = (
+        "İnceleme alanı Balıkesir ili, Edremit ilçesi, Altınkum Mahallesi, "
+        "1262 ada, 4 parsel sınırlarında ve Enlem: 39.58, Boylam: 26.82 "
+        "(WGS84) koordinatlarındadır."
+    )
+
+    values = rapor_metin_degerleri(veri)
+    assert inceleme_alani_konum_metni(veri) == expected
+    assert values["[PARSEL_TANITIM]"].startswith(expected)
+    assert values["[SONUC_KONUM]"] == expected
 
 
 def test_laboratory_name_is_not_required_for_static_template():

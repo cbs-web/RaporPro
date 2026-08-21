@@ -10,6 +10,7 @@ from tkinter import Toplevel, messagebox, ttk
 from rapor_parsel_bilgileri import (
     DURUM_SECENEKLERI,
     PARSEL_TIPI_SECENEKLERI,
+    TRAFIK_DURUM_SECENEKLERI,
     rapor_bilgileri_eksikleri,
     rapor_bilgilerini_normalize_et,
 )
@@ -85,6 +86,7 @@ class RaporBilgileriMixin:
 
         entries = {}
         text_widgets = {}
+        self.e_rapor_bilgileri = entries
 
         def add_entry(form, row, label, key, width=52):
             ttk.Label(form, text=label).grid(
@@ -153,14 +155,35 @@ class RaporBilgileriMixin:
         row = 0
         row = add_entry(parcel, row, "Parsel alanı (m²)", "parsel_alani_m2")
         row = add_combo(parcel, row, "Parsel tipi", "parsel_tipi", PARSEL_TIPI_SECENEKLERI)
+        row = add_entry(parcel, row, "Yol cephe sayısı", "yol_cephe_sayisi", width=18)
+        row = add_entry(parcel, row, "Yol cephe yönleri", "yol_yonleri")
         row = add_text(parcel, row, "Yol ve cephe durumu", "yol_cepheleri")
+        row = add_entry(parcel, row, "Yol kaplaması", "yol_kaplama")
+        row = add_combo(parcel, row, "Yaya trafiği", "yaya_trafik", TRAFIK_DURUM_SECENEKLERI)
+        row = add_combo(parcel, row, "Taşıt trafiği", "tasit_trafik", TRAFIK_DURUM_SECENEKLERI)
         row = add_text(parcel, row, "Komşu parseller", "komsu_parseller")
         row = add_text(parcel, row, "Yakındaki mevcut yapılar", "mevcut_yapilar")
         row = add_text(parcel, row, "Mevcut kullanım", "mevcut_kullanim", height=2)
+        row = add_text(parcel, row, "Parsel çevresi özeti", "parsel_cevresi_ozeti", height=4)
         row = add_entry(parcel, row, "Bitki örtüsü", "bitki_ortusu")
         row = add_text(parcel, row, "Altyapı durumu", "altyapi_durumu")
         row = add_text(parcel, row, "Drenaj durumu", "drenaj_durumu", height=2)
         row = add_text(parcel, row, "Ulaşım durumu", "ulasim_durumu", height=2)
+        ttk.Label(
+            parcel,
+            text="Altyapı hatları (raporda açıkça belirtilenler)",
+            font=FONT_BOLD,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(SPACE_SM, SPACE_XS))
+        row += 1
+        for label, key in (
+            ("Doğalgaz hattı", "dogalgaz_hatti"),
+            ("Elektrik hattı", "elektrik_hatti"),
+            ("Kanalizasyon hattı", "kanalizasyon_hatti"),
+            ("Temiz/içme suyu hattı", "temiz_su_hatti"),
+            ("Telekom hattı", "telekom_hatti"),
+            ("Yağmur suyu hattı", "yagmur_suyu_hatti"),
+        ):
+            row = add_combo(parcel, row, label, key, DURUM_SECENEKLERI)
         row = add_text(parcel, row, "Çevre ek açıklaması", "cevre_ek_aciklama")
         ttk.Separator(parcel).grid(row=row, column=0, columnspan=2, sticky="ew", pady=SPACE_SM)
         row += 1
@@ -172,6 +195,7 @@ class RaporBilgileriMixin:
         row = add_combo(parcel, row, "Yapı yasağı", "yapi_yasagi", DURUM_SECENEKLERI)
         row = add_entry(parcel, row, "İmar belgesi ek no", "imar_ek_no")
         add_text(parcel, row, "İmar ek açıklaması", "imar_ek_aciklama")
+        self.e_rapor_bilgileri.update(text_widgets)
 
         def kunye_degerlerini_al():
             kunye = self.veri.get("kunye", {}) if isinstance(self.veri, dict) else {}

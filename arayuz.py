@@ -33,6 +33,7 @@ from arayuz_temel import ArayuzTemelMixin
 from arayuz_proje import ArayuzProjeMixin
 from arayuz_ozet import ArayuzOzetMixin
 from arayuz_araclar import ArayuzAraclarMixin
+from kurtarma_motoru import kurtarma_kaydini_degerlendir
 from yonetmelik_motoru import varsayilan_yonetmelikleri_hazirla
 from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 
@@ -70,7 +71,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.word_img_jeofizik = None
         
         self.lab_excel_path = None
-        self.jeo_excel_path = None 
+        self.jeo_excel_path = None
+        self.masw_word_paths = []
         self.last_focused = None
         self.last_preflight_report = None
         self.last_preflight_fingerprint = None
@@ -211,6 +213,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             return
         self._closing = True
         self.autosave_zamanlayici_iptal()
+        self.tooltips_temizle()
         self.otomatik_kayit_temizle()
         try:
             if hasattr(self, "task_engine"):
@@ -343,16 +346,55 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             log_exception("autosave.cleanup", exc_value=exc)
             return False
 
+    def _kurtarma_ana_projesini_oku(self, path):
+        """Kurtarma kaydinin isaret ettigi ana projeyi salt okunur karsilastir."""
+        if not path or not os.path.isfile(path):
+            return None, None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                ana_veri = json.load(f)
+            ana_veri, _migrasyon = self.proje_verisini_hazirla(ana_veri)
+            return ana_veri, os.path.getmtime(path)
+        except Exception as exc:
+            log_exception("autosave.compare_project", exc_value=exc)
+            return None, None
+
     def kurtarma_durumu_bildir(self):
         if not os.path.exists(AUTOSAVE_PATH):
             self._autosave_recovery_pending = False
             return False
-        self._autosave_recovery_pending = True
         try:
             with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             if not isinstance(payload, dict) or not isinstance(payload.get("veri"), dict):
                 raise ValueError("Kurtarma kaydında proje verisi bulunamadı.")
+
+            # Eski kurtarma dosyalarinda sema ve varsayilan alanlar bulunabilir;
+            # karsilastirmayi guncel proje yapisi uzerinden yapmak gerekir.
+            kurtarma_verisi, _migrasyon = self.proje_verisini_hazirla(payload["veri"])
+            degerlendirme_payload = dict(payload)
+            degerlendirme_payload["veri"] = kurtarma_verisi
+            active_path = payload.get("active_path") or getattr(self, "aktif_dosya_yolu", None)
+            aktif_veri, aktif_mtime = self._kurtarma_ana_projesini_oku(active_path)
+            karar = kurtarma_kaydini_degerlendir(
+                degerlendirme_payload,
+                varsayilan_veri=self.varsayilan_veri_olustur(),
+                aktif_veri=aktif_veri,
+                aktif_dosya_yolu=active_path,
+                aktif_dosya_mtime=aktif_mtime,
+                kurtarma_dosyasi_mtime=os.path.getmtime(AUTOSAVE_PATH),
+            )
+            if karar.durum in {"empty", "same", "stale"}:
+                self._autosave_recovery_pending = False
+                if self.otomatik_kayit_temizle(force=True):
+                    self.set_status("Eski veya boş kurtarma kaydı sessizce temizlendi.", level="info")
+                else:
+                    self.set_status("Eski kurtarma kaydı temizlenemedi.", level="warning")
+                return False
+            if karar.durum == "invalid":
+                raise ValueError(karar.neden)
+
+            self._autosave_recovery_pending = True
             saved_at = payload.get("saved_at", "-")
             active_path = payload.get("active_path")
             project_name = os.path.basename(active_path) if active_path else "kaydedilmemiş proje"
@@ -1353,6 +1395,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.veri["dosyalar"]["word_path"] = getattr(self, 'word_path', None)
         self.veri["dosyalar"]["lab_excel_path"] = getattr(self, 'lab_excel_path', None)
         self.veri["dosyalar"]["jeo_excel_path"] = getattr(self, 'jeo_excel_path', None)
+        self.veri["dosyalar"]["masw_word_paths"] = list(getattr(self, 'masw_word_paths', []) or [])
         self.veri["dosyalar"]["img_yer"] = getattr(self, 'img_yer', None)
         self.veri["dosyalar"]["img_tkgm"] = getattr(self, 'img_tkgm', None)
         self.veri["dosyalar"]["img_pga"] = getattr(self, 'img_pga', None)
@@ -1387,6 +1430,7 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
         self.word_path = self._dosya_yolu_al(dosyalar, "word_path", "word", "word_file", "word_dosya")
         self.lab_excel_path = self._dosya_yolu_al(dosyalar, "lab_excel_path", "lab_excel", "laboratuvar_excel", "lab_dosya")
         self.jeo_excel_path = self._dosya_yolu_al(dosyalar, "jeo_excel_path", "jeofizik_excel", "jeo_excel")
+        self.masw_word_paths = self._dosya_yollari_al(dosyalar, "masw_word_paths")
         self.img_yer = self._dosya_yolu_al(dosyalar, "img_yer", "yerbuldurur_img", "yerbuldurur")
         self.img_tkgm = self._dosya_yolu_al(dosyalar, "img_tkgm", "tkgm_img", "tkgm")
         self.img_pga = self._dosya_yolu_al(dosyalar, "img_pga", "pga_img", "pga")
@@ -1413,6 +1457,8 @@ class RaporRobotuArayuz(ArayuzTemelMixin, GorevMerkeziMixin, ArayuzProjeMixin, P
             self.lbl_jeo_excel.config(text=os.path.basename(self.jeo_excel_path) if self.jeo_excel_path else "Henüz jeofizik dosyası seçilmedi", foreground=COLOR_SUCCESS if self.jeo_excel_path else "red")
             if hasattr(self, "_jeofizik_label_guncelle"):
                 self._jeofizik_label_guncelle()
+        if hasattr(self, "masw_word_etiket_guncelle"):
+            self.masw_word_etiket_guncelle()
         if hasattr(self, 'lbl_yer'):
             self.lbl_yer.config(text=os.path.basename(self.img_yer) if self.img_yer else "-", foreground=COLOR_SUCCESS if self.img_yer else "#333")
         if hasattr(self, 'lbl_tkgm'):

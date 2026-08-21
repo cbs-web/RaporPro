@@ -15,6 +15,7 @@ from tutarlilik_motoru import (
 from docx import Document
 from ekler import uygun_ek_sablonu
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_sheet_var_mi
+from masw_grafik_motoru import masw_word_kaynaklarini_dogrula
 from rapor_parsel_bilgileri import (
     RAPOR_METIN_ETIKETLERI,
     rapor_bilgileri_eksikleri,
@@ -35,7 +36,7 @@ KNOWN_TAGS = {
     "[LAB_MEKANIK]", "[LITOLOJI_DAGILIM]", "[MAHALLE]", "[MASW]",
     "[MEVKI]", "[MT_TABLO]", "[PAFTA]", "[PARSEL]", "[PGA]", "[PMT]",
     "[PROJE_ADI]", "[RESIM:PGA]", "[RESIM:SONDAJ]", "[RESIM:TKGM]",
-    "[RESIM:MJH]", "[RESIM_JEOFIZIK]", "[RESIM_MJH]", "[RESIM_SONDAJ]", "[RESIM_YERBULDURUR]",
+    "[RESIM:MJH]", "[RESIM_JEOFIZIK]", "[RESIM_MASW]", "[RESIM_MJH]", "[RESIM_SONDAJ]", "[RESIM_YERBULDURUR]",
     "[SAYI_MT]", "[SAYI_SS]", "[SONDAJ_BILGISI]", "[SPT]", "[Sondaj]",
     "[VP]", "[YASS_ONERI]", "[YASS_TABLO]", "[HIDROJEOLOJI_DURUM]", "[YEREL_ZEMIN]",
     "[ZEMIN_OZET]", "RESIM:MJH", "RESIM:PGA", "RESIM:TKGM",
@@ -129,6 +130,7 @@ TAG_DESCRIPTIONS = {
     "[RESIM:PGA]": "PGA haritası görselini ekler.",
     "RESIM:PGA": "PGA haritası görselini ekler.",
     "[RESIM_JEOFIZIK]": "Jeofizik/serim haritası görselini ekler.",
+    "[RESIM_MASW]": "Seçilen jeofizik Word'lerinden MASW S-hızı grafiklerini ekler.",
     "RESIM:MJH": "Mühendislik jeolojisi haritası görselini ekler.",
     "[RESIM:MJH]": "Mühendislik jeolojisi haritası görselini ekler.",
     "[RESIM_MJH]": "Mühendislik jeolojisi haritası görselini ekler.",
@@ -601,14 +603,26 @@ def build_preflight_report(app_instance):
             weight=1,
         )
 
+    jeo_rows = app_instance.veri.get("jeofizik_sheet", {}).get("rows", [])
+    try:
+        jeo_sheet_serimleri = (
+            jeofizik_sheet_rows_to_ss_list(jeo_rows)
+            if jeofizik_sheet_var_mi(app_instance.veri)
+            else []
+        )
+    except Exception:
+        jeo_sheet_serimleri = []
+    manual_serimler = [
+        item
+        for item in app_instance.veri.get("jeofizik", {}).get("ss_list", [])
+        if isinstance(item, dict) and item.get("layers")
+    ]
+    jeo_path = getattr(app_instance, "jeo_excel_path", None)
+
     jeo_tags = {"[JEO_PARAMETRE]", "[MASW]", "[VP]", "[JEO_KOOR]", "[JEO_SONUC]"}
     if jeo_tags.intersection(tags):
-        jeo_rows = app_instance.veri.get("jeofizik_sheet", {}).get("rows", [])
-        jeo_sheet_ready = jeofizik_sheet_var_mi(app_instance.veri) and bool(jeofizik_sheet_rows_to_ss_list(jeo_rows))
-        manual_ready = any(
-            item.get("layers") for item in app_instance.veri.get("jeofizik", {}).get("ss_list", [])
-        )
-        jeo_path = getattr(app_instance, "jeo_excel_path", None)
+        jeo_sheet_ready = bool(jeo_sheet_serimleri)
+        manual_ready = bool(manual_serimler)
         jeo_ready = jeo_sheet_ready or manual_ready or bool(jeo_path and os.path.isfile(jeo_path))
         kontrol_ekle(
             report,
@@ -619,6 +633,46 @@ def build_preflight_report(app_instance):
             "Jeofizik parametre kaynağı hazır." if jeo_ready else "Jeofizik etiketleri var ancak parametre verisi yok.",
             "jeofizik",
             "Jeofizik Sheet doldurun, Excel bağlayın veya manuel tabaka verisi girin.",
+            failure_level="warning",
+            weight=1,
+        )
+
+    masw_required = bool(
+        manual_serimler
+        or jeo_sheet_serimleri
+        or (jeo_path and os.path.isfile(jeo_path))
+    )
+    if masw_required:
+        masw_paths = list(getattr(app_instance, "masw_word_paths", []) or [])
+        if not masw_paths:
+            masw_paths = list(
+                app_instance.veri.get("dosyalar", {}).get("masw_word_paths", []) or []
+            )
+        masw_records, masw_errors = masw_word_kaynaklarini_dogrula(masw_paths)
+        expected_graphs = len(manual_serimler) or len(jeo_sheet_serimleri)
+        count_matches = not expected_graphs or len(masw_records) == expected_graphs
+        masw_ready = bool(masw_records) and not masw_errors and count_matches
+        if masw_ready:
+            masw_detail = f"{len(masw_records)} MASW hız grafiği kaynağı okunabildi."
+        elif masw_records and not count_matches:
+            masw_detail = (
+                f"{expected_graphs} sismik serime karşılık {len(masw_records)} MASW grafiği seçildi."
+            )
+        elif masw_records:
+            masw_detail = (
+                f"{len(masw_records)} grafik hazır; {len(masw_errors)} kaynak okunamadı."
+            )
+        else:
+            masw_detail = "Sismik serim verisi var ancak MASW hız grafiği Word kaynağı seçilmedi."
+        kontrol_ekle(
+            report,
+            "rapor.kaynak.masw_grafikleri",
+            "Rapor veri kaynakları",
+            "MASW hız grafikleri",
+            masw_ready,
+            masw_detail,
+            "jeofizik",
+            "Jeofizik veya Rapor sekmesinden MASW değerlendirme Word'lerini seçin.",
             failure_level="warning",
             weight=1,
         )

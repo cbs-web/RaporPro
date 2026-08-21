@@ -34,7 +34,10 @@ from jeoloji_raporu import (
     jeoloji_kisa_formasyon_metni,
     jeoloji_rapor_bloklari,
 )
+from jeoloji_docx import JeolojiDocxHatasi, jeoloji_bolumunu_uygula
+from jeoloji_kutuphanesi import secili_jeoloji_kaydi
 from jeofizik_sheet_motoru import jeofizik_sheet_rows_to_ss_list, jeofizik_ss_koordinatlarini_koru
+from masw_grafik_motoru import masw_grafiklerini_rapora_ekle
 from performans import log_exception, perf_log, perf_timer
 from rapor_etiketleri import DUZELTME_ETIKET_ADLARI, DUZELTME_ETIKET_GRUPLARI
 from rapor_sablonu import proje_rapor_sablon_profili, rapor_sablonu_durumu
@@ -89,6 +92,7 @@ def rapor_baglami_olustur(kaynak, *, word_path=None, veri=None, durum_bildir=Fal
         word_path=word_path if word_path is not None else getattr(kaynak, "word_path", None),
         veri=copy.deepcopy(kaynak_veri),
         jeo_excel_path=getattr(kaynak, "jeo_excel_path", None),
+        masw_word_paths=list(getattr(kaynak, "masw_word_paths", []) or []),
         lab_excel_path=getattr(kaynak, "lab_excel_path", None),
         img_yer=getattr(kaynak, "img_yer", None),
         img_tkgm=getattr(kaynak, "img_tkgm", None),
@@ -737,12 +741,48 @@ def raporla(app_instance, final_path=None, autosave=True):
             "RESIM:Yerbuldurur", "[RESIM_YERBULDURUR]", "RESIM:TKGM", "RESIM:PGA",
             "[RESIM_JEOFIZIK]", "RESIM:MJH", "[RESIM_MJH]", "[RESIM:MJH]",
             "[RESIM_SONDAJ]", "[RESIM:SONDAJ]",
+            "[RESIM_MASW]",
         ]
         report_tag_index = build_paragraph_tag_index(report_paragraphs, structural_tags)
         with perf_timer("report.revision_markers"):
             marker_count = revizyon_isaretleri_ekle(doc, report_tag_index, structural_tags)
         report_step("revision_markers", _report_detail(count=marker_count))
         report_step("template_ready", _doc_perf_stats(doc))
+
+        selection = (
+            getattr(app_instance, "veri", {}).get("jeoloji_kutuphanesi", {})
+            if isinstance(getattr(app_instance, "veri", None), dict)
+            else {}
+        )
+        selection_requested = isinstance(selection, dict) and bool(
+            selection.get("selected_source_id") or selection.get("selected_source_hash")
+        )
+        selected_library = (
+            secili_jeoloji_kaydi(getattr(app_instance, "veri", {}))
+            if selection_requested
+            else None
+        )
+        if selection_requested and selected_library is None:
+            return False, (
+                "Seçili 2. JEOLOJİ kütüphane kaynağının yerel cache'i bulunamadı. "
+                "Kütüphane penceresinden kaydı yeniden ekleyin veya seçimi temizleyin."
+            )
+        if selected_library is not None:
+            try:
+                with perf_timer("report.library_geology_section", selected_library.get("cache_path", "")):
+                    library_result = jeoloji_bolumunu_uygula(
+                        doc,
+                        selected_library["cache_path"],
+                    )
+                report_step(
+                    "library_geology_section",
+                    _report_detail(
+                        source=selected_library.get("original_filename", ""),
+                        inserted=library_result.get("inserted_elements", 0),
+                    ),
+                )
+            except (JeolojiDocxHatasi, OSError, ValueError) as exc:
+                return False, f"Seçili 2. JEOLOJİ bölümü rapora aktarılamadı: {exc}"
         kunye = app_instance.veri["kunye"]
         jeofizik = app_instance.veri["jeofizik"]
         arazi = app_instance.veri["arazi"]
@@ -1541,6 +1581,22 @@ def raporla(app_instance, final_path=None, autosave=True):
             ),
         )
 
+        masw_paths = list(getattr(app_instance, "masw_word_paths", []) or [])
+        if not masw_paths and isinstance(getattr(app_instance, "veri", None), dict):
+            masw_paths = list(
+                app_instance.veri.get("dosyalar", {}).get("masw_word_paths", []) or []
+            )
+        with perf_timer("report.masw_graphics", _report_detail(sources=len(masw_paths))):
+            masw_grafik_sonucu = masw_grafiklerini_rapora_ekle(doc, masw_paths)
+        report_step(
+            "masw_graphics",
+            _report_detail(
+                sources=len(masw_paths),
+                inserted=masw_grafik_sonucu.eklenen,
+                errors=len(masw_grafik_sonucu.hatalar),
+            ),
+        )
+
         mjh_path = mjh_resim_yolu(app_instance)
         image_paths = [
             app_instance.img_yer,
@@ -1592,7 +1648,12 @@ def raporla(app_instance, final_path=None, autosave=True):
             with perf_timer("report.save_docx", final):
                 atomic_docx_save(doc, final)
             report_step("save_docx", _file_perf_detail(final))
-            return True, "Rapor oluşturuldu!"
+            message = "Rapor oluşturuldu!"
+            if masw_grafik_sonucu.eklenen:
+                message += f" {masw_grafik_sonucu.eklenen} MASW hız grafiği eklendi."
+            elif masw_paths:
+                message += " MASW grafik kaynakları okunamadığı için grafik eklenmedi."
+            return True, message
         return False, "İptal edildi."
 
     except Exception as e:

@@ -53,6 +53,7 @@ DUZELTME_ETIKET_GRUPLARI = [
             ("RESIM:TKGM", "TKGM görseli"),
             ("RESIM:PGA", "PGA görseli"),
             ("[RESIM_JEOFIZIK]", "Jeofizik lokasyon haritası"),
+            ("[RESIM_MASW]", "MASW hız grafikleri"),
             ("RESIM:MJH", "Mühendislik jeolojisi haritası"),
             ("[RESIM_SONDAJ]", "Sondaj lokasyon haritası"),
         ],

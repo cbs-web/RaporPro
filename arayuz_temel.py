@@ -1089,67 +1089,114 @@ class ArayuzTemelMixin(UIMotionMixin):
     def arayuz_butonu(self, parent, text, command=None, role="neutral", **kwargs):
         return self.modern_button(parent, text, command=command, role=role, **kwargs)
 
+    def tooltips_temizle(self):
+        """Bekleyen tooltip zamanlayıcılarını pencere kapanmadan iptal et."""
+
+        cleanups = list(getattr(self, "_tooltip_cleanups", ()))
+        for cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception:
+                pass
+        self._tooltip_cleanups = set()
+
     def tooltip_ekle(self, widget, text, delay=550):
         if not text:
             return widget
         widget._tooltip_text = text
-        state = {"after": None, "tip": None}
+        state = {"after": None, "tip": None, "destroyed": False}
+
+        cleanups = getattr(self, "_tooltip_cleanups", None)
+        if not isinstance(cleanups, set):
+            cleanups = set()
+            self._tooltip_cleanups = cleanups
+
+        def cancel_after():
+            after_id = state.get("after")
+            state["after"] = None
+            if after_id is not None:
+                try:
+                    widget.after_cancel(after_id)
+                except Exception:
+                    pass
 
         def show_tip():
-            if state["tip"] is not None:
+            state["after"] = None
+            if state["destroyed"] or getattr(self, "_closing", False) or state["tip"] is not None:
                 return
             try:
+                if not widget.winfo_exists():
+                    return
                 x = widget.winfo_rootx() + 18
                 y = widget.winfo_rooty() + widget.winfo_height() + 8
+                tip = tk.Toplevel(widget)
+                tip.wm_overrideredirect(True)
+                tip.wm_geometry(f"+{x}+{y}")
+                current_text = getattr(widget, "_tooltip_text", text)
+                if not current_text:
+                    tip.destroy()
+                    return
+                label = tk.Label(
+                    tip,
+                    text=current_text,
+                    bg="#FFF8DC",
+                    fg="#111111",
+                    relief="solid",
+                    bd=1,
+                    padx=7,
+                    pady=4,
+                    font=("Segoe UI", 8),
+                    justify="left",
+                    wraplength=280,
+                )
+                label.pack()
+                state["tip"] = tip
+                self.ui_motion_window_enter(tip, duration=100)
             except Exception:
+                state["tip"] = None
                 return
-            tip = tk.Toplevel(widget)
-            tip.wm_overrideredirect(True)
-            tip.wm_geometry(f"+{x}+{y}")
-            current_text = getattr(widget, "_tooltip_text", text)
-            if not current_text:
-                tip.destroy()
-                return
-            label = tk.Label(
-                tip,
-                text=current_text,
-                bg="#FFF8DC",
-                fg="#111111",
-                relief="solid",
-                bd=1,
-                padx=7,
-                pady=4,
-                font=("Segoe UI", 8),
-                justify="left",
-                wraplength=280,
-            )
-            label.pack()
-            state["tip"] = tip
-            self.ui_motion_window_enter(tip, duration=100)
 
         def schedule(_event=None):
             cancel()
+            if state["destroyed"] or getattr(self, "_closing", False):
+                return
             try:
                 state["after"] = widget.after(delay, show_tip)
             except Exception:
                 state["after"] = None
 
         def cancel(_event=None):
-            after_id = state.get("after")
-            if after_id is not None:
-                try:
-                    widget.after_cancel(after_id)
-                except Exception:
-                    pass
-                state["after"] = None
+            cancel_after()
             tip = state.get("tip")
             if tip is not None:
                 state["tip"] = None
-                self.ui_motion_window_close(tip, duration=70)
+                try:
+                    self.ui_motion_window_close(tip, duration=70)
+                except Exception:
+                    try:
+                        tip.destroy()
+                    except Exception:
+                        pass
 
+        def cleanup(event=None):
+            if event is not None and getattr(event, "widget", widget) is not widget:
+                return
+            state["destroyed"] = True
+            cancel_after()
+            tip = state.get("tip")
+            if tip is not None:
+                state["tip"] = None
+                try:
+                    tip.destroy()
+                except Exception:
+                    pass
+            cleanups.discard(cleanup)
+
+        cleanups.add(cleanup)
         widget.bind("<Enter>", schedule, add="+")
         widget.bind("<Leave>", cancel, add="+")
         widget.bind("<ButtonPress>", cancel, add="+")
+        widget.bind("<Destroy>", cleanup, add="+")
         return widget
 
     def toolbar_menu(self, parent, title, commands, bg="#ECF0F1", fg="#111111", tooltip=None, role=None):

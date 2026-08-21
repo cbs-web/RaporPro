@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from ai_motoru import AI_MOTOR_ADLARI, belediye_duzeltme_analiz_et, duzeltme_yonlendirmeleri_olustur
 from cikti_kalite import cikti_dosyalari_denetle, kalite_manifestosu_yaz
 from jeofizik_sheet_motoru import jeofizik_sheet_rapora_hazir_mi
+from masw_grafik_motoru import masw_grafik_kaydi_oku, masw_word_yollari_normalize
 from rapor_metin_revizyon import metin_revizyon_analiz_et, metin_revizyonlari_uygula
 from rapor_revizyon import revizyonlu_rapor_olustur
 from rapor_sablonu import (
@@ -198,6 +199,8 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
                 text=os.path.basename(path) if path else "Jeofizik verisi seçilmedi",
                 foreground=COLOR_SUCCESS if path else COLOR_DANGER,
             )
+        if hasattr(self, "masw_word_etiket_guncelle"):
+            self.masw_word_etiket_guncelle()
         for attr, path in (
             ("lbl_yer", getattr(self, "img_yer", None)),
             ("lbl_tkgm", getattr(self, "img_tkgm", None)),
@@ -327,6 +330,18 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
                 self.ek_tutanak_path = path
                 return f"Normal ek: {name}"
             if ext == ".docx":
+                if any(key in lower_name for key in ("masw", "mam", "degerlend", "değerlend")):
+                    try:
+                        record = masw_grafik_kaydi_oku(path)
+                    except Exception:
+                        return None
+                    self.masw_word_paths = masw_word_yollari_normalize(
+                        [*(getattr(self, "masw_word_paths", []) or []), record.kaynak_yolu]
+                    )
+                    self.veri.setdefault("dosyalar", {})["masw_word_paths"] = list(
+                        self.masw_word_paths
+                    )
+                    return f"MASW grafiği: {name}"
                 self.word_path = path
                 return f"Word şablonu: {name}"
             if ext in (".xlsx", ".xls", ".csv"):
@@ -478,6 +493,16 @@ class RaporSekmesiMixin(RaporBilgileriMixin, RaporOnizlemeMixin):
             [
                 ("Excel Seç", self.jeo_excel_sec, "secondary", True),
                 ("Jeofizik Sheet", self.jeofizik_sheet_ac, "accent", True),
+            ],
+        )
+        source_row(
+            source_box,
+            "MASW hız grafikleri",
+            "lbl_masw_word",
+            "MASW hız grafiği Word'leri seçilmedi",
+            [
+                ("Wordleri Seç", self.masw_word_dosyalari_sec, "secondary", True),
+                ("Temizle", self.masw_word_dosyalari_temizle, "danger", True),
             ],
         )
 

@@ -7,6 +7,7 @@ import pytest
 import arayuz
 from arayuz import RaporRobotuArayuz
 from arayuz_proje import ArayuzProjeMixin
+from kurtarma_motoru import kurtarma_kaydini_degerlendir, kurtarma_verisi_anlamli_mi
 from proje_sema import (
     PROJE_SEMA_SURUMU,
     ProjeSemaHatasi,
@@ -212,14 +213,120 @@ def _autosave_test_uygulamasi():
     return app
 
 
+def test_kurtarma_sadece_sondaj_no_ve_derinlik_iceriyorsa_anlamlidir():
+    veri = varsayilan_proje_verisi()
+    veri["sondaj"] = [{"no": "SK-1", "der": "15.0"}]
+
+    assert kurtarma_verisi_anlamli_mi(veri, varsayilan_proje_verisi()) is True
+
+    karar = kurtarma_kaydini_degerlendir(
+        {"veri": veri, "active_path": None, "saved_at": "2026-08-12T15:40:24"},
+        varsayilan_veri=varsayilan_proje_verisi(),
+    )
+    assert karar.durum == "new"
+
+
+def test_kurtarma_eski_bos_proje_sihirbazi_kaydini_sessizce_temizler(tmp_path):
+    veri = varsayilan_proje_verisi()
+    veri["arazi"].update(
+        {
+            "imar_alani": "Konut Alanı",
+            "imar_durumu": "Önlemli Alan 1.1 (ÖA-1.1) : Sıvılaşma Tehlikesi Açısından Önlemli Alanlar",
+            "kategori": "Kategori 2",
+            "formasyon_secim": "Seçiniz...",
+            "rapor_ortami": "Otomatik",
+        }
+    )
+    veri["rapor_bilgileri"].update(
+        {
+            "sismik_cihaz": "GEODE",
+            "sismik_kanal_sayisi": "12",
+            "jeofon_frekansi": "3,0m - 4,5 Hz",
+            "sismik_kaynak": "Balyoz",
+            "tarih": "12.08.2026",
+        }
+    )
+    veri["sondaj"] = [
+        {
+            "no": "SK-1",
+            "der": "15.0",
+            "y": "",
+            "x": "",
+            "k": "",
+            "bas_tar": "12.08.2026",
+            "bit_tar": "12.08.2026",
+            "yass_d1": "",
+            "yass_t1": "12.08.2026",
+            "yass_d2": "",
+            "yass_t2": "22.08.2026",
+            "litoloji": [],
+            "spt": [],
+            "pmt": [],
+            "kaya": [],
+            "numuneler": [],
+        }
+    ]
+    autosave_path = tmp_path / "autosave.json"
+    autosave_path.write_text(
+        json.dumps(
+            {
+                "saved_at": "12.08.2026 15:40:24",
+                "active_path": None,
+                "veri": veri,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    app = _autosave_test_uygulamasi()
+
+    with (
+        mock.patch.object(arayuz, "AUTOSAVE_PATH", str(autosave_path)),
+        mock.patch("arayuz.messagebox.askyesnocancel") as ask,
+    ):
+        assert app.kurtarma_durumu_bildir() is False
+
+    ask.assert_not_called()
+    assert not autosave_path.exists()
+
+
+def test_kurtarma_varsayilan_bos_kayit_uyari_uretmez(tmp_path):
+    autosave_path = tmp_path / "autosave.json"
+    autosave_path.write_text(
+        json.dumps(
+            {
+                "session_id": "eski-oturum",
+                "saved_at": "2026-07-29T10:00:00",
+                "active_path": None,
+                "veri": varsayilan_proje_verisi(),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    app = _autosave_test_uygulamasi()
+
+    with (
+        mock.patch.object(arayuz, "AUTOSAVE_PATH", str(autosave_path)),
+        mock.patch("arayuz.messagebox.askyesnocancel") as ask,
+    ):
+        assert app.kurtarma_durumu_bildir() is False
+
+    ask.assert_not_called()
+    assert not autosave_path.exists()
+    assert app._autosave_recovery_pending is False
+
+
 def test_kurtarma_karari_ertelenirse_autosave_uzerine_yazmaz(tmp_path):
     autosave_path = tmp_path / "autosave.json"
+    veri = varsayilan_proje_verisi()
+    veri["sondaj"] = [{"no": "SK-1", "der": "15.0"}]
     eski_payload = {
         "session_id": "eski-oturum",
         "project_key": "unsaved:eski-proje",
         "saved_at": "2026-07-29T10:00:00",
         "active_path": None,
-        "veri": varsayilan_proje_verisi(),
+        "veri": veri,
     }
     autosave_path.write_text(json.dumps(eski_payload, ensure_ascii=False), encoding="utf-8")
     onceki_icerik = autosave_path.read_text(encoding="utf-8")
@@ -235,6 +342,97 @@ def test_kurtarma_karari_ertelenirse_autosave_uzerine_yazmaz(tmp_path):
 
     assert app._autosave_recovery_pending is True
     assert autosave_path.read_text(encoding="utf-8") == onceki_icerik
+
+
+def test_kurtarma_ana_proje_ile_esitse_uyari_uretmez(tmp_path):
+    project_path = tmp_path / "proje.json"
+    veri = varsayilan_proje_verisi()
+    veri["kunye"]["sahibi"] = "Eş Proje"
+    project_path.write_text(json.dumps(veri, ensure_ascii=False), encoding="utf-8")
+    autosave_path = tmp_path / "autosave.json"
+    autosave_path.write_text(
+        json.dumps(
+            {
+                "session_id": "eski-oturum",
+                "saved_at": "2099-01-01T10:00:00",
+                "active_path": str(project_path),
+                "veri": veri,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    app = _autosave_test_uygulamasi()
+
+    with (
+        mock.patch.object(arayuz, "AUTOSAVE_PATH", str(autosave_path)),
+        mock.patch("arayuz.messagebox.askyesnocancel") as ask,
+    ):
+        assert app.kurtarma_durumu_bildir() is False
+
+    ask.assert_not_called()
+    assert not autosave_path.exists()
+
+
+def test_kurtarma_ana_proje_daha_yeniyse_uyari_uretmez(tmp_path):
+    project_path = tmp_path / "proje.json"
+    ana_veri = varsayilan_proje_verisi()
+    ana_veri["kunye"]["sahibi"] = "Yeni Proje"
+    project_path.write_text(json.dumps(ana_veri, ensure_ascii=False), encoding="utf-8")
+    eski_veri = varsayilan_proje_verisi()
+    eski_veri["kunye"]["sahibi"] = "Eski Proje"
+    autosave_path = tmp_path / "autosave.json"
+    autosave_path.write_text(
+        json.dumps(
+            {
+                "session_id": "eski-oturum",
+                "saved_at": "2020-01-01T10:00:00",
+                "active_path": str(project_path),
+                "veri": eski_veri,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    app = _autosave_test_uygulamasi()
+
+    with (
+        mock.patch.object(arayuz, "AUTOSAVE_PATH", str(autosave_path)),
+        mock.patch("arayuz.messagebox.askyesnocancel") as ask,
+    ):
+        assert app.kurtarma_durumu_bildir() is False
+
+    ask.assert_not_called()
+    assert not autosave_path.exists()
+
+
+def test_kurtarma_daha_yeni_anlamli_kayit_icin_uyari_uretir(tmp_path):
+    autosave_path = tmp_path / "autosave.json"
+    veri = varsayilan_proje_verisi()
+    veri["kunye"]["sahibi"] = "Kurtarilacak Proje"
+    autosave_path.write_text(
+        json.dumps(
+            {
+                "session_id": "eski-oturum",
+                "saved_at": "2099-01-01T10:00:00",
+                "active_path": None,
+                "veri": veri,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    app = _autosave_test_uygulamasi()
+
+    with (
+        mock.patch.object(arayuz, "AUTOSAVE_PATH", str(autosave_path)),
+        mock.patch("arayuz.messagebox.askyesnocancel", return_value=None) as ask,
+    ):
+        assert app.kurtarma_durumu_bildir() is False
+
+    ask.assert_called_once()
+    assert app._autosave_recovery_pending is True
+    assert autosave_path.exists()
 
 
 def test_autosave_restore_ui_hatasinda_eski_projeyi_korur(tmp_path):

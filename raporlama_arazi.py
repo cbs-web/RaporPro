@@ -193,6 +193,11 @@ def _nearby_body_paragraphs(doc, anchor, before=4, after=4):
     return paragraphs[max(0, index - before): min(len(paragraphs), index + after + 1)]
 
 
+def _is_heading_or_caption(paragraph):
+    style_name = _normalized(getattr(getattr(paragraph, "style", None), "name", ""))
+    return style_name.startswith("heading") or style_name == "caption"
+
+
 def _is_pmt_paragraph(text):
     normalized = _normalized(text)
     return (
@@ -214,8 +219,13 @@ def _find_near(anchor_paragraphs, predicate, narrative=False):
     matches = [paragraph for paragraph in anchor_paragraphs if predicate(paragraph.text)]
     if narrative:
         for paragraph in matches:
+            if _is_heading_or_caption(paragraph):
+                continue
             normalized = _normalized(paragraph.text)
             if "calismaalaninda" in normalized or "yapilmistir" in normalized:
+                return paragraph
+        for paragraph in matches:
+            if not _is_heading_or_caption(paragraph) and _normalized(paragraph.text) != "pmt":
                 return paragraph
     return matches[0] if matches else None
 
@@ -261,6 +271,10 @@ def _pmt_paragraph_write(paragraph, sondajlar, table_number):
     sondajlar = _unique_natural(sondajlar)
     wells = _turkish_list(sondajlar)
     location = "sondajında" if len(sondajlar) == 1 else "sondajlarında"
+    try:
+        paragraph.style = "Normal"
+    except (KeyError, ValueError):
+        pass
     _paragraph_clear(paragraph)
     highlighted = paragraph.add_run(
         f"Çalışma alanında {wells} {location} presiyometre deneyi yapılmıştır. "

@@ -180,6 +180,19 @@ DUZELTME_ETIKET_KURALLARI = [
         "action": "Jeofizik lokasyon haritasını yeniden ekle.",
     },
     {
+        "tag": "[RESIM_MASW]",
+        "label": "MASW hız grafikleri",
+        "keywords": [
+            "masw grafik",
+            "masw olcum grafik",
+            "masw ölçüm grafik",
+            "s dalgasi hiz grafik",
+            "s dalgası hız grafik",
+            "vs grafik",
+        ],
+        "action": "MASW değerlendirme Word'lerini seçip S-hızı grafiklerini yenile.",
+    },
+    {
         "tag": "RESIM:MJH",
         "label": "Mühendislik jeolojisi haritası",
         "keywords": ["mjh", "muhendislik jeolojisi", "mühendislik jeolojisi", "jeoloji haritasi", "jeoloji haritası"],

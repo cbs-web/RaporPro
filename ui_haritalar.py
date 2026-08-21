@@ -21,7 +21,8 @@ from jeoloji_raporu import (
     KONUM_INCELEME_ALANI,
     jeoloji_birimleri,
 )
-from performans import perf_timer, perf_tracked
+from performans import log_exception, perf_timer, perf_tracked
+from harita_cikti import harita_ciktisini_proje_klasorune_kopyala
 from resim_isaretleyici import ResimIsaretleyici
 from sabitler import (
     COLOR_BORDER,
@@ -42,6 +43,8 @@ from tkgm_ada import tkgm_ada_gorseli_olustur
 from tkgm_kml import tkgm_parsel_kml_olustur
 from tutarlilik_ortak import koordinat_durumu
 from ui_jeoloji_birimleri import JeolojiBirimleriPenceresi
+from ui_jeoloji_kutuphanesi import JeolojiKutuphanePenceresi
+from jeoloji_kutuphanesi import JeolojiKutuphane, secili_jeoloji_kaydi
 from uygulama_yollari import SOURCE_DIR, kullanici_yolu
 from yerbuldurur_motoru import YerbuldururMotoru
 
@@ -236,45 +239,23 @@ class HaritalarSekmesiMixin:
             pady=4,
         ).grid(row=1, column=3, sticky="e", pady=(SPACE_SM, 0))
 
-        layer_frame = ttk.LabelFrame(setup, text="Katmanlar", padding=(8, 5))
-        layer_frame.grid(
-            row=2,
-            column=0,
-            columnspan=3,
-            sticky="ew",
-            pady=(SPACE_SM, 0),
+        library_row = ttk.Frame(setup)
+        library_row.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(SPACE_SM, 0))
+        library_row.columnconfigure(1, weight=1)
+        ttk.Label(library_row, text="2. Jeoloji Kütüphanesi", font=FONT_UI_BODY_BOLD).grid(
+            row=0, column=0, sticky="w", padx=(0, SPACE_SM)
         )
-        for column in range(4):
-            layer_frame.columnconfigure(column, weight=1)
-        saved_layers = harita_katman_ayarlari(
-            self.veri.get("ayarlar", {}).get("harita_katmanlari")
-        )
-        self.harita_layer_vars = {}
-        for index, (key, title) in enumerate(
-            (
-                ("altlik", "Görsel altlık"),
-                ("kml", "KML sınırı"),
-                ("sondaj", "Sondajlar"),
-                ("ss", "Sismik serimler"),
-                ("mt", "Mikrotremör"),
-                ("etiketler", "Etiketler"),
-                ("otomatik_etiket", "Etiket çakışmasını azalt"),
-            )
-        ):
-            variable = tk.BooleanVar(value=saved_layers[key])
-            self.harita_layer_vars[key] = variable
-            ttk.Checkbutton(
-                layer_frame,
-                text=title,
-                variable=variable,
-                command=self.harita_katmanlari_degisti,
-            ).grid(
-                row=index // 4,
-                column=index % 4,
-                sticky="w",
-                padx=(0, SPACE_SM),
-                pady=2,
-            )
+        self.lbl_jeoloji_kutuphanesi = ttk.Label(library_row, text="Seçim yok · dinamik jeoloji akışı etkin", style="Muted.TLabel")
+        self.lbl_jeoloji_kutuphanesi.grid(row=0, column=1, sticky="ew")
+        self.modern_button(
+            library_row,
+            "2. Jeoloji Kütüphanesi",
+            command=self.jeoloji_kutuphanesi_penceresi_ac,
+            role="accent",
+            padx=7,
+            pady=4,
+            icon="book",
+        ).grid(row=0, column=2, sticky="e")
 
         coordinates = ttk.LabelFrame(page, text="Çalışma Noktaları", padding=(12, 10))
         coordinates.grid(row=2, column=0, sticky="ew", pady=(0, SPACE_SM))
@@ -588,7 +569,47 @@ class HaritalarSekmesiMixin:
         if hasattr(self, "ozet_yenile"):
             self.ozet_yenile()
 
+    def jeoloji_kutuphanesi_penceresi_ac(self):
+        existing = getattr(self, "_jeoloji_kutuphanesi_window", None)
+        try:
+            if existing is not None and existing.win.winfo_exists():
+                existing.win.deiconify()
+                existing.win.lift()
+                existing.win.focus_force()
+                existing.yenile()
+                return existing
+        except Exception:
+            self._jeoloji_kutuphanesi_window = None
+        self._jeoloji_kutuphanesi_window = JeolojiKutuphanePenceresi(
+            self,
+            on_changed=self.jeoloji_kutuphanesi_durum_yenile,
+        )
+        return self._jeoloji_kutuphanesi_window
+
+    def jeoloji_kutuphanesi_durum_yenile(self):
+        if not hasattr(self, "lbl_jeoloji_kutuphanesi"):
+            return
+        try:
+            store = JeolojiKutuphane()
+            count = store.count()
+            selected = secili_jeoloji_kaydi(self.veri, store=store, validate_hash=False)
+        except Exception as exc:
+            self.lbl_jeoloji_kutuphanesi.config(text=f"Kütüphane okunamadı: {exc}", foreground=COLOR_WARNING)
+            return
+        if selected:
+            filename = selected.get("original_filename") or selected.get("filename") or selected.get("source_hash", "")[:12]
+            self.lbl_jeoloji_kutuphanesi.config(
+                text=f"Seçili: {filename} · cache hazır · toplam {count}",
+                foreground=COLOR_SUCCESS,
+            )
+        else:
+            self.lbl_jeoloji_kutuphanesi.config(
+                text=f"Seçim yok · dinamik jeoloji akışı etkin · toplam {count}",
+                foreground=COLOR_TEXT_MUTED,
+            )
+
     def harita_durum_yenile(self):
+        self.jeoloji_kutuphanesi_durum_yenile()
         saved_layers = harita_katman_ayarlari(
             self.veri.get("ayarlar", {}).get("harita_katmanlari")
             if isinstance(self.veri, dict)
@@ -1203,17 +1224,36 @@ class HaritalarSekmesiMixin:
             self.set_status("Mühendislik jeolojisi haritası RESIM:MJH için hafızaya alındı.", level="success")
             self._harita_toplu_adim_bitti("jeoloji", success=True)
             return
-        if path_son:
-            self.word_img_sondaj = path_son
-            dosyalar["word_img_sondaj"] = path_son
-            self._harita_cikti_meta_kaydet("sondaj", path_son)
-        if path_jeo:
-            self.word_img_jeofizik = path_jeo
-            dosyalar["word_img_jeofizik"] = path_jeo
-            self._harita_cikti_meta_kaydet("jeofizik", path_jeo)
+        copy_warnings = []
+        for cikti_tipi, source_path, attr_name, data_key in (
+            ("sondaj", path_son, "word_img_sondaj", "word_img_sondaj"),
+            ("jeofizik", path_jeo, "word_img_jeofizik", "word_img_jeofizik"),
+        ):
+            if not source_path:
+                continue
+            result = harita_ciktisini_proje_klasorune_kopyala(
+                source_path,
+                getattr(self, "aktif_dosya_yolu", None),
+                cikti_tipi,
+            )
+            output_path = result["path"] or source_path
+            setattr(self, attr_name, output_path)
+            dosyalar[data_key] = output_path
+            self._harita_cikti_meta_kaydet(cikti_tipi, output_path)
+            if result.get("error"):
+                detail = f"{cikti_tipi}: {result['error']}"
+                copy_warnings.append(detail)
+                log_exception("map.word_output.copy", exc_value=RuntimeError(detail))
         self.harita_durum_yenile()
         self.veri_kaydet()
-        self.set_status("Sondaj ve Jeofizik haritaları Word raporu için hafızaya alındı.", level="success")
+        if copy_warnings:
+            self.set_status(
+                "Haritalar Word raporu için alındı; proje klasörüne kopyalama uyarısı: "
+                + "; ".join(copy_warnings),
+                level="warning",
+            )
+        else:
+            self.set_status("Sondaj ve Jeofizik haritaları Word raporu için hafızaya alındı.", level="success")
         self._harita_toplu_adim_bitti("vaziyet", success=True)
 
     @perf_tracked("map.yerbuldurur_open")

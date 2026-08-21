@@ -461,6 +461,24 @@ class ArayuzProjeMixin:
                     return resolved
         return None
 
+    def _dosya_yollari_al(self, dosyalar, key, *legacy_keys):
+        kaynaklar = [
+            dosyalar if isinstance(dosyalar, dict) else {},
+            self.veri if isinstance(self.veri, dict) else {},
+        ]
+        for kaynak in kaynaklar:
+            for aday_key in (key, *legacy_keys):
+                values = kaynak.get(aday_key)
+                if not isinstance(values, (list, tuple)):
+                    continue
+                resolved = []
+                for value in values:
+                    path = self._dosya_yolu_coz(value)
+                    if path and path not in resolved:
+                        resolved.append(path)
+                return resolved
+        return []
+
     def _harita_gorsel_yolu_al(self, dosyalar, key, *legacy_keys):
         path = self._dosya_yolu_al(dosyalar, key, *legacy_keys)
         if eski_paylasimli_temp_harita_yolu_mu(path):
@@ -795,6 +813,7 @@ class ArayuzProjeMixin:
         self.word_path = None
         self.lab_excel_path = None
         self.jeo_excel_path = None
+        self.masw_word_paths = []
         self.img_yer = None
         self.img_tkgm = None
         self.img_pga = None

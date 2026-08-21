@@ -15,10 +15,13 @@ from jeoloji_raporu import (
 )
 from kesit_motor_ayarlari import KESIT_ENGINE_DEFAULT
 from proje_surumleri import VARSAYILAN_SURUM_SINIRI
-from rapor_parsel_bilgileri import rapor_bilgileri_varsayilanlari
+from rapor_parsel_bilgileri import (
+    parsel_tipi_normalize_et,
+    rapor_bilgileri_varsayilanlari,
+)
 
 
-PROJE_SEMA_SURUMU = 4
+PROJE_SEMA_SURUMU = 6
 
 
 class ProjeSemaHatasi(ValueError):
@@ -62,6 +65,11 @@ def varsayilan_proje_verisi():
         "sondaj": [],
         "jeofizik": {"tarih": "", "ss_list": [], "mt_list": []},
         "jeoloji": jeoloji_varsayilanlari(),
+        "jeoloji_kutuphanesi": {
+            "selected_source_id": None,
+            "selected_source_hash": "",
+            "selected_snapshot": {},
+        },
         "rapor_bilgileri": rapor_bilgileri_varsayilanlari(),
         "harita_cizimleri": {"vaziyet": {}, "jeoloji": {}, "yerbuldurur": {}},
         "lab_sheet": {"rows": []},
@@ -140,7 +148,19 @@ def varsayilan_proje_verisi():
             "spt_guven_esigi": "90",
             "spt_auto_pro": "1",
         },
-        "dosyalar": {"kml_path": None, "word_path": None, "lab_excel_path": None, "jeo_excel_path": None, "img_yer": None, "img_tkgm": None, "img_pga": None, "img_mjh": None, "word_img_sondaj": None, "word_img_jeofizik": None},
+        "dosyalar": {
+            "kml_path": None,
+            "word_path": None,
+            "lab_excel_path": None,
+            "jeo_excel_path": None,
+            "masw_word_paths": [],
+            "img_yer": None,
+            "img_tkgm": None,
+            "img_pga": None,
+            "img_mjh": None,
+            "word_img_sondaj": None,
+            "word_img_jeofizik": None,
+        },
     }
 
 
@@ -352,6 +372,31 @@ def _v3_v4_migrasyonu(veri):
     return ["Parsel bazli Word raporu alanlari proje verisine eklendi."]
 
 
+def _v4_v5_migrasyonu(veri):
+    dosyalar = veri.get("dosyalar")
+    if not isinstance(dosyalar, dict):
+        dosyalar = {}
+        veri["dosyalar"] = dosyalar
+    if not isinstance(dosyalar.get("masw_word_paths"), list):
+        dosyalar["masw_word_paths"] = []
+    veri["schema_version"] = 5
+    return ["MASW hiz grafigi Word kaynaklari proje verisine eklendi."]
+
+
+def _v5_v6_migrasyonu(veri):
+    """Imar adasi icin duz alanlari eski projelere guvenle ekler."""
+    rapor_bilgileri = veri.get("rapor_bilgileri")
+    if not isinstance(rapor_bilgileri, dict):
+        rapor_bilgileri = {}
+        veri["rapor_bilgileri"] = rapor_bilgileri
+    _eksikleri_tamamla(rapor_bilgileri, rapor_bilgileri_varsayilanlari())
+    rapor_bilgileri["parsel_tipi"] = parsel_tipi_normalize_et(
+        rapor_bilgileri.get("parsel_tipi", "")
+    )
+    veri["schema_version"] = 6
+    return ["Imar adasi saha alanlari ve parsel tipi secenekleri proje verisine eklendi."]
+
+
 def proje_verisini_migre_et(veri, varsayilan=None):
     """Proje verisini kopyalayarak guncel semaya getirir ve migrasyon bilgisini dondurur."""
     if not isinstance(veri, dict):
@@ -381,6 +426,12 @@ def proje_verisini_migre_et(veri, varsayilan=None):
     if surum == 3:
         notlar.extend(_v3_v4_migrasyonu(sonuc))
         surum = 4
+    if surum == 4:
+        notlar.extend(_v4_v5_migrasyonu(sonuc))
+        surum = 5
+    if surum == 5:
+        notlar.extend(_v5_v6_migrasyonu(sonuc))
+        surum = 6
 
     if varsayilan is not None and not isinstance(varsayilan, dict):
         raise TypeError("Varsayilan proje verisi bir sozluk olmalidir.")

@@ -1,9 +1,13 @@
 import os
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from motor import GeoEngine
 from jeofizik_sheet_motoru import jeofizik_sheet_rapora_hazir_mi
+from masw_grafik_motoru import (
+    masw_word_kaynaklarini_dogrula,
+    masw_word_yollari_normalize,
+)
 from performans import perf_tracked
 from sabitler import (
     COLOR_BG,
@@ -83,6 +87,20 @@ class JeofizikMixin:
         )
         sheet_button.pack(side="left")
         self.tooltip_ekle(sheet_button, "Sismik parametreleri Excel'den kopyalayıp programa yapıştırır")
+        masw_button = self.modern_button(
+            toolbar,
+            "MASW Grafikleri",
+            command=self.masw_word_dosyalari_sec,
+            role="secondary",
+            outline=True,
+            padx=9,
+            pady=4,
+        )
+        masw_button.pack(side="left", padx=(SPACE_XS, 0))
+        self.tooltip_ekle(
+            masw_button,
+            "Jeofizik değerlendirme Word'lerinden S-hızı grafiklerini seçer",
+        )
         self.jeofizik_kaynak_var = tk.StringVar(value="Manuel veri girişi")
         ttk.Label(toolbar, textvariable=self.jeofizik_kaynak_var, style="Muted.TLabel").pack(side="right")
         ttk.Separator(toolbar_shell).pack(fill="x", pady=(SPACE_XS, 0))
@@ -497,6 +515,9 @@ class JeofizikMixin:
                 source_text = os.path.basename(self.jeo_excel_path)
             else:
                 source_text = "Manuel veri girişi"
+            masw_count = len(getattr(self, "masw_word_paths", []) or [])
+            if masw_count:
+                source_text += f" · {masw_count} MASW grafik"
             self.jeofizik_kaynak_var.set(source_text)
 
         selected_ss = getattr(self, "sel_j_idx", None)
@@ -520,6 +541,72 @@ class JeofizikMixin:
                 self.mt_secili_ozet_var.set(summary)
             if hasattr(self, "mt_secili_ozet_label"):
                 self.mt_secili_ozet_label.config(fg=self.jeofizik_durum_rengi(state))
+
+    def masw_word_etiket_guncelle(self):
+        """Secili MASW Word kaynaklarini Jeofizik ve Rapor ekranlarinda goster."""
+
+        paths = masw_word_yollari_normalize(getattr(self, "masw_word_paths", []) or [])
+        self.masw_word_paths = paths
+        existing_count = sum(os.path.isfile(path) for path in paths)
+        missing_count = len(paths) - existing_count
+        if not paths:
+            text = "MASW hız grafiği Word'leri seçilmedi"
+            color = COLOR_WARNING
+        elif missing_count:
+            text = f"{existing_count}/{len(paths)} Word hazır · {missing_count} dosya bulunamadı"
+            color = COLOR_WARNING
+        else:
+            text = f"{len(paths)} Word · {len(paths)} MASW hız grafiği"
+            color = COLOR_SUCCESS
+        if hasattr(self, "lbl_masw_word"):
+            self.lbl_masw_word.config(text=text, foreground=color)
+        self.jeofizik_ozet_guncelle()
+        if hasattr(self, "rapor_durum_guncelle"):
+            self.rapor_durum_guncelle()
+
+    def masw_word_dosyalari_sec(self):
+        """Birden fazla jeofizik Word'unden rapora alinacak MASW grafiklerini sec."""
+
+        paths = filedialog.askopenfilenames(
+            title="MASW hız grafiği Word dosyalarını seç",
+            filetypes=[("Word belgeleri", "*.docx")],
+        )
+        if not paths:
+            return
+        normalized = masw_word_yollari_normalize(paths)
+        records, errors = masw_word_kaynaklarini_dogrula(normalized)
+        valid_paths = [record.kaynak_yolu for record in records]
+        if not valid_paths:
+            messagebox.showwarning(
+                "MASW Grafikleri",
+                "Seçilen Word dosyalarında aktarılabilir MASW hız grafiği bulunamadı.\n\n"
+                + "\n".join(errors[:8]),
+                parent=self.root,
+            )
+            return
+
+        self.masw_word_paths = valid_paths
+        self.veri.setdefault("dosyalar", {})["masw_word_paths"] = list(valid_paths)
+        self.masw_word_etiket_guncelle()
+        self.set_status(
+            f"{len(valid_paths)} MASW hız grafiği Word kaynağı projeye bağlandı.",
+            level="success" if not errors else "warning",
+        )
+        if errors:
+            messagebox.showwarning(
+                "MASW Grafikleri",
+                f"{len(valid_paths)} dosya eklendi; {len(errors)} dosya atlandı.\n\n"
+                + "\n".join(errors[:8]),
+                parent=self.root,
+            )
+
+    def masw_word_dosyalari_temizle(self):
+        """Projedeki MASW Word kaynak baglantilarini kaldir."""
+
+        self.masw_word_paths = []
+        self.veri.setdefault("dosyalar", {})["masw_word_paths"] = []
+        self.masw_word_etiket_guncelle()
+        self.set_status("MASW hız grafiği Word bağlantıları kaldırıldı.", level="warning")
 
     @perf_tracked("jeofizik.excel_preview")
     def jeo_excel_yukle_ve_onizle(self):

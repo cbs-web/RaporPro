@@ -8,6 +8,7 @@ from jeoloji_raporu import (
     JEOLOJI_BIRIM_KATALOGU,
     jeoloji_birimleri,
     jeoloji_kodu_normalize,
+    jeoloji_rapor_bloklari,
     jeoloji_rapor_metinleri,
     jeoloji_varsayilanlari,
 )
@@ -73,6 +74,25 @@ class JeolojiRaporTestleri(unittest.TestCase):
         self.assertIn("Alüvyon (Qal)", section)
         self.assertNotIn("Çamrakdere Üyesi", section)
         self.assertIn("yakın çevresinde", regional)
+
+    def test_kesit_aciklamasi_gereksiz_giris_cumlesini_eklemez(self):
+        blocks = jeoloji_rapor_bloklari(
+            {
+                "jeoloji": {
+                    "birimler": [
+                        {
+                            "kod": "Tmki",
+                            "konum": "inceleme_alani",
+                            "kesitte_kullan": True,
+                        }
+                    ]
+                }
+            }
+        )
+        text = "\n".join(block["metin"] for block in blocks["kesit"])
+
+        self.assertNotIn("Jeolojik kesitin oluşturulmasında", text)
+        self.assertIn("Kirazlı Üyesi (Tmki)", text)
 
     def test_tekrarli_birimler_tek_kayda_birlesir(self):
         records = jeoloji_birimleri(

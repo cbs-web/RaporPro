@@ -9,6 +9,7 @@ from raporlama_arazi import (
     pmt_rapor_cumlesi,
     tcr_rapor_cumlesi,
 )
+from rapor_parsel_bilgileri import sondaj_arazi_giris_metni
 
 
 def _ornek_bolum_doc():
@@ -64,6 +65,20 @@ class AraziDeneyRaporTestleri(unittest.TestCase):
         self.assertIn("Tablo 14'te", pmt_text)
         self.assertIn("%23-%66 arasındadır", tcr_text)
 
+    def test_sondaj_arazi_girisi_pmt_sondajlarini_yazar_karot_genelini_yazmaz(self):
+        text = sondaj_arazi_giris_metni(
+            {
+                "sondaj": [
+                    {"no": "SK-4", "pmt": [["3.00", "204", "5.83"]], "kaya": [["1", "50", "", ""]]},
+                    {"no": "SK-2", "pmt": [["3.00", "279", "8.78"]], "kaya": []},
+                ]
+            }
+        )
+
+        self.assertIn("SK-2 ve SK-4 sondajlarında presiyometre deneyi yapılmıştır.", text)
+        self.assertNotIn("Presiyometre deneyleri ilgili sondaj ve derinliklerde", text)
+        self.assertNotIn("Karotlu ilerlemelerde TCR, SCR ve RQD değerleri kaydedilmiştir.", text)
+
     def test_veri_yoksa_pmt_ve_karot_bloklari_kaldirilir(self):
         doc, index = _ornek_bolum_doc()
 
@@ -115,6 +130,39 @@ class AraziDeneyRaporTestleri(unittest.TestCase):
         self.assertEqual(str(pmt_paragraph.runs[0].font.color.rgb), "EE0000")
         self.assertEqual(str(tcr_paragraph.runs[1].font.color.rgb), "EE0000")
         self.assertTrue(any(run.bold and "Tablo 14" in run.text for run in pmt_paragraph.runs))
+
+    def test_pmt_heading_korunur_aciklama_normal_paragrafa_yazilir(self):
+        doc = Document()
+        heading = doc.add_paragraph("3.4.2. Presiyometre Deney Sonuçları", style="Heading 3")
+        fallback = doc.add_paragraph(
+            "Presiyometre deney sonuçları proje verilerine göre raporda sunulacaktır."
+        )
+        caption = doc.add_paragraph("Tablo 14: Presiyometre Deney Sonuçları", style="Caption")
+        tag = doc.add_paragraph("[PMT]")
+
+        arazi_deney_word_bolumlerini_uygula(
+            doc,
+            {"[PMT]": tag},
+            {
+                "pmt_data": [["SK-2", "3.00", "279", "8.78"]],
+                "kaya_data": [],
+                "pmt_sondajlari": ["SK-2"],
+                "tcr_degerleri": [],
+            },
+        )
+
+        self.assertEqual(heading.text, "3.4.2. Presiyometre Deney Sonuçları")
+        self.assertEqual(heading.style.name, "Heading 3")
+        narrative = next(
+            paragraph
+            for paragraph in doc.paragraphs
+            if "SK-2 sondajında presiyometre deneyi yapılmıştır." in paragraph.text
+        )
+        self.assertEqual(narrative.style.name, "Normal")
+        self.assertNotIn("proje verilerine göre raporda sunulacaktır", narrative.text)
+        self.assertEqual(caption.style.name, "Caption")
+        self.assertIn("Tablo 13", caption.text)
+        self.assertIsNot(fallback, narrative)
 
     def test_yalniz_pmt_varsa_tablo_numarasi_13_olur(self):
         doc, index = _ornek_bolum_doc()

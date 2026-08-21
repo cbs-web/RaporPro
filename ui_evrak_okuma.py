@@ -186,10 +186,13 @@ class EvrakOkumaMixin:
             "kunye": getattr(self, "e_kunye", {}),
             "bina": getattr(self, "e_bina", {}),
             "arazi": getattr(self, "e_arazi", {}),
+            "rapor_bilgileri": getattr(self, "e_rapor_bilgileri", {}),
         }
         widget = stores.get(section, {}).get(key)
         if widget is not None:
             try:
+                if isinstance(widget, tk.Text):
+                    return widget.get("1.0", "end-1c").strip()
                 return widget.get().strip()
             except tk.TclError:
                 pass
@@ -206,15 +209,26 @@ class EvrakOkumaMixin:
             "kunye": getattr(self, "e_kunye", {}),
             "bina": getattr(self, "e_bina", {}),
             "arazi": getattr(self, "e_arazi", {}),
+            "rapor_bilgileri": getattr(self, "e_rapor_bilgileri", {}),
         }
         widget = stores.get(section, {}).get(key)
         if widget is None:
             return
-        if isinstance(widget, ttk.Combobox):
-            widget.set(value)
+        try:
+            if not widget.winfo_exists():
+                return
+            if isinstance(widget, ttk.Combobox):
+                widget.set(value)
+                return
+            if isinstance(widget, tk.Text):
+                widget.delete("1.0", tk.END)
+                widget.insert("1.0", value)
+                return
+            widget.delete(0, tk.END)
+            widget.insert(0, value)
+        except tk.TclError:
+            # Rapor bilgileri penceresi kapanmışsa veri yine proje sözlüğüne yazılır.
             return
-        widget.delete(0, tk.END)
-        widget.insert(0, value)
 
     def _evrak_jeoloji_birimi_ekle(self, code):
         if any(record.get("kod") == code for record in jeoloji_birimleri(self.veri)):
@@ -406,11 +420,19 @@ class EvrakOkumaMixin:
         table_host = ttk.Frame(window)
         table_host.grid(row=2, column=0, sticky="nsew", padx=12)
         inner, _canvas = self.scrollable_page(table_host, padding=(4, 4))
-        column_weights = (0, 1, 2, 2, 2, 0)
+        column_weights = (0, 1, 2, 2, 2, 2, 0)
         for column, weight in enumerate(column_weights):
             inner.columnconfigure(column, weight=weight)
 
-        headers = ("Aktar", "Alan", "Mevcut değer", "Evraktan okunan", "Kaynak", "Güven")
+        headers = (
+            "Aktar",
+            "Alan",
+            "Mevcut değer",
+            "Evraktan okunan",
+            "Kaynak",
+            "Kısa kanıt",
+            "Güven",
+        )
         for column, text in enumerate(headers):
             ttk.Label(
                 inner,
@@ -434,7 +456,7 @@ class EvrakOkumaMixin:
             row_frame.grid(
                 row=row,
                 column=0,
-                columnspan=6,
+                columnspan=7,
                 sticky="nsew",
                 pady=(0, 2),
             )
@@ -497,10 +519,19 @@ class EvrakOkumaMixin:
             ).grid(row=0, column=4, sticky="ew", padx=6, pady=8)
             tk.Label(
                 row_frame,
+                text=field.get("kanit", "") or "-",
+                bg=background,
+                fg=COLOR_TEXT_MUTED,
+                anchor="w",
+                justify="left",
+                wraplength=250,
+            ).grid(row=0, column=5, sticky="ew", padx=6, pady=8)
+            tk.Label(
+                row_frame,
                 text=f"%{round(float(field.get('guven', 0.0)) * 100)}",
                 bg=background,
                 anchor="center",
-            ).grid(row=0, column=5, padx=8, pady=8)
+            ).grid(row=0, column=6, padx=8, pady=8)
 
         footer = ttk.Frame(window, padding=(12, 10))
         footer.grid(row=3, column=0, sticky="ew")
@@ -517,8 +548,10 @@ class EvrakOkumaMixin:
                 variable.set(not bool(self._evrak_mevcut_deger(field)) and not source_warning)
 
         def select_all():
-            for variable, _field in selections:
-                variable.set(True)
+            for variable, field in selections:
+                current = self._evrak_mevcut_deger(field)
+                source_warning = bool(field.get("uyari") or field.get("alternatifler"))
+                variable.set(not current and not source_warning)
 
         self.modern_button(
             footer,
@@ -530,7 +563,7 @@ class EvrakOkumaMixin:
         ).grid(row=0, column=1, padx=(6, 0))
         self.modern_button(
             footer,
-            "Tümünü Seç",
+            "Güvenli Alanları Seç",
             command=select_all,
             role="warning",
             padx=9,
